@@ -1,8 +1,11 @@
-//! Diagnostic model, positions, rendering, report/types JSON.
+//! Diagnostic model shared by every pass (SPEC.md §8, §13.1).
 //!
-//! Placeholder crate created by STORIES.md US-002; `US-003` replaces [`DiagnosticsPlaceholder`] with the
-//! real implementation. Nothing here is called.
+//! US-003 ships the [`Code`] table, [`Severity`], [`Position`], [`Span`], [`Diagnostic`]
+//! and the sorting, deduplicating [`Diagnostics`] collector. US-004 adds source files and
+//! position conversion; US-135 and US-136 add text rendering and the JSON reports.
 
-/// Placeholder type that US-003 replaces.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DiagnosticsPlaceholder;
+mod code;
+mod diagnostic;
+
+pub use code::{Code, ParseCodeError, Severity};
+pub use diagnostic::{Diagnostic, Diagnostics, FixError, Position, Related, Span};

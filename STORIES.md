@@ -243,7 +243,24 @@ members are `sjs-*`. `Cargo.lock` is committed (binary project; removed from
 argv element exits 2, not 70.
 
 #### US-003 Diagnostic model
-§8, §13.1 · After: US-002 · Size: M · M0
+§8, §13.1 · After: US-002 · Size: M · M0 · **Status: complete** (2026-10-26)
+
+> Delivered in `sjs-diag`: a `codes!` table generating `Code` (all 86 codes: E000–E002,
+> E100–E145, E150–E153, E160–E163, E201–E207, E301–E304, E401–E403, S001–S012, S020,
+> S021, S030) with `as_str`, `name`, `section`, `severity` (from the letter), `is_hand_edit`
+> (exactly S020/S021/S030), `Display` and exact `FromStr`; `Severity`; `Position`, `Span`
+> (line/column plus byte offsets, §13.1), `Related`; `Diagnostic` with `with_fix`
+> (rejecting a no-op replacement) and `with_related`; `Diagnostics` as a `BTreeSet` whose
+> derived order is path, span, code, message, current, replacement, related, giving the
+> (path, line, column, code) report order and dedup of identical findings; `has_errors`,
+> `error_count`, `style_count`. **Decisions:** E110 is named `empty-untyped` (§3.2's
+> newer wording wins over the §8.1 table's `empty-array-untyped`); E120 is
+> `self-assign-or-compare` and E133 `removed-global-or-member` (one kebab name per code);
+> S-code names are short rule names (`single-quoted-string`, `semicolon`, …). The
+> permutation property test is hand-rolled until US-008. Also fixed here: the member
+> manifests from US-002 had `lints.workspace = true` under `[package]`, which cargo
+> ignores; they now carry a real `[lints]` table and `scripts/audit.sh` checks the table
+> structurally and fails on any "unused manifest key" warning.
 
 As every later pass I want one `Diagnostic` type carrying code, name, severity, primary
 span, message, optional current text and replacement, and related spans, so rendering and
