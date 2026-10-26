@@ -1,0 +1,8 @@
+[package]
+name = "sjs-diag"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Diagnostic model, positions, rendering, report/types JSON."
+lints.workspace = true

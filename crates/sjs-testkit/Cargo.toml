@@ -1,0 +1,8 @@
+[package]
+name = "sjs-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "std-only test tooling: PRNG, property runner, snapshots, fuzz loop, process driver, bench timer."
+lints.workspace = true

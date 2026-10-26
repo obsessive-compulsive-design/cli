@@ -1,0 +1,8 @@
+[package]
+name = "sjs-bind"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Module graph, scopes and the ambient table."
+lints.workspace = true

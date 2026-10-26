@@ -1,14 +1,18 @@
-[package]
-name = "ocd-cli"
+# Virtual workspace (STORIES.md §0.5). The `sjs` binary is built by crates/sjs-cli.
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+publish = false
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+# STORIES.md §0.2 item 11: this project has no dependencies of any kind. No manifest in
+# this workspace has a [dependencies], [dev-dependencies] or [build-dependencies] entry
+# that is not a `path` crate under crates/; scripts/audit.sh fails CI otherwise.
 
-# STORIES.md §0.2 item 11: this project has no dependencies of any kind. There is
-# deliberately no [dependencies], [dev-dependencies] or [build-dependencies] section;
-# scripts/audit.sh fails CI if one appears.
-
-[lints.rust]
+[workspace.lints.rust]
 # STORIES.md §0.2 item 11: all safe Rust. `forbid` cannot be overridden by an `allow`.
 unsafe_code = "forbid"

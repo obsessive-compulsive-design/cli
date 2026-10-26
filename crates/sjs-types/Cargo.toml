@@ -1,0 +1,8 @@
+[package]
+name = "sjs-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Type representation, normalization, assignability and printer."
+lints.workspace = true

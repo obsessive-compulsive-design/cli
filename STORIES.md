@@ -206,7 +206,19 @@ template containing §0.4.
 (run links in the PR). Edge: a PR that changes only `*.md` still runs the gates.
 
 #### US-002 Workspace skeleton and `sjs` binary
-§11, §13 · After: US-001 · Size: M · M0
+§11, §13 · After: US-001 · Size: M · M0 · **Status: complete** (2026-10-26)
+
+> Delivered: a virtual workspace (`Cargo.toml` has no root package; the **Decision** below
+> is refined to "the root is a virtual workspace and the `sjs` binary is `sjs-cli`'s
+> `[[bin]]`") with fourteen `crates/sjs-*` members inheriting version, edition and the
+> `unsafe_code = "forbid"` lint through `lints.workspace = true`; every placeholder crate
+> exposes one `*Placeholder` type naming the story that replaces it; `sjs-cli` is a library
+> (`run(args, stdout, stderr) -> u8`, every failure mapped to an exit code so `main` is one
+> expression) plus the `sjs` binary; `sjs-testkit` ships only `process::run` (the rest is
+> US-008); `crates/sjs-cli/tests/workspace_dag.rs` reads `cargo tree` text and checks every
+> edge against the §0.5 pipeline table; the old `src/`, `tests/` and the `Cargo.lock`
+> ignore are gone. Verified locally: fmt, both clippy passes, audit, tests, 100 % lines and
+> regions, zero surviving mutants on the diff.
 
 As a maintainer I want the crate layout of §0.5 in place with an empty pipeline, so that
 every later story has an obvious home.
