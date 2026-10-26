@@ -10,6 +10,7 @@ mod args;
 mod commands;
 mod exit;
 mod options;
+pub mod pipeline;
 
 use std::ffi::OsString;
 use std::io::{self, Write};

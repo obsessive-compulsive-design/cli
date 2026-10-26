@@ -14,6 +14,7 @@ version = "0.1.0"
 name = "sjs-cli"
 version = "0.1.0"
 dependencies = [
+ "sjs-diag",
  "sjs-testkit",
 ]
 

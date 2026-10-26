@@ -400,7 +400,25 @@ directory whose name ends in `.test.js`; an entry outside `./src` (allowed; E207
 scanning in US-062 still only looks beneath `./src`).
 
 #### US-007 Conformance fixture harness
-§0.3, §11.3 · After: US-003 · Size: M · M0
+§0.3, §11.3 · After: US-003 · Size: M · M0 · **Status: complete** (2026-10-26)
+
+> Delivered: `sjs_testkit::conformance` parses `// expect: CODE [name] @line:col
+> ["current" -> "replacement"]` lines (a leading BOM is skipped so a BOM fixture can
+> declare itself; every malformed form is an error naming the line), discovers fixtures
+> under `tests/conformance/` (a `.js` file, or a directory whose root is `entry.js` with
+> `*.test.js` marked as test files; `_`-prefixed directories are the harness's own),
+> rejects expectations past the end of a file, and compares expectation and finding
+> multisets so a diagnostic declared twice must fire exactly twice. `sjs_cli::pipeline::
+> check_files` runs whatever passes exist (today US-004's UTF-8 and BOM validation) and
+> each later story extends it. `crates/sjs-cli/tests/conformance.rs` runs every fixture,
+> tests each mismatch message on `tests/conformance/_harness/`, and audits
+> `tests/conformance/codes.txt` (every code → the story that adds its fixtures) against
+> STORIES.md: a code without fixtures is printed as "pending: CODE (US-nnn)" until that
+> story carries `**Status: complete**`, then fails the build. First fixtures:
+> `02-lexical/E000/` (BOM trigger at 1:1, an invalid byte, an invalid first byte, and a
+> multi-byte near miss). **Decisions:** fixture paths in diagnostics are relative to the
+> fixture; expectations may appear in any file of a directory fixture and apply to that
+> file; a name on an expect line must match the code's name when given.
 
 As a reviewer I want fixtures to state their expected diagnostics inline and a harness
 that runs every fixture through whatever passes exist, so later stories add programs,
