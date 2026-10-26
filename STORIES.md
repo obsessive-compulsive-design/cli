@@ -284,7 +284,19 @@ yields one order. Edge: identical diagnostics from two passes collapse to one; a
 replacement equal to the current text is rejected at construction.
 
 #### US-004 Source text and positions
-§13.1 (positions) · After: US-003 · Size: S · M0
+§13.1 (positions) · After: US-003 · Size: S · M0 · **Status: complete** (2026-10-26)
+
+> Delivered in `sjs-diag::source`: `SourceFile::new(path, bytes)` validates UTF-8 (an
+> invalid sequence is `E000` at the first bad byte with its line/column computed from the
+> valid prefix) and rejects a BOM as `E000` at 1:1; a line index over `\n`, `\r\n`, `\r`,
+> U+2028 and U+2029 with each line's terminator kept (`Line`, `LineTerminator`);
+> `position(offset)` and `offset(position)` as inverses over every character boundary
+> (terminator characters have columns of their own; the offset after a terminator is
+> column 1 of the next line; a file ending in a terminator has a final empty line);
+> `span(start, end)`, `slice(&span)`, `line(n)`, `line_count`, `len`, `is_empty`,
+> `text`, `path`. Every accessor returns `None` on bad input; nothing panics.
+> **Decisions:** errors are returned as `Box<Diagnostic>` (clippy's large-error lint);
+> the random-string round-trip test is hand-rolled until US-008.
 
 As the lexer and reporter I want a `SourceFile` with a line index converting byte offsets
 to 1-based line/column in Unicode scalar values and back, so every position agrees.
