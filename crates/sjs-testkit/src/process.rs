@@ -1,6 +1,5 @@
 //! Runs a program and captures what it did, with nothing but `std`.
 
-use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
 use std::process::Command;
@@ -31,17 +30,46 @@ impl Output {
 /// # Errors
 ///
 /// Returns the I/O error when the program cannot be spawned or its output cannot be read.
-pub fn run(
-    program: impl AsRef<OsStr>,
+pub fn run(program: &str, args: &[&str], current_dir: Option<&Path>) -> io::Result<Output> {
+    run_with_stdin(program, args, current_dir, None)
+}
+
+/// [`run`] with bytes fed to the program's standard input (`None` inherits it).
+///
+/// The whole input is written before the output is read, so this is for the modest
+/// inputs tests use, not for streaming.
+///
+/// # Errors
+///
+/// The I/O error when the program cannot be spawned, fed, or read.
+pub fn run_with_stdin(
+    program: &str,
     args: &[&str],
     current_dir: Option<&Path>,
+    stdin: Option<&[u8]>,
 ) -> io::Result<Output> {
+    use std::io::Write;
+    use std::process::Stdio;
+
     let mut command = Command::new(program);
-    command.args(args);
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if let Some(dir) = current_dir {
         command.current_dir(dir);
     }
-    let output = command.output()?;
+    if stdin.is_some() {
+        command.stdin(Stdio::piped());
+    }
+    let mut child = command.spawn()?;
+    let fed = match (stdin, child.stdin.take()) {
+        (Some(bytes), Some(mut pipe)) => pipe.write_all(bytes),
+        _ => Ok(()),
+    };
+    // The child is always reaped, even when feeding it failed (a broken pipe); the feed
+    // error, when there is one, is the one reported.
+    let output = fed.and(child.wait_with_output())?;
     Ok(Output {
         status: output.status.code(),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -82,6 +110,26 @@ mod tests {
     fn a_missing_program_is_an_error_not_a_panic() {
         let err = run("sjs-testkit-no-such-program", &[], None).expect_err("spawn must fail");
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn stdin_reaches_the_program() {
+        let out = super::run_with_stdin("cat", &[], None, Some(b"hello\nworld"))
+            .expect("cat is available on every CI runner");
+        assert!(out.success(), "{out:?}");
+        assert_eq!(out.stdout, "hello\nworld");
+        let out =
+            super::run_with_stdin(CARGO, &["--version"], None, Some(b"ignored")).expect("cargo");
+        assert!(out.stdout.starts_with("cargo "), "{out:?}");
+    }
+
+    #[test]
+    fn a_program_that_exits_without_reading_a_large_stdin_is_an_error_not_a_panic() {
+        // 8 MiB exceeds any pipe buffer, so the write blocks until cargo exits, and the
+        // broken pipe surfaces as an error (Rust ignores SIGPIPE).
+        let big = vec![b'x'; 8 << 20];
+        let result = super::run_with_stdin(CARGO, &["--version"], None, Some(&big));
+        assert!(result.is_err(), "{result:?}");
     }
 
     #[test]

@@ -35,7 +35,11 @@ can see every judgement call and move it into `SPEC.md` if it deserves to be a r
      limit, exactly one over).
 3. `cargo llvm-cov --fail-under-lines 100 --fail-under-regions 100` passes for the whole
    workspace. There is no exclusion list; unreachable code is deleted, not excluded.
-   (Region coverage is the LLVM proxy for branch coverage.)
+   (Region coverage is the LLVM proxy for branch coverage.) The summary scores a generic
+   function by its *best-covered instantiation*, not by the union: a generic function
+   needs one instantiation that executes every region. Keep entry points monomorphic
+   (`&mut dyn Write`, `&dyn Fn`) and, where a function must be generic, drive it in tests
+   through one shared `fn` item that takes every path.
 4. `cargo mutants` on the files the PR changed reports **zero surviving mutants**, or the
    PR description lists each survivor with the reason it is equivalent code. Coverage
    proves lines executed; mutation testing is how this plan approximates "complete
@@ -440,7 +444,32 @@ merged, and fails afterwards.
 position and code require the diagnostic to fire exactly twice.
 
 #### US-008 `sjs-testkit`: zero-dependency test tooling
-§0.2 items 6–8 and 11 · After: US-003 · Size: M · M0
+§0.2 items 6–8 and 11 · After: US-003 · Size: M · M0 · **Status: complete** (2026-10-26)
+
+> Delivered in `sjs-testkit`: `prng` (`SplitMix64` seeding `xoshiro256**`, checked
+> against the published vectors for seed 0 and state [1,2,3,4]; `below`, `range`,
+> `index`, `chance`, `pick`, `bytes`); `prop` (a `Gen` trait with `generate`/`shrink`,
+> `check`/`check_with`, `Config::from_env` reading `SJS_PROP_CASES` default 256 and
+> `SJS_PROP_SEED` replaying one case, a per-case seed printed in every `Failure`, panics
+> caught as failures, shrinking to a fixpoint under a step cap; generators `U64`,
+> `Elements`, `VecOf`, `Text`); `snapshot` (`check_in`/`assert_in` and the `snapshot!`
+> macro against `tests/snapshots/<name>.snap` of the calling crate, byte-exact so CRLF
+> differs from LF, `SJS_UPDATE_SNAPSHOTS=1` writes, a missing file names the remedy, an
+> LCS unified diff with `<CR>` made visible, and the diff itself snapshotted); `fuzz`
+> (`run`/`run_or_panic` for `SJS_FUZZ_SECONDS` default 1: random bytes plus bit flips,
+> byte sets, inserts, deletes, splices, dictionary tokens and truncation over a rolling
+> corpus; crashes saved as FNV-1a-named `.bin` files and replayed first); `bench`
+> (`time` with min/median/max and `report`); `process::run_with_stdin`. **Decisions:**
+> the default master seed is fixed so unseeded runs are reproducible; `Elements` on an
+> empty slice panics (nothing to generate); saving a crash into an unwritable directory
+> is reported with `saved: None` rather than failing the report; the time-budget test
+> allows a 10 % overrun on a 0.5 s budget; the fuzz loop's `elapsed < budget` test is
+> indistinguishable from `<=`, and the diff's tie-break `table[i+1][j] >= table[i][j+1]`
+> equals `table[i+1][j] >= table[i][j]` by the LCS recurrence (two equivalent mutants,
+> listed as such). The gate lesson of
+> this story is now §0.2 item 3: a generic function is scored by its best-covered
+> instantiation, so `run`, `attempt` and `check` are exercised through one shared `fn`
+> item (`crash_on_token`, `under_ten`) that takes every path.
 
 As every later story I want property testing, snapshots, fuzzing, process driving and
 benchmark timing available from one workspace crate written on `std` alone, so the test
