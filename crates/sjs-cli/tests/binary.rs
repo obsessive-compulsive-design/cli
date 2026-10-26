@@ -1,6 +1,7 @@
 //! Runs the real `sjs` binary so `main` is covered (STORIES.md §0.2 item 3) and the exit
 //! codes of SPEC.md §13.1 are observed from outside the process.
 
+use sjs_testkit::fs::TempDir;
 use sjs_testkit::process::run;
 
 const SJS: &str = env!("CARGO_BIN_EXE_sjs");
@@ -47,11 +48,31 @@ fn a_usage_error_exits_two_with_help_on_stderr() {
 }
 
 #[test]
-fn an_unimplemented_command_exits_seventy() {
-    let out = run(SJS, &["lint"], None).expect("sjs can be spawned");
+fn an_unimplemented_command_exits_seventy_once_its_root_exists() {
+    let dir = TempDir::new("binary").expect("temp dir");
+    dir.write(
+        "src/index.js",
+        "export const A = 1
+",
+    )
+    .expect("write");
+    let out = run(SJS, &["lint"], Some(dir.path())).expect("sjs can be spawned");
     assert_eq!(out.status, Some(i32::from(sjs_cli::EXIT_INTERNAL)));
     assert_eq!(out.stdout, "");
     assert!(out.stderr.contains("not implemented yet"), "{}", out.stderr);
+}
+
+#[test]
+fn a_missing_default_root_exits_two_naming_the_path() {
+    let dir = TempDir::new("binary").expect("temp dir");
+    let out = run(SJS, &["lint"], Some(dir.path())).expect("sjs can be spawned");
+    assert_eq!(out.status, Some(i32::from(sjs_cli::EXIT_USAGE)));
+    assert_eq!(out.stdout, "");
+    assert!(
+        out.stderr.contains("index.js does not exist"),
+        "{}",
+        out.stderr
+    );
 }
 
 #[cfg(unix)]

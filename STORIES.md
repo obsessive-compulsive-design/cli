@@ -357,7 +357,27 @@ an entry literally named `--weird.js` is accepted; a flag given twice is a usage
 unknown flag.
 
 #### US-006 Common flags and root resolution
-§5.3, §13.1 · After: US-005 · Size: M · M0
+§5.3, §13.1 · After: US-005 · Size: M · M0 · **Status: complete** (2026-10-26)
+
+> Delivered in `sjs-cli::options`: `Options::from_invocation(&invocation, cwd)` resolves
+> the root (`<cwd>/src/index.js` by default, else the entries given, each required to be a
+> file, canonicalised and deduplicated in first-given order so a symlink and its target
+> count once), discovers `*.test.js` beneath `<cwd>/src` for `sjs test` with the default
+> root (sorted, nothing ignored, symlinked directories followed once; explicit entries
+> leave it to US-060), applies the per-command `--out` default (`dist/`, `coverage/`,
+> `map/`, `docs/`; `None` for commands that write nothing), reads `--json`/`--quiet`, and
+> validates each command's own values (`--reporter`, both `--format`s, the 0–100 coverage
+> thresholds, `--write` with `--check` as a conflict) into `CommandOptions`. New
+> `UsageError` variants `MissingRoot`, `MissingEntry`, `InvalidValue`, `ConflictingFlags`;
+> an I/O failure while resolving is `OptionsError::Io` (exit 70). `run_in(args, cwd, …)`
+> lets tests inject the working directory; `sjs_testkit::fs::TempDir` is the std-only
+> temp directory the tests use. **Decisions:** the working directory is taken from
+> `std::env::current_dir()` with an empty path as the fallback (relative paths then
+> resolve against the process directory, so there is no error branch); `--out` is joined
+> to the working directory but not canonicalised (it may not exist yet); `--check` is
+> accepted alone as the spelled-out default; help and lsp resolve no root; a path that
+> exists but cannot be canonicalised keeps its given spelling, and a directory entry that
+> fails to read mid-iteration is skipped (both are error branches no test can reach).
 
 As a programmer I want the common flags (`--out`, `--json`, `--quiet`) and the root
 (`./src/index.js` by default, or the entries named) parsed and validated once, so every

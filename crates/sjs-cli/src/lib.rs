@@ -3,19 +3,25 @@
 //! US-005 ships dispatch: the eight commands are recognised case-sensitively, every
 //! command honours `--help`, a malformed invocation is a usage error (exit 2) that prints
 //! the command's help, and an I/O failure is an internal failure (exit 70). Commands other
-//! than `help` are stubs that exit 70 until their own story lands.
+//! than `help` are stubs that exit 70 until their own story lands. US-006 resolves the
+//! root and validates every flag value before a command runs.
 
 mod args;
 mod commands;
 mod exit;
+mod options;
 
 use std::ffi::OsString;
 use std::io::{self, Write};
+use std::path::Path;
 
 pub use args::{parse, Invocation, UsageError};
 pub use commands::{command_list, help_text, Command, FlagSpec, Takes, UnknownCommand};
 pub use exit::{
     exit_code, Outcome, EXIT_COUNT_CAP, EXIT_ERRORS, EXIT_INTERNAL, EXIT_OK, EXIT_USAGE,
+};
+pub use options::{
+    default_out, CommandOptions, DocsFormat, MapFormat, Options, OptionsError, Reporter,
 };
 
 /// Runs `sjs` with the arguments after the program name and returns the exit code.
@@ -27,7 +33,21 @@ pub use exit::{
 /// gets one instantiation per test and the coverage gate then demands every branch in
 /// every instantiation.
 pub fn run(args: Vec<OsString>, stdout: &mut dyn Write, stderr: &mut dyn Write) -> u8 {
-    match try_run(args, stdout, stderr) {
+    // An empty working directory means "relative to the process", which is what every
+    // path here is anyway; there is no failure to report.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    run_in(args, &cwd, stdout, stderr)
+}
+
+/// [`run`] with an explicit working directory, against which the default root, entries
+/// and `--out` are resolved.
+pub fn run_in(
+    args: Vec<OsString>,
+    cwd: &Path,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> u8 {
+    match try_run(args, cwd, stdout, stderr) {
         Ok(outcome) => exit_code(outcome),
         Err(error) => report_internal(stderr, &error),
     }
@@ -35,6 +55,7 @@ pub fn run(args: Vec<OsString>, stdout: &mut dyn Write, stderr: &mut dyn Write) 
 
 fn try_run(
     args: Vec<OsString>,
+    cwd: &Path,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> io::Result<Outcome> {
@@ -64,15 +85,24 @@ fn try_run(
         stdout.write_all(help_text(invocation.command).as_bytes())?;
         return Ok(Outcome::Clean);
     }
-    dispatch(&invocation, stdout, stderr)
+    let options = match Options::from_invocation(&invocation, cwd) {
+        Ok(options) => options,
+        Err(OptionsError::Usage(error)) => return report_usage(stderr, &error),
+        Err(error @ OptionsError::Io { .. }) => {
+            writeln!(stderr, "sjs: {error}")?;
+            return Ok(Outcome::Internal);
+        }
+    };
+    dispatch(&invocation, &options, stdout, stderr)
 }
 
 fn dispatch(
     invocation: &Invocation,
+    options: &Options,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> io::Result<Outcome> {
-    match invocation.command {
+    match options.command {
         Command::Help => run_help(invocation, stdout, stderr),
         Command::Build => not_implemented(stderr, Command::Build, "US-138"),
         Command::Lint => not_implemented(stderr, Command::Lint, "US-137"),
@@ -134,7 +164,8 @@ fn report_internal(stderr: &mut dyn Write, error: &io::Error) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{command_list, help_text, run, Command, EXIT_INTERNAL, EXIT_OK, EXIT_USAGE};
+    use super::{command_list, help_text, run_in, Command, EXIT_INTERNAL, EXIT_OK, EXIT_USAGE};
+    use sjs_testkit::fs::TempDir;
     use std::ffi::OsString;
     use std::io::{self, Write};
 
@@ -146,11 +177,24 @@ mod tests {
         String::from_utf8(bytes.to_vec()).expect("sjs prints UTF-8")
     }
 
-    /// Runs and returns `(exit code, stdout, stderr)`.
-    fn sjs(list: &[&str]) -> (u8, String, String) {
+    /// A directory holding `src/index.js`, so every command finds its default root.
+    fn project() -> TempDir {
+        let dir = TempDir::new("cli").expect("temp dir");
+        dir.write("src/index.js", "export const A = 1\n")
+            .expect("write");
+        dir
+    }
+
+    /// Runs in `dir` and returns `(exit code, stdout, stderr)`.
+    fn sjs_in(dir: &TempDir, list: &[&str]) -> (u8, String, String) {
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = run(args(list), &mut out, &mut err);
+        let code = run_in(args(list), dir.path(), &mut out, &mut err);
         (code, text(&out), text(&err))
+    }
+
+    /// Runs in a fresh project directory.
+    fn sjs(list: &[&str]) -> (u8, String, String) {
+        sjs_in(&project(), list)
     }
 
     #[test]
@@ -189,6 +233,12 @@ mod tests {
             sjs(&["build", "src/index.js", "--out", "x", "--help"]),
             (EXIT_OK, help_text(Command::Build), String::new()),
             "--help wins over everything else that parses"
+        );
+        let empty = TempDir::new("cli").expect("temp dir");
+        assert_eq!(
+            sjs_in(&empty, &["lint", "--help"]).0,
+            EXIT_OK,
+            "--help needs no root"
         );
     }
 
@@ -236,11 +286,41 @@ mod tests {
                 &["help", "--json"][..],
                 "sjs: sjs help does not accept \"--json\"",
             ),
+            (
+                &["map", "--format", "svg"][..],
+                "sjs: sjs map: --format got \"svg\"; expected html, json, dot or md",
+            ),
+            (
+                &["format", "--write", "--check"][..],
+                "sjs: sjs format: --write and --check cannot be combined",
+            ),
         ] {
             let (code, out, err) = sjs(list);
             assert_eq!((code, out), (EXIT_USAGE, String::new()), "{list:?}");
             assert_eq!(err.lines().next(), Some(first_line), "{list:?}: {err}");
         }
+    }
+
+    #[test]
+    fn a_missing_root_or_entry_is_a_usage_error_naming_the_path() {
+        let empty = TempDir::new("cli").expect("temp dir");
+        let (code, out, err) = sjs_in(&empty, &["lint"]);
+        assert_eq!((code, out), (EXIT_USAGE, String::new()));
+        let root = empty.path().join("src").join("index.js");
+        let first = format!(
+            "sjs: no entry given and the default root {} does not exist",
+            root.display()
+        );
+        assert_eq!(err.lines().next(), Some(first.as_str()));
+        assert!(
+            err.ends_with(&command_list()),
+            "no command's help fits a missing root: {err}"
+        );
+
+        let (code, _, err) = sjs(&["lint", "nope.js"]);
+        assert_eq!(code, EXIT_USAGE);
+        assert!(err.starts_with("sjs: entry "), "{err}");
+        assert!(err.contains("nope.js does not exist"), "{err}");
     }
 
     #[test]
@@ -262,10 +342,32 @@ mod tests {
                 format!("sjs {command}: not implemented yet (STORIES.md {story})\n")
             );
         }
-        let (code, _, _) = sjs(&["lint", "--", "--weird.js"]);
+        let dir = project();
+        dir.write("--weird.js", "").expect("write");
+        let (code, _, err) = sjs_in(&dir, &["lint", "--", "--weird.js"]);
         assert_eq!(
             code, EXIT_INTERNAL,
-            "an entry named --weird.js parses; the stub then exits 70"
+            "an entry named --weird.js is accepted; the stub exits 70: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_io_failure_while_resolving_options_exits_seventy() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = project();
+        let locked = dir.mkdir("src/locked").expect("mkdir");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        let (code, out, err) = sjs_in(&dir, &["test"]);
+        let mut sink = Vec::new();
+        let broken_code = run_in(args(&["test"]), dir.path(), &mut sink, &mut Broken);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod back");
+        assert_eq!((code, out), (EXIT_INTERNAL, String::new()));
+        assert!(err.starts_with("sjs: ") && err.contains("locked"), "{err}");
+        assert_eq!(
+            broken_code, EXIT_INTERNAL,
+            "even when the report cannot be written"
         );
     }
 
@@ -275,7 +377,10 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
         let bad = OsString::from_vec(vec![b'l', 0xff, b'x']);
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        assert_eq!(run(vec![bad], &mut out, &mut err), EXIT_USAGE);
+        assert_eq!(
+            run_in(vec![bad], project().path(), &mut out, &mut err),
+            EXIT_USAGE
+        );
         assert_eq!(text(&out), "");
         assert!(text(&err).contains("not valid UTF-8"));
     }
@@ -294,6 +399,7 @@ mod tests {
 
     #[test]
     fn write_failures_on_stdout_are_internal_failures() {
+        let dir = project();
         for list in [
             &[][..],
             &["help"][..],
@@ -302,7 +408,7 @@ mod tests {
         ] {
             let mut err = Vec::new();
             assert_eq!(
-                run(args(list), &mut Broken, &mut err),
+                run_in(args(list), dir.path(), &mut Broken, &mut err),
                 EXIT_INTERNAL,
                 "{list:?}"
             );
@@ -316,6 +422,7 @@ mod tests {
 
     #[test]
     fn write_failures_on_stderr_still_exit_seventy() {
+        let dir = project();
         for list in [
             &["lint"][..],
             &["Lint"][..],
@@ -325,7 +432,7 @@ mod tests {
         ] {
             let mut out = Vec::new();
             assert_eq!(
-                run(args(list), &mut out, &mut Broken),
+                run_in(args(list), dir.path(), &mut out, &mut Broken),
                 EXIT_INTERNAL,
                 "{list:?}"
             );
@@ -338,7 +445,10 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
         let bad = OsString::from_vec(vec![0xff]);
         let mut out = Vec::new();
-        assert_eq!(run(vec![bad], &mut out, &mut Broken), EXIT_INTERNAL);
+        assert_eq!(
+            run_in(vec![bad], project().path(), &mut out, &mut Broken),
+            EXIT_INTERNAL
+        );
         assert!(out.is_empty(), "nothing reaches stdout on a usage error");
     }
 }

@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 
 use crate::commands::{Command, Takes};
 
@@ -38,6 +39,23 @@ pub enum UsageError {
     EmptyValue(Command, &'static str),
     /// `--switch=value` for a flag that takes nothing.
     UnexpectedValue(Command, &'static str),
+    /// No entry was given and `<cwd>/src/index.js` is not a file (§5.3).
+    MissingRoot(PathBuf),
+    /// An entry named on the command line is not a file.
+    MissingEntry(PathBuf),
+    /// A value outside the flag's enumeration or range (§13.1 "out-of-range value").
+    InvalidValue {
+        /// The command.
+        command: Command,
+        /// The flag.
+        flag: &'static str,
+        /// What was given.
+        given: String,
+        /// What would have been accepted.
+        expected: &'static str,
+    },
+    /// Two flags that cannot be combined.
+    ConflictingFlags(Command, &'static str, &'static str),
 }
 
 impl UsageError {
@@ -45,12 +63,17 @@ impl UsageError {
     #[must_use]
     pub fn command(&self) -> Option<Command> {
         match self {
-            UsageError::MissingCommand | UsageError::UnknownCommand(_) => None,
+            UsageError::MissingCommand
+            | UsageError::UnknownCommand(_)
+            | UsageError::MissingRoot(_)
+            | UsageError::MissingEntry(_) => None,
             UsageError::UnknownFlag(command, _)
             | UsageError::RepeatedFlag(command, _)
             | UsageError::MissingValue(command, _)
             | UsageError::EmptyValue(command, _)
-            | UsageError::UnexpectedValue(command, _) => Some(*command),
+            | UsageError::UnexpectedValue(command, _)
+            | UsageError::InvalidValue { command, .. }
+            | UsageError::ConflictingFlags(command, _, _) => Some(*command),
         }
     }
 }
@@ -74,6 +97,24 @@ impl fmt::Display for UsageError {
             }
             UsageError::UnexpectedValue(command, flag) => {
                 write!(f, "sjs {command}: {flag} takes no value")
+            }
+            UsageError::MissingRoot(path) => write!(
+                f,
+                "no entry given and the default root {} does not exist",
+                path.display()
+            ),
+            UsageError::MissingEntry(path) => write!(f, "entry {} does not exist", path.display()),
+            UsageError::InvalidValue {
+                command,
+                flag,
+                given,
+                expected,
+            } => write!(
+                f,
+                "sjs {command}: {flag} got {given:?}; expected {expected}"
+            ),
+            UsageError::ConflictingFlags(command, a, b) => {
+                write!(f, "sjs {command}: {a} and {b} cannot be combined")
             }
         }
     }
@@ -422,5 +463,32 @@ mod tests {
             UsageError::UnexpectedValue(Command::Build, "--json").to_string(),
             "sjs build: --json takes no value"
         );
+        assert_eq!(
+            UsageError::MissingRoot("/p/src/index.js".into()).to_string(),
+            "no entry given and the default root /p/src/index.js does not exist"
+        );
+        assert_eq!(
+            UsageError::MissingEntry("/p/a.js".into()).to_string(),
+            "entry /p/a.js does not exist"
+        );
+        assert_eq!(UsageError::MissingRoot("/p".into()).command(), None);
+        assert_eq!(UsageError::MissingEntry("/p".into()).command(), None);
+        let invalid = UsageError::InvalidValue {
+            command: Command::Map,
+            flag: "--format",
+            given: "svg".to_owned(),
+            expected: "html, json, dot or md",
+        };
+        assert_eq!(
+            invalid.to_string(),
+            "sjs map: --format got \"svg\"; expected html, json, dot or md"
+        );
+        assert_eq!(invalid.command(), Some(Command::Map));
+        let conflict = UsageError::ConflictingFlags(Command::Format, "--write", "--check");
+        assert_eq!(
+            conflict.to_string(),
+            "sjs format: --write and --check cannot be combined"
+        );
+        assert_eq!(conflict.command(), Some(Command::Format));
     }
 }
