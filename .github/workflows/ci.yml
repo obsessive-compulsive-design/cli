@@ -1,0 +1,107 @@
+# Quality gates from STORIES.md §0.2. Every job runs on every push to main and every pull
+# request, with no path filters: a PR that changes only Markdown still runs the gates.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # §0.2 item 6: property tests (sjs-testkit) run 4 096 cases in CI, 256 locally by default.
+  SJS_PROP_CASES: "4096"
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy (pedantic, no unwrap outside tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      # Pass 1: library and binary targets only (cargo's default target set, so it works for
+      # packages with or without a lib). `unwrap`/`expect` are denied here (§0.2 item 10).
+      - run: >
+          cargo clippy --workspace --
+          -D warnings -W clippy::pedantic -D clippy::unwrap_used -D clippy::expect_used
+      # Pass 2: every target including tests, benches and examples; tests may unwrap.
+      - run: cargo clippy --workspace --all-targets -- -D warnings -W clippy::pedantic
+
+  audit:
+    name: zero dependencies, no unsafe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      # §0.2 item 11: no crate outside the workspace in any manifest section; unsafe forbidden.
+      - run: sh scripts/audit.sh
+
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      - run: cargo test --workspace --all-targets
+      - run: cargo test --workspace --doc
+
+  coverage:
+    name: coverage (100% lines and regions)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      # §0.2 item 3: no exclusion list. Region coverage is the LLVM proxy for branch coverage.
+      - run: >
+          cargo llvm-cov --workspace --all-targets
+          --fail-under-lines 100 --fail-under-regions 100
+          --show-missing-lines
+
+  mutants:
+    name: mutation testing (changed files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: rustup show active-toolchain || rustup toolchain install
+      - uses: taiki-e/install-action@cargo-mutants
+      # §0.2 item 4: zero surviving mutants in the files this change touched.
+      - name: Compute the diff under test
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff "origin/${{ github.base_ref }}...HEAD" > changes.diff
+          else
+            git diff "${{ github.event.before }}" HEAD > changes.diff || git diff HEAD~1 HEAD > changes.diff
+          fi
+          wc -l changes.diff
+      - name: Run cargo-mutants on the diff
+        run: |
+          if grep -q '^+++ .*\.rs$' changes.diff; then
+            cargo mutants --in-diff changes.diff --workspace --timeout-multiplier 3
+          else
+            echo "No Rust files changed; nothing to mutate."
+          fi
+
+  fuzz:
+    name: fuzz (60 s per target)
+    runs-on: ubuntu-latest
+    env:
+      SJS_FUZZ_SECONDS: "60"
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain || rustup toolchain install
+      # §0.2 item 7: fuzz targets are tests named `fuzz_*` built on sjs-testkit's fuzz loop
+      # (no cargo-fuzz, no libfuzzer). Until US-019 creates the first, the filter matches
+      # nothing and the job passes with zero tests run.
+      - run: cargo test --workspace -- fuzz_

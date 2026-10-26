@@ -42,18 +42,27 @@ can see every judgement call and move it into `SPEC.md` if it deserves to be a r
    functional and edge-case coverage".
 5. `cargo clippy --workspace --all-targets -- -D warnings -W clippy::pedantic` and
    `cargo fmt --check` are clean.
-6. Property tests (`proptest`) run with at least 256 cases locally and 4 096 in CI for any
-   story touching the lexer, parser, formatter, type normalizer or assignability.
-7. Fuzz targets (`cargo fuzz`) exist for the lexer, parser and formatter from the story
-   that creates each; CI runs each for 60 seconds on every PR.
-8. Snapshot tests (`insta`) cover every human-readable output (diagnostic text, unified
-   diffs, TAP, help text, generated HTML and Markdown). A changed snapshot is reviewed as
-   code.
+6. Property tests (`sjs-testkit::prop`, US-008) run with at least 256 cases locally
+   (`SJS_PROP_CASES`) and 4 096 in CI for any story touching the lexer, parser,
+   formatter, type normalizer or assignability.
+7. Fuzz targets (tests named `fuzz_*` built on `sjs-testkit::fuzz`) exist for the lexer,
+   parser and formatter from the story that creates each; CI runs each for 60 seconds
+   (`SJS_FUZZ_SECONDS`) on every PR.
+8. Snapshot tests (`sjs-testkit::snapshot`) cover every human-readable output
+   (diagnostic text, unified diffs, TAP, help text, generated HTML and Markdown). A
+   changed snapshot is reviewed as code.
 9. The PR description contains the story ID, the spec sections, every **Decision** the
    story makes, and a "how I tried to break it" paragraph listing the edge cases considered
    and whether each has a test.
 10. No `unwrap()`/`expect()`/`panic!` in non-test code; every error path is a typed error
     that the CLI maps to exit code 70 (§13.1), and the mapping is tested.
+11. **Zero dependencies, all safe Rust.** No crate outside this workspace appears in any
+    Cargo manifest section (`dependencies`, `dev-dependencies`, `build-dependencies`) or
+    in `Cargo.lock`; everything the tests need (property testing, snapshots, fuzzing,
+    process driving, benchmark timing, JSON) is written in `sjs-testkit` or the product
+    crates on top of `std`. Every manifest forbids `unsafe_code`. `scripts/audit.sh`
+    enforces both in CI. External *tools* that never enter a manifest (cargo-llvm-cov,
+    cargo-mutants, Node/Deno/Bun for the runner) are allowed.
 
 ### 0.3 Test taxonomy and where tests live
 
@@ -61,12 +70,12 @@ can see every judgement call and move it into `SPEC.md` if it deserves to be a r
 |---|---|---|---|
 | Unit | `#[test]` | beside the code | one function, one behaviour |
 | Conformance fixture | custom harness (US-007) | `tests/conformance/<section>/<code-or-topic>/*.js` | the spec's own examples and every rule's trigger/near-miss/boundary programs |
-| Property | `proptest` | `tests/prop_*.rs` per crate | invariants over generated programs (round-trip, idempotence, normalization) |
-| Fuzz | `cargo fuzz` | `fuzz/fuzz_targets/` | no panics, no hangs, on arbitrary bytes |
-| Snapshot | `insta` | `tests/snapshots/` | exact text output |
-| Integration (CLI) | `assert_cmd` | `crates/sjs-cli/tests/` | argv in; exit code, stdout and files out |
+| Property | `sjs-testkit::prop` | `tests/prop_*.rs` per crate | invariants over generated programs (round-trip, idempotence, normalization) |
+| Fuzz | `sjs-testkit::fuzz` | `tests/fuzz_*.rs` per crate (regressions under `tests/fuzz-regressions/`) | no panics, no hangs, on arbitrary bytes |
+| Snapshot | `sjs-testkit::snapshot` | `tests/snapshots/` | exact text output |
+| Integration (CLI) | `sjs-testkit::process` (std `Command`) | `crates/sjs-cli/tests/` | argv in; exit code, stdout and files out |
 | Runtime | `sjs test` on `runtime/` | `runtime/*.test.js` | the Strict JS matcher module's own tests, also run under Jest, Vitest and Bun in CI (§11.3) |
-| Benchmark | `criterion` | `benches/` | §11.3 throughput and incremental latency |
+| Benchmark | `sjs-testkit::bench` (`harness = false`) | `benches/` | §11.3 throughput and incremental latency |
 
 A conformance fixture declares its expectations inline so a reviewer sees rule and example
 together:
@@ -111,10 +120,13 @@ crates/
   sjs-map/ sjs-docs/       side tools                                           (Epic 9)
   sjs-lsp/                 language server                                      (Epic 10)
   sjs-cli/                 argv, dispatch, exit codes, `help`
+  sjs-testkit/             std-only test tooling: PRNG, property runner, snapshots, fuzz loop,
+                           process driver, bench timer (US-008)
 ambient/                   data files: the five-runtime feature table, IDL-derived signatures
 runtime/                   the Strict JS matcher module, the per-runtime host shims, their tests
 tests/conformance/         fixtures (0.3)
-fuzz/ benches/
+scripts/                   audit.sh (zero-dependency and no-unsafe gate), gates.sh (all gates locally)
+benches/
 SPEC.md STORIES.md
 ```
 
@@ -124,7 +136,7 @@ SPEC.md STORIES.md
 
 | Phase | Milestone (§11.2) | Stories |
 |---|---|---|
-| Foundations | M0 | US-001 … US-008 |
+| Foundations | M0 | US-001 … US-009 |
 | Lexer | M0 | US-010 … US-019 |
 | Parser | M0 | US-020 … US-033 |
 | Formatter | M0 | US-040 … US-050 |
@@ -157,21 +169,37 @@ bullets are the cases most likely to be missed; each one needs its own test.
 ### Epic 0 · Foundations
 
 #### US-001 Toolchain pin, CI and quality gates
-§0.2 · After: nothing · Size: S · M0
+§0.2 · After: nothing · Size: S · M0 · **Status: complete** (2026-10-26)
+
+> Delivered: `rust-toolchain.toml` pinned to 1.99.1; `.github/workflows/ci.yml` with the
+> fmt, clippy (two passes), audit, test, coverage, mutants and fuzz jobs on every push to
+> `main` and every PR with no path filters; `scripts/audit.sh` and `scripts/gates.sh`;
+> `.github/PULL_REQUEST_TEMPLATE.md` carrying §0.2 and §0.4; `unsafe_code = "forbid"` in
+> the manifest and no dependency sections at all; the existing stubs brought to 100 % line
+> and region coverage (unit tests for the dispatcher, `tests/cli.rs` running the binary
+> through `std::process::Command`) so the gate is green before US-002.
+> Verified locally with cargo-llvm-cov 0.9.1 and cargo-mutants 27.1.0: an untested line
+> fails the coverage job, an `unwrap()` in non-test code fails clippy pass 1, and the diff
+> has zero surviving mutants. The throwaway-branch CI runs happen when this lands as a PR;
+> the run links go in that PR's description.
 
 As a reviewer I want every gate in §0.2 enforced by CI before any compiler code exists, so
 that no later story can lower the bar.
 
 **Scope.** `rust-toolchain.toml` pinned to the latest stable (the machine currently has
 1.77.2, which predates several dev-dependencies; the exact pin is the reviewer's call);
-CI workflow running fmt, clippy pedantic as errors, tests, `cargo llvm-cov` with 100 %
-line and region thresholds, `cargo mutants` on changed files, `cargo fuzz` for 60 s per
-target (skipped until one exists), `PROPTEST_CASES=4096`; PR template containing §0.4.
+CI workflow running fmt, clippy pedantic as errors, the zero-dependency and no-unsafe
+audit (`scripts/audit.sh`), tests, `cargo llvm-cov` with 100 % line and region
+thresholds, `cargo mutants` on changed files, the `fuzz_*` tests with
+`SJS_FUZZ_SECONDS=60` (matching nothing until US-019), `SJS_PROP_CASES=4096`; PR
+template containing §0.4.
 
 **Done when**
 - A PR adding an untested line fails CI with the coverage message.
 - A PR adding `unwrap()` outside tests fails clippy (`clippy::unwrap_used` and
   `clippy::expect_used` denied for non-test code).
+- A PR adding any `[dependencies]`/`[dev-dependencies]`/`[build-dependencies]` entry, or
+  an `unsafe` block, fails the audit job.
 - CI is green on the empty workspace.
 
 **Tests.** The workflow is exercised by a throwaway branch that violates each gate once
@@ -193,8 +221,11 @@ members are `sjs-*`. `Cargo.lock` is committed (binary project; removed from
 - `cargo build --workspace` produces `target/debug/sjs`.
 - `sjs` with no arguments prints a one-line command list and exits 0 (placeholder text;
   US-156 replaces it with the §13.8 spec-derived help).
-- No crate depends on a crate later in the pipeline (a test parses `cargo metadata` and
-  asserts the dependency DAG matches §0.5).
+- No crate depends on a crate later in the pipeline (a test runs `cargo tree --workspace`
+  through `sjs-testkit::process` and asserts the path-dependency DAG matches §0.5; no
+  JSON parsing is needed).
+- Every member manifest has `lints.workspace = true` and the root forbids `unsafe_code`;
+  `scripts/audit.sh` passes.
 
 **Tests.** Integration test for the no-argument run; the DAG test. Edge: a non-UTF-8
 argv element exits 2, not 70.
@@ -263,7 +294,7 @@ removed by each command's story).
 - Command names are case-sensitive (`sjs Lint` is a usage error; the current prototype
   lower-cases, which the spec does not permit).
 
-**Tests.** `assert_cmd` per case; snapshot of usage text. Edge: `--` ends flag parsing so
+**Tests.** `sjs-testkit::process` per case; snapshot of usage text. Edge: `--` ends flag parsing so
 an entry literally named `--weird.js` is accepted; a flag given twice is a usage error;
 `--out=` with an empty value is a usage error; `--target` (removed by §13.1) is an
 unknown flag.
@@ -313,12 +344,43 @@ merged, and fails afterwards.
 `expect:` past the end of the file fails loudly; two `expect:` lines for the same
 position and code require the diagnostic to fire exactly twice.
 
-#### US-008 Program generator for the §2 grammar
-§11.2 M0 · After: US-003 · Size: M · M0
+#### US-008 `sjs-testkit`: zero-dependency test tooling
+§0.2 items 6–8 and 11 · After: US-003 · Size: M · M0
 
-As the parser and formatter stories I want a `proptest` strategy generating random Strict
-JS programs covering every production in §2, so round-trip and idempotence are proven on
-10 000 programs rather than hand-picked ones.
+As every later story I want property testing, snapshots, fuzzing, process driving and
+benchmark timing available from one workspace crate written on `std` alone, so the test
+kinds §0.3 requires exist without a single external crate.
+
+**Scope.** `prng`: a documented 64-bit generator (SplitMix64 seeding xoshiro256**) with
+fixed test vectors. `prop`: `check(gen, property)` running `SJS_PROP_CASES` cases
+(default 256), printing the failing seed and replaying it from `SJS_PROP_SEED`, shrinking
+through a generator-supplied `shrink` iterator to a minimal counter-example. `snapshot`:
+`assert(name, text)` against `tests/snapshots/<name>.snap`, writing when
+`SJS_UPDATE_SNAPSHOTS=1` and otherwise failing with a unified diff (the testkit has its
+own small line differ; `sjs-format` must not depend on a test crate, so US-048 writes the
+product one separately). `fuzz`: `run(target)` for `SJS_FUZZ_SECONDS` (default 1) feeding
+random bytes and mutations (bit flips, splices, dictionary tokens, previous crashes from
+`tests/fuzz-regressions/`), saving any panicking input there. `process`: run a binary with
+args and stdin, capturing status, stdout, stderr. `bench`: `time(name, iterations, f)`
+reporting the median on `std::time::Instant`.
+
+**Done when**
+- Each facility has unit tests; shrinking reaches the minimal counter-example on a known
+  failing property; the snapshot diff output is itself snapshotted.
+- The crate has no dependency sections and forbids `unsafe_code`; `scripts/audit.sh`
+  passes.
+
+**Tests.** Edge: PRNG output matches fixed vectors on every platform; `SJS_PROP_SEED`
+replay reproduces a failure exactly; a snapshot file with CRLF is compared byte-exactly;
+the fuzz loop respects its time budget within 10 %; `process` on a missing binary is a
+typed error, not a panic.
+
+#### US-009 Program generator for the §2 grammar
+§11.2 M0 · After: US-008 · Size: M · M0
+
+As the parser and formatter stories I want a generator (on `sjs-testkit::prop`) producing
+random Strict JS programs covering every production in §2, so round-trip and idempotence
+are proven on 10 000 programs rather than hand-picked ones.
 
 **Scope.** Generators for every production with weights that reach deep nesting and all
 precedences; shrinking to minimal failing programs; a 10 000-program corpus with a fixed
@@ -338,7 +400,7 @@ generated numeric literals stay within `int32` unless doubles are requested.
 ### Epic 1 · Lexer
 
 #### US-010 Token model and lossless token stream
-§2, §11.1 · After: US-004, US-008 · Size: M · M0
+§2, §11.1 · After: US-004, US-009 · Size: M · M0
 
 As the formatter I want tokens carrying exact source text, leading trivia and a "preceded
 by line terminator" flag, so that `print(lex(x)) == x` for any input.
@@ -487,7 +549,7 @@ trailing newline.
 §0.2 · After: US-011 … US-018 · Size: S · M0
 
 **Done when**
-- `cargo fuzz run lex` 10 minutes locally finds nothing; CI runs 60 s per PR.
+- `fuzz_lex` with `SJS_FUZZ_SECONDS=600` locally finds nothing; CI runs it for 60 s per PR.
 - Any input lexes in time linear in its length (10 MB of `/`; 10 MB of unterminated
   strings) under a fixed bound.
 
@@ -499,7 +561,7 @@ substitution depth 10 000 does not overflow the stack.
 ### Epic 2 · Parser
 
 #### US-020 Syntax tree, spans, trivia attachment and exact printer
-§11.1, §2 · After: US-010, US-008 · Size: M · M0
+§11.1, §2 · After: US-010, US-009 · Size: M · M0
 
 As the formatter and every pass I want an arena-allocated, immutable, lossless tree with a
 printer reproducing the source exactly, so "the AST is never rewritten" (§11) is a
@@ -719,7 +781,7 @@ by both rules and reported once.
 **Done when**
 - A fixture with five independent errors reports exactly five; error nodes still
   round-trip.
-- `cargo fuzz run parse` 10 minutes clean; 1 000 corpus programs each mutated by deleting
+- `fuzz_parse` with `SJS_FUZZ_SECONDS=600` clean; 1 000 corpus programs each mutated by deleting
   one random token parse without panic and round-trip.
 - Nesting depth 100 000 of `(` reports `E000` and returns (no stack overflow).
 
@@ -850,7 +912,7 @@ a JSON import among `.js` ones; a namespace import among named ones.
 - **Decision:** a `//` comment whose text begins with `/` or `*` (rulers, ASCII art) is
   left untouched.
 
-**Tests.** US-008 gains a comment-insertion mode; snapshots with comments in every
+**Tests.** US-009 gains a comment-insertion mode; snapshots with comments in every
 syntactic position. Edge: an over-width comment is S006 with no replacement; a block
 comment mid-expression; a comment after the last statement without newline; a doc
 comment line that is only `*`.
@@ -910,7 +972,7 @@ the graph is never touched.
 - `fmt(fmt(x)) == fmt(x)` and `strip(parse(fmt(x))) == strip(parse(x))` (strip removes
   trivia and redundant parentheses) hold on the 10 000 corpus (with comments) and all
   fixtures, as a CI test.
-- A fuzz target `format` asserts no panic and, when the input had no `E000`, both
+- A `fuzz_format` test asserts no panic and, when the input had no `E000`, both
   properties.
 
 **Tests.** As described. Edge: the corpus is regenerated with the comment mode and the
@@ -1445,8 +1507,9 @@ string; `performance.now()` is `number`; `navigator.hardwareConcurrency` is `int
 **Done when**
 - Shuffling module discovery order 100 times on a 50-module program yields byte-identical
   `types.json`.
-- `types.json` has a committed JSON Schema: per module, per export, the §13.7 notation
-  and a structured form; it is produced by `lint` and `build` before the checker runs
+- `types.json` has a documented schema (`schema/types.schema.json`, kept for consumers)
+  and an in-house reader in `sjs-diag` that round-trips the writer's output (no validator
+  crate): per module, per export, the §13.7 notation and a structured form; it is produced by `lint` and `build` before the checker runs
   (§11) and even when a module has `E000` (that module's exports are `unknown` and
   marked).
 
@@ -1809,7 +1872,8 @@ the caret aligned by character; a file that failed UTF-8 decoding shows byte off
 §7, §13.3 · After: US-135, US-100, US-070 · Size: M · M3
 
 **Done when**
-- Committed JSON Schema: diagnostics (line/column and byte offsets, §13.1), public
+- Documented schema (`schema/report.schema.json`) with the in-house JSON reader
+  round-tripping the writer's output: diagnostics (line/column and byte offsets, §13.1), public
   signatures per export, impure modules in evaluation order with the first impure span,
   globals touched per module; fixed key order; `sjs lint --json` prints the identical
   document to stdout and nothing else.
@@ -1854,7 +1918,7 @@ interrupted build (simulated I/O failure) leaves the previous `dist/` untouched.
   types (classes with fields, methods, `extends` chain; structural shapes shared by two
   or more exports, named by their keys), calls (transitive exported-function reach per
   exported function).
-- `--format json` writes a schema-validated document; `sjs map` exits 0/1 on E-codes from
+- `--format json` writes a document the in-house JSON reader round-trips; `sjs map` exits 0/1 on E-codes from
   the passes it runs.
 
 **Tests.** Snapshot on a fixture program. Edge: a module at two depths (shortest wins);
@@ -1887,7 +1951,7 @@ layer.
   graph by depth with click-through to exports and signatures, and the type and call
   layers as tabs; the default format.
 
-**Tests.** Snapshot; an HTML validator in CI. Edge: 500 modules render without a layout
+**Tests.** Snapshot; an in-house well-formedness check in `sjs-testkit` (balanced tags, escaped text). Edge: 500 modules render without a layout
 failure (a generated program); names are HTML-escaped.
 
 #### US-154 `sjs docs --format md`
@@ -1909,7 +1973,7 @@ deprecated export marked; an example that failed shows its failure.
 - A self-contained static site with the same content plus a search box over export
   names and summaries; an example failing to compile fails the docs build (exit 1).
 
-**Tests.** Snapshot; HTML validator. Edge: search works with JavaScript disabled? No: the
+**Tests.** Snapshot; the same well-formedness check. Edge: search works with JavaScript disabled? No: the
 search box is JavaScript; the page without it still lists everything (tested by
 stripping scripts).
 
@@ -2088,7 +2152,7 @@ included to prove the comparison detects divergence.
 §11.3 · After: US-137 · Size: S · M5
 
 **Done when**
-- `criterion` benches over a generated 50 000-line program and the self-hosted corpus
+- `benches/*.rs` (`harness = false`, `sjs-testkit::bench`) over a generated 50 000-line program and the self-hosted corpus
   (the matcher module, the host shims, every conformance fixture) measure lines per
   second per core; CI fails if throughput drops below 100 000 lines/s/core or regresses
   more than 10 % against the stored baseline.
@@ -2114,8 +2178,8 @@ not change the summary stops at that module; deleting a file.
 §13.9 · After: US-161 · Size: M · M5
 
 **Done when**
-- LSP over stdin/stdout: initialize, open/change/save/close, shutdown (exit 0 on clean
-  shutdown); diagnostics published for every E- and S-code; each S-code carries its
+- LSP over stdin/stdout with in-house JSON-RPC framing and the `sjs-diag` JSON
+  reader/writer: initialize, open/change/save/close, shutdown (exit 0 on clean shutdown); diagnostics published for every E- and S-code; each S-code carries its
   replacement as a code action that applies exactly that one finding when requested;
   S020/S021/S030 offer no action; nothing is applied on the server's initiative.
 

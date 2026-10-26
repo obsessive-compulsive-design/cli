@@ -1,0 +1,6 @@
+# Pinned per STORIES.md US-001: every contributor and CI build the same compiler.
+# Bump deliberately, in its own PR, after the gates pass on the new version.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
+profile = "minimal"
