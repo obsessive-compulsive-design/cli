@@ -1,0 +1,16 @@
+sjs map [entries…] [--format <fmt>] [--out <dir>] [--json] [--quiet]
+
+write the architectural map (modules, dependencies, types, calls)  (SPEC.md §13.6)
+
+Flags:
+  --format <fmt>  html (default), json, dot or md
+  --out <dir>     output directory (default map/)
+  --json          print machine-readable diagnostics (the report.json document) on stdout
+  --quiet         print only the summary line
+  --help          print this text
+
+Exit codes:
+  0   no E-code found
+  1   at least one E-code
+  2   usage error
+  70  internal failure

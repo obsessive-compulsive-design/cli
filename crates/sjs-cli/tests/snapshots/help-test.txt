@@ -1,0 +1,20 @@
+sjs test [entries…] [--no-coverage] [--ci] [--reporter <name>] [--coverage-lines <N>] [--coverage-branches <N>] [--out <dir>] [--json] [--quiet]
+
+check the program, then run its tests with coverage  (SPEC.md §13.5)
+
+Flags:
+  --no-coverage            run the exact source bytes without instrumentation
+  --ci                     treat it.only, describe.only and unexplained skips as errors; enforce thresholds
+  --reporter <name>        tap (default), dots, junit or json
+  --coverage-lines <N>     per-file line coverage threshold, enforced under --ci
+  --coverage-branches <N>  per-file branch coverage threshold, enforced under --ci
+  --out <dir>              coverage report directory (default coverage/)
+  --json                   print machine-readable diagnostics (the report.json document) on stdout
+  --quiet                  print only the summary line
+  --help                   print this text
+
+Exit codes:
+  0   every test file passed
+  1   1–255: the number of failed files, capped
+  2   usage error
+  70  internal failure

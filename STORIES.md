@@ -316,7 +316,23 @@ strings. Edge: empty file; no final newline; a line of 100 multi-byte characters
 terminator for positions.
 
 #### US-005 CLI dispatch, usage errors and exit codes
-§13, §13.1 · After: US-003 · Size: M · M0
+§13, §13.1 · After: US-003 · Size: M · M0 · **Status: complete** (2026-10-26)
+
+> Delivered in `sjs-cli`: `commands` (the case-sensitive `Command` enum with name,
+> summary, spec section, per-command flag table from §13.1, positional form and exit-code
+> rows; `command_list()` and `help_text()` for §13.8, snapshotted under
+> `tests/snapshots/`), `args::parse` (`--flag value` and `--flag=value`, `--` ends flags,
+> `--help` anywhere and `sjs --help [command]`, errors for unknown command or flag,
+> repeated flag, missing, empty or unexpected value), `exit::exit_code` (the one §13.1
+> mapping: 0/1 checked, counts capped at 255, 2 usage, 70 internal, 0 help and clean lsp)
+> and dispatch: help in all three spellings prints the same text; a usage error prints the
+> error and the relevant help on stderr and exits 2; every other command is the permitted
+> stub exiting 70 and naming its story. **Decisions:** `--out` is accepted only by the
+> commands that write (build, test, map, docs); `--json`/`--quiet` by every command but
+> help and lsp; a bare value may not start with `--`, so `--out --json` is a missing value;
+> a lone `-` and single-dash flags are unknown flags; value *interpretation* (paths,
+> numbers, enumerations, defaults) is US-006. Snapshots are plain files compared with
+> `include_str!` until US-008.
 
 As a CI author I want `sjs <command>` to resolve the eight commands, reject anything else
 with exit 2, and honour `--help` on every command, so scripts can rely on exit codes

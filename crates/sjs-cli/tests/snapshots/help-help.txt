@@ -1,0 +1,10 @@
+sjs help [command]
+
+print this list, or a command's flags, defaults and exit codes  (SPEC.md §13.8)
+
+Flags:
+  --help  print this text
+
+Exit codes:
+  0   always
+  2   unknown command

@@ -1,0 +1,15 @@
+sjs lint [entries…] [--signatures] [--json] [--quiet]
+
+check the program and print every finding  (SPEC.md §13.3)
+
+Flags:
+  --signatures  append the inferred signature of every export, one per line
+  --json        print machine-readable diagnostics (the report.json document) on stdout
+  --quiet       print only the summary line
+  --help        print this text
+
+Exit codes:
+  0   no E-code found
+  1   at least one E-code
+  2   usage error
+  70  internal failure

@@ -1,4 +1,5 @@
-//! Runs the real `sjs` binary so `main` is covered (STORIES.md §0.2 item 3).
+//! Runs the real `sjs` binary so `main` is covered (STORIES.md §0.2 item 3) and the exit
+//! codes of SPEC.md §13.1 are observed from outside the process.
 
 use sjs_testkit::process::run;
 
@@ -8,16 +9,49 @@ const SJS: &str = env!("CARGO_BIN_EXE_sjs");
 fn no_arguments_prints_the_command_list_and_exits_zero() {
     let out = run(SJS, &[], None).expect("sjs can be spawned");
     assert_eq!(out.status, Some(0));
-    assert_eq!(out.stdout, format!("{}\n", sjs_cli::COMMANDS));
+    assert_eq!(out.stdout, sjs_cli::command_list());
     assert_eq!(out.stderr, "");
 }
 
 #[test]
-fn an_argument_is_a_usage_error_with_the_list_on_stderr() {
-    let out = run(SJS, &["lint"], None).expect("sjs can be spawned");
+fn help_for_a_command_is_the_same_in_all_three_spellings() {
+    let expected = sjs_cli::help_text(sjs_cli::Command::Lint);
+    for args in [
+        &["lint", "--help"][..],
+        &["help", "lint"][..],
+        &["--help", "lint"][..],
+    ] {
+        let out = run(SJS, args, None).expect("sjs can be spawned");
+        assert_eq!(out.status, Some(0), "{args:?}");
+        assert_eq!(out.stdout, expected, "{args:?}");
+        assert_eq!(out.stderr, "", "{args:?}");
+    }
+}
+
+#[test]
+fn a_usage_error_exits_two_with_help_on_stderr() {
+    let out = run(SJS, &["lint", "--target", "node"], None).expect("sjs can be spawned");
     assert_eq!(out.status, Some(i32::from(sjs_cli::EXIT_USAGE)));
     assert_eq!(out.stdout, "");
-    assert!(out.stderr.contains(sjs_cli::COMMANDS), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("does not accept \"--target\""),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stderr
+            .ends_with(&sjs_cli::help_text(sjs_cli::Command::Lint)),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn an_unimplemented_command_exits_seventy() {
+    let out = run(SJS, &["lint"], None).expect("sjs can be spawned");
+    assert_eq!(out.status, Some(i32::from(sjs_cli::EXIT_INTERNAL)));
+    assert_eq!(out.stdout, "");
+    assert!(out.stderr.contains("not implemented yet"), "{}", out.stderr);
 }
 
 #[cfg(unix)]

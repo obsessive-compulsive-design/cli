@@ -1,0 +1,15 @@
+sjs build [entries…] [--out <dir>] [--json] [--quiet]
+
+check the program and copy it byte for byte to dist/  (SPEC.md §13.2)
+
+Flags:
+  --out <dir>  output directory (default dist/)
+  --json       print machine-readable diagnostics (the report.json document) on stdout
+  --quiet      print only the summary line
+  --help       print this text
+
+Exit codes:
+  0   no E-code found
+  1   at least one E-code
+  2   usage error
+  70  internal failure

@@ -1,0 +1,16 @@
+sjs format [entries…] [--write] [--check] [--json] [--quiet]
+
+print the canonical-layout diff, or apply it with --write  (SPEC.md §13.4)
+
+Flags:
+  --write  apply the canonical layout (never S020/S021)
+  --check  print the diff and exit with the count of files that would change (the default)
+  --json   print machine-readable diagnostics (the report.json document) on stdout
+  --quiet  print only the summary line
+  --help   print this text
+
+Exit codes:
+  0   no file would change
+  1   1–255: the number of files that would change, capped
+  2   usage error
+  70  internal failure

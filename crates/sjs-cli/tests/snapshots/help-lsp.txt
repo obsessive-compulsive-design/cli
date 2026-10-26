@@ -1,0 +1,11 @@
+sjs lsp
+
+serve the Language Server Protocol on stdin/stdout  (SPEC.md §13.9)
+
+Flags:
+  --help  print this text
+
+Exit codes:
+  0   clean shutdown
+  2   usage error
+  70  internal failure
