@@ -7,17 +7,21 @@
 //! escapes, non-ASCII letters and `#!`), US-012 numeric literals with their values and
 //! US-013 string literals cooked to their value (`'…'` is S001 with a fix) and US-014
 //! template literals as head, middle, tail and whole pieces with a brace-depth stack so
-//! substitutions nest. US-015 to US-018 add the remaining token kinds;
+//! substitutions nest. US-015 adds regex literals with their flags checked (E002 for a
+//! set lacking `v`) behind a regex-allowed hint the parser passes to [`Lexer::next_token`]
+//! (`lex` guesses it from the previous token). US-016 to US-018 add the remaining token
+//! kinds;
 //! until then every other character is an `Error` token, so the lexer is not yet part of
 //! the pipeline.
 
 pub mod lexer;
 mod number;
+mod regex;
 mod string;
 pub mod token;
 
-pub use lexer::lex;
+pub use lexer::{lex, regex_allowed_after, Lexer};
 pub use token::{
-    Keyword, Number, Punct, Template, TemplatePart, Token, TokenKind, TokenStream, Trivia,
+    Keyword, Number, Punct, Regex, Template, TemplatePart, Token, TokenKind, TokenStream, Trivia,
     TriviaKind,
 };

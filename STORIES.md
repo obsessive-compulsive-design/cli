@@ -719,7 +719,30 @@ a template containing `*/`; a multi-line template keeps its original line termin
 (§9.3 never reflows it).
 
 #### US-015 Regex literal tokenization and flags
-§2, E002 · After: US-010 · Size: M · M0
+§2, E002 · After: US-010 · Size: M · M0 · **Status: complete** (2026-10-27)
+
+> Delivered in `sjs-syntax`: `regex.rs` (body scanning where `[…]` hides `/` and `\`
+> escapes the next character; `check_flags`), `TokenKind::Regex(Regex { body, flags })`
+> with `has_flag`, and `Punct::{Slash, SlashEq}` for the division a `/` is otherwise.
+> The lexer is now public and incremental: `Lexer::new(&file)`, `next_token(regex_allowed)`
+> and `finish() -> Diagnostics`, so the US-020 parser can say whether a `/` starts an
+> expression; `lex()` guesses with `regex_allowed_after(&previous_kind)` (false after any
+> value: identifier, literal, regex, `this`, `super`, a whole or tail template piece;
+> true after a keyword, punctuator, `Error` token or at the start). `/a/v` lexes with
+> body `a` and flags `v`; `d g i m s y` in any order alongside `v`; `/a/` and `/a/u`
+> and `/a/gi` are `E002` on the whole literal naming the missing `v` and still lex as a
+> regex; `/a/vu`, `/a/uv`, `/a/vv`, `/a/vx`, `/a/v$`, `/a/v1` are `E000` at the offending
+> flag and the literal is an `Error` token. A line terminator or the end of the file
+> inside the body (also inside a class or after a backslash) is `E000` there and lexing
+> resumes on the next line. `a / b / c` is two divisions; `x = /=/v`, `/[/]/v`, `/\//v`
+> lex; `/a/v.test(s)` continues with `.test`; `}` then `/` is a regex under `lex()` and
+> under `next_token(true)` (block) and a division under `next_token(false)` (object
+> literal). **Decisions:** `/` and `/=` become punctuators now, like the braces in
+> US-014, because the division half of the disambiguation needs a token; a `}` is guessed
+> to end a block and an `Error` token (every other punctuator until US-018) not to be a
+> value, which US-018 refines when `)` and `]` exist; the `E002` conformance fixtures
+> move to US-018 with `S001`, for the same reason. Verified: 100% lines and regions, 63
+> mutants (48 caught, 6 unviable, 9 timeouts, 0 missed).
 
 **Scope.** Slash disambiguation driven by a parser hint (US-020 wires it); flag parsing.
 
@@ -782,8 +805,8 @@ trailing newline.
 **Tests.** Table over every punctuator; longest-match pairs. Edge: `a?.5:1` is a ternary;
 `#a` is a private name and `# a` is an error; `@` is `E000` naming decorators. This story
 also wires the lexer into the pipeline (the US-010 decision) and therefore owns the
-conformance fixtures for `S001` (moved here from US-013, whose lexer cannot yet be run
-through the pipeline).
+conformance fixtures for `S001` and `E002` (moved here from US-013 and US-015, whose
+lexer cannot yet be run through the pipeline).
 
 #### US-019 Lexer fuzzing and error recovery
 §0.2 · After: US-011 … US-018 · Size: S · M0

@@ -4,36 +4,59 @@
 use sjs_diag::{Code, Diagnostic, Diagnostics, LineTerminator, Position, SourceFile, Span};
 
 use crate::number;
+use crate::regex::{self, Flags, ScanKind};
 use crate::string::{self, TemplateEnd};
 use crate::token::{
-    Keyword, Punct, Template, TemplatePart, Token, TokenKind, TokenStream, Trivia, TriviaKind,
+    Keyword, Punct, Regex, Template, TemplatePart, Token, TokenKind, TokenStream, Trivia,
+    TriviaKind,
 };
 
 /// Lexes a whole file. Never fails: every byte is covered by exactly one trivia run or
 /// token, so [`TokenStream::print`] reproduces the file; problems are diagnostics.
+/// Whether a `/` starts a regex is guessed from the previous token with
+/// [`regex_allowed_after`]; a parser knows better and drives a [`Lexer`] itself.
 #[must_use]
 pub fn lex(file: &SourceFile) -> (TokenStream, Diagnostics) {
-    let mut lexer = Lexer {
-        file,
-        text: file.text(),
-        pos: 0,
-        diagnostics: Diagnostics::new(),
-        after_dot: false,
-        substitutions: Vec::new(),
-    };
-    let mut tokens = Vec::new();
+    let mut lexer = Lexer::new(file);
+    let mut tokens: Vec<Token> = Vec::new();
     loop {
-        let token = lexer.next_token();
+        let regex_allowed = tokens.last().is_none_or(|t| regex_allowed_after(&t.kind));
+        let token = lexer.next_token(regex_allowed);
         let done = token.kind == TokenKind::Eof;
         tokens.push(token);
         if done {
             break;
         }
     }
-    (TokenStream { tokens }, lexer.diagnostics)
+    (TokenStream { tokens }, lexer.finish())
 }
 
-struct Lexer<'a> {
+/// Whether a `/` right after a token of kind `previous` starts a regex literal rather
+/// than a division, judged from that token alone: a regex can only start where an
+/// expression starts, so it never follows a value. A `}` is taken to end a block (the
+/// parser knows when it ends an object literal instead), and an `Error` token is taken
+/// not to be a value.
+#[must_use]
+pub fn regex_allowed_after(previous: &TokenKind) -> bool {
+    match previous {
+        TokenKind::Ident
+        | TokenKind::Null
+        | TokenKind::Bool(_)
+        | TokenKind::Number(_)
+        | TokenKind::BigInt(_)
+        | TokenKind::String(_)
+        | TokenKind::Regex(_)
+        | TokenKind::Keyword(Keyword::This | Keyword::Super) => false,
+        TokenKind::Template(template) => {
+            !matches!(template.part, TemplatePart::Whole | TemplatePart::Tail)
+        }
+        TokenKind::Keyword(_) | TokenKind::Punct(_) | TokenKind::Error | TokenKind::Eof => true,
+    }
+}
+
+/// An incremental lexer: the parser (US-020) pulls one token at a time and says whether
+/// a `/` at that point may start a regex literal.
+pub struct Lexer<'a> {
     file: &'a SourceFile,
     text: &'a str,
     pos: usize,
@@ -73,7 +96,26 @@ fn line_terminator(ch: char) -> Option<LineTerminator> {
     }
 }
 
-impl Lexer<'_> {
+impl<'a> Lexer<'a> {
+    /// A lexer at the start of `file`.
+    #[must_use]
+    pub fn new(file: &'a SourceFile) -> Self {
+        Lexer {
+            file,
+            text: file.text(),
+            pos: 0,
+            diagnostics: Diagnostics::new(),
+            after_dot: false,
+            substitutions: Vec::new(),
+        }
+    }
+
+    /// The diagnostics so far, consuming the lexer.
+    #[must_use]
+    pub fn finish(self) -> Diagnostics {
+        self.diagnostics
+    }
+
     fn peek(&self) -> Option<char> {
         self.text[self.pos..].chars().next()
     }
@@ -105,7 +147,9 @@ impl Lexer<'_> {
             .push(Diagnostic::new(code, self.file.path(), span, message));
     }
 
-    fn next_token(&mut self) -> Token {
+    /// The next token, with its leading trivia; `Eof` at the end, again and again. With
+    /// `regex_allowed`, a `/` here starts a regex literal; otherwise it is `/` or `/=`.
+    pub fn next_token(&mut self, regex_allowed: bool) -> Token {
         let leading = self.trivia();
         let has_newline_before = leading.iter().any(Trivia::is_newline);
         let start = self.pos;
@@ -119,6 +163,12 @@ impl Lexer<'_> {
                 TokenKind::Punct(Punct::LBrace)
             }
             Some('}') => self.close_brace(),
+            Some('/') if regex_allowed => self.regex(start),
+            Some('/') if self.peek() == Some('=') => {
+                self.bump();
+                TokenKind::Punct(Punct::SlashEq)
+            }
+            Some('/') => TokenKind::Punct(Punct::Slash),
             Some(ch) if ch == '_' || ch.is_ascii_alphabetic() => self.word(start),
             Some(ch) if ch.is_ascii_digit() => self.number(start),
             Some('.') if self.peek().is_some_and(|c| c.is_ascii_digit()) => self.number(start),
@@ -279,6 +329,50 @@ impl Lexer<'_> {
             cooked: piece.cooked.into_boxed_str(),
             raw: piece.raw.into_boxed_str(),
         })
+    }
+
+    /// A regex literal (`regex.rs`), whose opening `/` is already consumed. A line
+    /// terminator or the end of the file before the closing `/` is E000 there; a flag
+    /// that is not one of `d g i m s v y`, a repeated flag or `u` alongside `v` is E000
+    /// at that flag; a well-formed flag set lacking `v` is E002 on the literal, which
+    /// still lexes as a regex (SPEC.md §2).
+    fn regex(&mut self, start: usize) -> TokenKind {
+        let scan = regex::scan(self.text, start);
+        self.pos = scan.end;
+        match scan.kind {
+            ScanKind::Unterminated => {
+                self.report(
+                    Code::E000,
+                    scan.end,
+                    scan.end,
+                    "unterminated regex literal: expected `/` before the end of the line"
+                        .to_owned(),
+                );
+                TokenKind::Error
+            }
+            ScanKind::Closed {
+                body,
+                flags,
+                flags_at,
+            } => {
+                match regex::check_flags(&flags) {
+                    Flags::Ok => {}
+                    Flags::Syntax { offset, message } => {
+                        let at = flags_at + offset;
+                        let after = at + self.text[at..].chars().next().map_or(0, char::len_utf8);
+                        self.report(Code::E000, at, after, message);
+                        return TokenKind::Error;
+                    }
+                    Flags::MissingV(message) => {
+                        self.report(Code::E002, start, scan.end, message);
+                    }
+                }
+                TokenKind::Regex(Regex {
+                    body: body.into_boxed_str(),
+                    flags: flags.into_boxed_str(),
+                })
+            }
+        }
     }
 
     /// A string literal (`string.rs`). Bad escapes make it one error token with an E000
@@ -658,10 +752,21 @@ mod tests {
 
     #[test]
     fn a_slash_alone_is_not_a_comment() {
-        assert_eq!(kinds("/"), [TokenKind::Error, TokenKind::Eof]);
+        assert_eq!(
+            kinds("/"),
+            [TokenKind::Error, TokenKind::Eof],
+            "an unterminated regex"
+        );
         assert_eq!(
             kinds("/ /"),
-            [TokenKind::Error, TokenKind::Error, TokenKind::Eof]
+            [
+                TokenKind::Regex(crate::token::Regex {
+                    body: " ".into(),
+                    flags: "".into()
+                }),
+                TokenKind::Eof
+            ],
+            "a regex of one space, lacking its flags"
         );
         assert_eq!(
             kinds("/*/"),
@@ -2107,5 +2212,393 @@ mod template_tests {
             Ok(())
         })
         .expect("every soup round-trips");
+    }
+}
+
+#[cfg(test)]
+mod regex_tests {
+    use super::{lex, regex_allowed_after, Lexer};
+    use crate::token::{Keyword, Number, Punct, Regex, Template, TemplatePart, TokenKind};
+    use sjs_diag::{Code, Diagnostic, Position, SourceFile};
+    use sjs_testkit::prop::{check_with, Config, Text};
+
+    fn file(text: &str) -> SourceFile {
+        SourceFile::new("a.js", text.as_bytes().to_vec()).expect("valid UTF-8")
+    }
+
+    fn kinds(text: &str) -> Vec<TokenKind> {
+        lex(&file(text))
+            .0
+            .tokens
+            .iter()
+            .map(|t| t.kind.clone())
+            .collect()
+    }
+
+    fn diagnostics(text: &str) -> Vec<Diagnostic> {
+        lex(&file(text)).1.iter().cloned().collect()
+    }
+
+    fn regex(body: &str, flags: &str) -> TokenKind {
+        TokenKind::Regex(Regex {
+            body: body.into(),
+            flags: flags.into(),
+        })
+    }
+
+    fn number(value: f64) -> TokenKind {
+        TokenKind::Number(Number {
+            value,
+            exceeds_safe_integer: false,
+        })
+    }
+
+    use Punct::{Slash, SlashEq};
+
+    #[test]
+    fn a_regex_with_v_is_one_token_with_body_and_flags() {
+        for (text, body, flags) in [
+            ("/a/v", "a", "v"),
+            ("/[/]/v", "[/]", "v"),
+            ("/\\//v", "\\/", "v"),
+            ("/=/v", "=", "v"),
+            ("/a/dgimsyv", "a", "dgimsyv"),
+            ("/a/vgi", "a", "vgi"),
+            (
+                "/a*b+(c|d)[^e]{2,}\\d\\p{L}$/v",
+                "a*b+(c|d)[^e]{2,}\\d\\p{L}$",
+                "v",
+            ),
+        ] {
+            let f = file(text);
+            let (stream, found) = lex(&f);
+            assert!(found.is_empty(), "{text}: {found:?}");
+            let tokens: Vec<(TokenKind, usize, usize)> = stream
+                .tokens
+                .iter()
+                .map(|t| (t.kind.clone(), t.span.byte_start, t.span.byte_end))
+                .collect();
+            assert_eq!(
+                tokens,
+                [
+                    (regex(body, flags), 0, text.len()),
+                    (TokenKind::Eof, text.len(), text.len())
+                ],
+                "{text}"
+            );
+            assert_eq!(stream.print(&f), text, "{text}");
+        }
+        let r = Regex {
+            body: "a".into(),
+            flags: "vgi".into(),
+        };
+        assert!(r.has_flag('g') && r.has_flag('v') && !r.has_flag('y'));
+    }
+
+    #[test]
+    fn a_well_formed_flag_set_without_v_is_e002_and_still_a_regex() {
+        for (text, message) in [
+            (
+                "/a/",
+                "regex literal without flags: write the flags, including `v`",
+            ),
+            (
+                "/a/u",
+                "regex flag `u` is the legacy Unicode mode: write `v` with `v` instead",
+            ),
+            ("/a/gi", "regex flags `gi` lack `v`: write `giv`"),
+        ] {
+            let (stream, found) = lex(&file(text));
+            let flags = &text[3..];
+            assert_eq!(stream.tokens[0].kind, regex("a", flags), "{text}");
+            let found: Vec<&Diagnostic> = found.iter().collect();
+            assert_eq!(found.len(), 1, "{text}");
+            assert_eq!(
+                (
+                    found[0].code,
+                    found[0].span.byte_start,
+                    found[0].span.byte_end,
+                    found[0].message.as_str()
+                ),
+                (Code::E002, 0, text.len(), message),
+                "{text}: E002 spans the whole literal"
+            );
+        }
+        assert_eq!(
+            kinds("/a/u"),
+            [regex("a", "u"), TokenKind::Eof],
+            "the flags stay as written"
+        );
+    }
+
+    #[test]
+    fn a_bad_flag_is_e000_at_that_flag_and_the_literal_is_an_error_token() {
+        for (text, column) in [
+            ("/a/vu", 5),
+            ("/a/uv", 5),
+            ("/a/vv", 5),
+            ("/a/vx", 5),
+            ("/a/xv", 4),
+            ("/a/v$", 5),
+            ("/a/v1", 5),
+            ("/a/vé", 5),
+            ("/a/gvg", 6),
+        ] {
+            let (stream, found) = lex(&file(text));
+            assert_eq!(
+                (
+                    stream.tokens[0].kind.clone(),
+                    stream.tokens[0].span.byte_end
+                ),
+                (TokenKind::Error, text.len()),
+                "{text}: one error token including the flags"
+            );
+            let found: Vec<&Diagnostic> = found.iter().collect();
+            assert_eq!(found.len(), 1, "{text}");
+            assert_eq!(
+                (found[0].code, found[0].span.start, found[0].span.end),
+                (
+                    Code::E000,
+                    Position::new(1, column),
+                    Position::new(1, column + 1)
+                ),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            diagnostics("/a/vx")[0].message,
+            "`x` is not a regex flag: the flags are `d`, `g`, `i`, `m`, `s`, `v` and `y`"
+        );
+    }
+
+    #[test]
+    fn a_line_terminator_or_the_file_end_inside_a_regex_is_e000_there() {
+        for (text, column, next) in [
+            ("/a", 3, TokenKind::Eof),
+            ("/a\nb", 3, TokenKind::Ident),
+            ("/a\r\nb", 3, TokenKind::Ident),
+            ("/[a\u{2028}]/v", 4, TokenKind::Error),
+            ("/a\\", 4, TokenKind::Eof),
+            ("/a\\\nb", 4, TokenKind::Ident),
+            ("/", 2, TokenKind::Eof),
+        ] {
+            let (stream, found) = lex(&file(text));
+            assert_eq!(stream.tokens[0].kind, TokenKind::Error, "{text:?}");
+            assert_eq!(stream.tokens[1].kind, next, "{text:?}: lexing resumes");
+            let found: Vec<&Diagnostic> = found.iter().collect();
+            assert_eq!(found[0].code, Code::E000, "{text:?}");
+            assert_eq!(found[0].span.start, Position::new(1, column), "{text:?}");
+            assert_eq!(
+                found[0].message,
+                "unterminated regex literal: expected `/` before the end of the line"
+            );
+            assert_eq!(stream.print(&file(text)), text, "{text:?}");
+        }
+        assert!(
+            lex(&file("/a\nb")).0.tokens[1].has_newline_before,
+            "the terminator belongs to the next token"
+        );
+    }
+
+    #[test]
+    fn a_slash_after_a_value_is_division() {
+        assert_eq!(
+            kinds("a / b / c"),
+            [
+                TokenKind::Ident,
+                TokenKind::Punct(Slash),
+                TokenKind::Ident,
+                TokenKind::Punct(Slash),
+                TokenKind::Ident,
+                TokenKind::Eof
+            ],
+            "two divisions"
+        );
+        assert_eq!(
+            kinds("a /= 2"),
+            [
+                TokenKind::Ident,
+                TokenKind::Punct(SlashEq),
+                number(2.0),
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(
+            kinds("/a/v / 2"),
+            [
+                regex("a", "v"),
+                TokenKind::Punct(Slash),
+                number(2.0),
+                TokenKind::Eof
+            ],
+            "a regex is a value"
+        );
+        for prefix in [
+            "1", "1n", "\"s\"", "`t`", "`${a}`", "null", "true", "this", "super",
+        ] {
+            let text = format!("{prefix} / 2");
+            let found = kinds(&text);
+            assert_eq!(
+                found[found.len() - 3..],
+                [TokenKind::Punct(Slash), number(2.0), TokenKind::Eof],
+                "{text}"
+            );
+            assert!(diagnostics(&text).is_empty(), "{text}");
+        }
+        for prefix in [
+            "return", "typeof", "case", "=", ",", "(", "{", "}", "`${", "",
+        ] {
+            let text = format!("{prefix} /a/v");
+            let found = kinds(&text);
+            assert!(found.contains(&regex("a", "v")), "{text}: {found:?}");
+        }
+        assert_eq!(Punct::Slash.as_str(), "/");
+        assert_eq!(Punct::SlashEq.as_str(), "/=");
+    }
+
+    #[test]
+    fn the_previous_token_decides_the_guess() {
+        let regexes = [
+            (TokenKind::Ident, false),
+            (TokenKind::Null, false),
+            (TokenKind::Bool(true), false),
+            (number(1.0), false),
+            (TokenKind::BigInt("1".into()), false),
+            (TokenKind::String("s".into()), false),
+            (regex("a", "v"), false),
+            (TokenKind::Keyword(Keyword::This), false),
+            (TokenKind::Keyword(Keyword::Super), false),
+            (TokenKind::Keyword(Keyword::Return), true),
+            (TokenKind::Keyword(Keyword::In), true),
+            (TokenKind::Punct(Punct::LBrace), true),
+            (TokenKind::Punct(Punct::RBrace), true),
+            (TokenKind::Punct(Slash), true),
+            (TokenKind::Error, true),
+            (TokenKind::Eof, true),
+        ];
+        for (kind, expected) in regexes {
+            assert_eq!(regex_allowed_after(&kind), expected, "{kind:?}");
+        }
+        for (part, expected) in [
+            (TemplatePart::Whole, false),
+            (TemplatePart::Tail, false),
+            (TemplatePart::Head, true),
+            (TemplatePart::Middle, true),
+        ] {
+            let kind = TokenKind::Template(Template {
+                part,
+                cooked: "".into(),
+                raw: "".into(),
+            });
+            assert_eq!(regex_allowed_after(&kind), expected, "{part:?}");
+        }
+    }
+
+    #[test]
+    fn the_parser_hint_overrides_the_guess_after_a_closing_brace() {
+        let f = file("} /a/v");
+        let mut block = Lexer::new(&f);
+        assert_eq!(block.next_token(true).kind, TokenKind::Punct(Punct::RBrace));
+        assert_eq!(
+            block.next_token(true).kind,
+            regex("a", "v"),
+            "after a block: a regex"
+        );
+        assert_eq!(block.next_token(true).kind, TokenKind::Eof);
+        assert_eq!(
+            block.next_token(true).kind,
+            TokenKind::Eof,
+            "Eof again and again"
+        );
+        assert!(block.finish().is_empty());
+
+        let mut object = Lexer::new(&f);
+        assert_eq!(
+            object.next_token(true).kind,
+            TokenKind::Punct(Punct::RBrace)
+        );
+        assert_eq!(
+            object.next_token(false).kind,
+            TokenKind::Punct(Slash),
+            "after an object literal: division"
+        );
+        let token = object.next_token(false);
+        assert_eq!(
+            (token.kind, token.span.byte_start),
+            (TokenKind::Ident, 3),
+            "`a` follows"
+        );
+        assert_eq!(object.next_token(false).kind, TokenKind::Punct(Slash));
+        assert_eq!(object.next_token(false).kind, TokenKind::Ident);
+        assert_eq!(object.next_token(false).kind, TokenKind::Eof);
+        assert!(object.finish().is_empty());
+
+        let f = file("/a");
+        let mut lexer = Lexer::new(&f);
+        assert_eq!(lexer.next_token(true).kind, TokenKind::Error);
+        assert_eq!(lexer.finish().len(), 1, "finish hands over the diagnostics");
+    }
+
+    #[test]
+    fn a_regex_can_be_followed_directly_by_a_member_access() {
+        let (stream, found) = lex(&file("/a/v.test(s)"));
+        assert_eq!(stream.tokens[0].kind, regex("a", "v"));
+        assert_eq!(
+            (
+                stream.tokens[1].span.byte_start,
+                stream.tokens[2].kind.clone(),
+                stream.tokens[2].span.byte_start
+            ),
+            (4, TokenKind::Ident, 5),
+            "`.` then `test` follow"
+        );
+        assert!(
+            found.iter().all(|d| d.message == "unexpected character '.'"
+                || d.message.starts_with("unexpected character '(")
+                || d.message.starts_with("unexpected character ')")),
+            "only the punctuators US-018 adds: {found:?}"
+        );
+    }
+
+    #[test]
+    fn random_bodies_without_slashes_lex_back_to_themselves() {
+        let gen = Text {
+            alphabet: &['a', ' ', '[', ']', '*', '+', '(', ')', '=', 'é', '.', '\\'],
+            max_len: 16,
+        };
+        check_with(&Config::new(300), &gen, &|body: &String| {
+            // `//` and `/*` open comments; a trailing backslash escapes the closing slash.
+            if body.is_empty() || body.starts_with('*') || body.ends_with('\\') {
+                return Ok(());
+            }
+            let text = format!("/{body}/v");
+            let f = file(&text);
+            let (stream, found) = lex(&f);
+            assert_eq!(stream.print(&f), text, "{text:?}");
+            let mut in_class = false;
+            let mut chars = body.chars();
+            while let Some(ch) = chars.next() {
+                match ch {
+                    '\\' => {
+                        chars.next();
+                    }
+                    '[' => in_class = true,
+                    ']' => in_class = false,
+                    _ => {}
+                }
+            }
+            if in_class {
+                assert_eq!(
+                    stream.tokens[0].kind,
+                    TokenKind::Error,
+                    "{text:?}: unclosed class"
+                );
+            } else {
+                assert_eq!(stream.tokens[0].kind, regex(body, "v"), "{text:?}");
+                assert!(found.is_empty(), "{text:?}");
+            }
+            Ok(())
+        })
+        .expect("every body round-trips");
     }
 }

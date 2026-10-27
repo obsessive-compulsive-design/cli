@@ -224,14 +224,19 @@ pub struct Template {
     pub raw: Box<str>,
 }
 
-/// A punctuator. US-014 needs the braces to balance template substitutions; US-018
-/// adds the rest.
+/// A punctuator. US-014 needs the braces to balance template substitutions and US-015
+/// the division operators that a `/` is when it does not start a regex; US-018 adds
+/// the rest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Punct {
     /// `{`
     LBrace,
     /// `}`
     RBrace,
+    /// `/`
+    Slash,
+    /// `/=`
+    SlashEq,
 }
 
 impl Punct {
@@ -241,12 +246,34 @@ impl Punct {
         match self {
             Punct::LBrace => "{",
             Punct::RBrace => "}",
+            Punct::Slash => "/",
+            Punct::SlashEq => "/=",
         }
     }
 }
 
-/// What a token is. US-011 adds words, US-012 numbers, US-013 strings and US-014
-/// templates and the braces; US-015 to US-018 add regexes and the other punctuators.
+/// A regex literal's parts (SPEC.md §2). The body is the text between the slashes as
+/// written; US-016 parses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Regex {
+    /// Between the slashes, as written.
+    pub body: Box<str>,
+    /// After the closing slash, as written: each of `d g i m s v y` at most once. A
+    /// well-formed set lacking `v` is reported as E002 but still lexes.
+    pub flags: Box<str>,
+}
+
+impl Regex {
+    /// True when `flag` is among the flags.
+    #[must_use]
+    pub fn has_flag(&self, flag: char) -> bool {
+        self.flags.contains(flag)
+    }
+}
+
+/// What a token is. US-011 adds words, US-012 numbers, US-013 strings, US-014 templates
+/// and the braces, US-015 regexes and the division operators; US-016 to US-018 add the
+/// other punctuators.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     /// `[A-Za-z_][A-Za-z0-9_]*` that is not a keyword; contextual words (`of`, `get`,
@@ -268,6 +295,8 @@ pub enum TokenKind {
     /// A piece of a template literal with its cooked and raw values; the span covers the
     /// piece including its `` ` ``, `${` and `}` delimiters.
     Template(Template),
+    /// A regex literal with its body and flags.
+    Regex(Regex),
     /// A punctuator.
     Punct(Punct),
     /// A character the lexer does not accept; reported as E000, lexing continues.

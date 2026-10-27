@@ -3,7 +3,7 @@
 # code without fixtures as "pending" until that story is marked complete, then fails.
 E000 US-004
 E001 US-031
-E002 US-015
+E002 US-018
 E100 US-083
 E101 US-120
 E102 US-112
