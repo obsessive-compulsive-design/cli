@@ -581,7 +581,23 @@ that is only trivia; a block comment with a newline between two tokens sets the 
 without does not.
 
 #### US-011 Identifiers, keywords, removed words, hashbang
-§2 · After: US-010 · Size: S · M0
+§2 · After: US-010 · Size: S · M0 · **Status: complete** (2026-10-27)
+
+> Delivered in `sjs-syntax`: `token::Keyword` (42 words: the subset's reserved words, the
+> strict-mode reserved words, and the eight removed words; `ALL`, `from_word`, `as_str`,
+> `removed_replacement`) and `TokenKind::{Ident, Keyword, Null, Bool}`. The lexer reads
+> `[A-Za-z_][A-Za-z0-9_]*` by longest match, so `in` inside `instanceof`/`input` and keyword
+> prefixes (`le`, `cons`) are identifiers; contextual words (`of get set static async await
+> yield from as`) are `Ident`. E000 at the offending character for `$`, a `\u` escape (one
+> error token for the whole escape) and any non-ASCII letter (the message names the ASCII
+> rule); a removed word is E000 naming its §12 replacement; `#!` anywhere swallows its line
+> and names "a host-side launcher outside the subset". **Decisions:** a removed word keeps a
+> `Keyword` token so the parser can name it, and the lexer skips the removal diagnostic
+> when the previous token's text ends with `.` (`Map.delete`, `a?.delete`), which is the
+> only context where the parser accepts it; `true`/`false` lex as `Bool` alongside `null`
+> because they share the word scanner; the strict-mode reserved words (`do`, `enum`,
+> `implements`, …) are keyword tokens the parser rejects rather than identifiers.
+> Verified: 100% lines and regions, 45 mutants (38 caught, 7 unviable, 0 missed).
 
 As a programmer I want `$` and Unicode escapes rejected in identifiers, the eight removed
 words reported, and a hashbang line reported.

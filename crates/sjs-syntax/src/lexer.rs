@@ -3,7 +3,7 @@
 
 use sjs_diag::{Code, Diagnostic, Diagnostics, LineTerminator, Position, SourceFile, Span};
 
-use crate::token::{Token, TokenKind, TokenStream, Trivia, TriviaKind};
+use crate::token::{Keyword, Token, TokenKind, TokenStream, Trivia, TriviaKind};
 
 /// Lexes a whole file. Never fails: every byte is covered by exactly one trivia run or
 /// token, so [`TokenStream::print`] reproduces the file; problems are diagnostics.
@@ -14,6 +14,7 @@ pub fn lex(file: &SourceFile) -> (TokenStream, Diagnostics) {
         text: file.text(),
         pos: 0,
         diagnostics: Diagnostics::new(),
+        after_dot: false,
     };
     let mut tokens = Vec::new();
     loop {
@@ -32,6 +33,9 @@ struct Lexer<'a> {
     text: &'a str,
     pos: usize,
     diagnostics: Diagnostics,
+    /// True when the previous token's text ends with `.`: the next word is a property
+    /// name, where a removed word is ordinary (`Map.delete`, SPEC.md §12).
+    after_dot: bool,
 }
 
 /// ES2025 `WhiteSpace`: TAB, VT, FF, ZWNBSP and every `Zs` character.
@@ -91,22 +95,93 @@ impl Lexer<'_> {
         let start = self.pos;
         let kind = match self.bump() {
             None => TokenKind::Eof,
-            Some(ch) => {
-                self.report(
-                    Code::E000,
-                    start,
-                    self.pos,
-                    format!("unexpected character {ch:?}"),
-                );
-                TokenKind::Error
-            }
+            Some(ch) if ch == '_' || ch.is_ascii_alphabetic() => self.word(start),
+            Some('$') => self.error(start, "`$` is not permitted in identifiers"),
+            Some('\\') if self.peek() == Some('u') => self.unicode_escape(start),
+            Some('#') if self.peek() == Some('!') => self.hashbang(start),
+            Some(ch) if ch.is_alphabetic() => self.error(
+                start,
+                &format!(
+                    "{ch:?} is not permitted in identifiers: only ASCII letters, digits and `_`"
+                ),
+            ),
+            Some(ch) => self.error(start, &format!("unexpected character {ch:?}")),
         };
+        let span = self.span(start, self.pos);
+        self.after_dot = kind != TokenKind::Eof && self.text[start..self.pos].ends_with('.');
         Token {
             kind,
-            span: self.span(start, self.pos),
+            span,
             leading,
             has_newline_before,
         }
+    }
+
+    fn error(&mut self, start: usize, message: &str) -> TokenKind {
+        self.report(Code::E000, start, self.pos, message.to_owned());
+        TokenKind::Error
+    }
+
+    /// `[A-Za-z_][A-Za-z0-9_]*`: an identifier, a keyword, `null` or a boolean.
+    fn word(&mut self, start: usize) -> TokenKind {
+        while self
+            .peek()
+            .is_some_and(|c| c == '_' || c.is_ascii_alphanumeric())
+        {
+            self.bump();
+        }
+        let word = &self.text[start..self.pos];
+        match word {
+            "null" => TokenKind::Null,
+            "true" => TokenKind::Bool(true),
+            "false" => TokenKind::Bool(false),
+            _ => match Keyword::from_word(word) {
+                None => TokenKind::Ident,
+                Some(keyword) => {
+                    if let Some(replacement) = keyword.removed_replacement() {
+                        if !self.after_dot {
+                            self.report(
+                                Code::E000,
+                                start,
+                                self.pos,
+                                format!("`{word}` is removed; use {replacement}"),
+                            );
+                        }
+                    }
+                    TokenKind::Keyword(keyword)
+                }
+            },
+        }
+    }
+
+    /// `\uXXXX` or `\u{…}`: one error token for the whole escape.
+    fn unicode_escape(&mut self, start: usize) -> TokenKind {
+        self.bump();
+        if self.peek() == Some('{') {
+            while let Some(ch) = self.bump() {
+                if ch == '}' {
+                    break;
+                }
+            }
+        } else {
+            for _ in 0..4 {
+                if self.peek().is_some_and(|c| c.is_ascii_hexdigit()) {
+                    self.bump();
+                }
+            }
+        }
+        self.error(start, "Unicode escapes are not permitted in identifiers")
+    }
+
+    /// `#!…` to the end of the line: a server-only signal the subset rejects (SPEC.md §2).
+    fn hashbang(&mut self, start: usize) -> TokenKind {
+        while self.peek().is_some_and(|c| line_terminator(c).is_none()) {
+            self.bump();
+        }
+        self.error(
+            start,
+            "`#!` is removed; a hashbang line belongs to a host-side launcher outside the subset",
+        )
     }
 
     /// Every trivia run up to the next token or the end of the file.
@@ -377,10 +452,10 @@ mod tests {
 
     #[test]
     fn unrecognised_characters_become_error_tokens_with_e000_and_lexing_continues() {
-        let f = file("aé\u{1F600}");
+        let f = file("#é\u{1F600}");
         let (stream, diagnostics) = lex(&f);
         assert_eq!(
-            kinds("aé\u{1F600}"),
+            kinds("#é\u{1F600}"),
             [
                 TokenKind::Error,
                 TokenKind::Error,
@@ -398,15 +473,15 @@ mod tests {
         assert_eq!(
             messages,
             [
-                "unexpected character 'a'",
-                "unexpected character 'é'",
+                "unexpected character '#'",
+                "'é' is not permitted in identifiers: only ASCII letters, digits and `_`",
                 "unexpected character '\u{1F600}'"
             ]
         );
         assert!(diagnostics
             .iter()
             .all(|d| d.code == Code::E000 && d.path == "a.js"));
-        assert_eq!(stream.print(&f), "aé\u{1F600}");
+        assert_eq!(stream.print(&f), "#é\u{1F600}");
     }
 
     #[test]
@@ -474,5 +549,361 @@ mod tests {
             Ok(())
         });
         assert_eq!(result, Ok(()));
+    }
+}
+
+#[cfg(test)]
+mod word_tests {
+    use super::lex;
+    use crate::token::{Keyword, TokenKind};
+    use sjs_diag::{Code, Position, SourceFile};
+
+    fn file(text: &str) -> SourceFile {
+        SourceFile::new("a.js", text.as_bytes().to_vec()).expect("valid UTF-8")
+    }
+
+    fn kinds(text: &str) -> Vec<TokenKind> {
+        lex(&file(text)).0.tokens.iter().map(|t| t.kind).collect()
+    }
+
+    fn messages(text: &str) -> Vec<String> {
+        lex(&file(text))
+            .1
+            .iter()
+            .map(|d| d.message.clone())
+            .collect()
+    }
+
+    #[test]
+    fn identifiers_are_ascii_letters_digits_and_underscores() {
+        for word in [
+            "a",
+            "_",
+            "_x",
+            "abc",
+            "a1",
+            "A_1b",
+            "camelCase",
+            "UPPER_SNAKE",
+            "x0",
+        ] {
+            assert_eq!(kinds(word), [TokenKind::Ident, TokenKind::Eof], "{word}");
+            assert!(messages(word).is_empty(), "{word}");
+        }
+        let (stream, _) = lex(&file("ab cd"));
+        let spans: Vec<(usize, usize)> = stream
+            .tokens
+            .iter()
+            .map(|t| (t.span.byte_start, t.span.byte_end))
+            .collect();
+        assert_eq!(spans, [(0, 2), (3, 5), (5, 5)]);
+    }
+
+    #[test]
+    fn every_keyword_lexes_as_itself_and_nothing_else_does() {
+        assert_eq!(Keyword::ALL.len(), 42);
+        for (keyword, spelling) in Keyword::ALL {
+            assert_eq!(
+                kinds(spelling),
+                [TokenKind::Keyword(*keyword), TokenKind::Eof],
+                "{spelling}"
+            );
+            assert_eq!(keyword.as_str(), *spelling);
+            assert_eq!(Keyword::from_word(spelling), Some(*keyword));
+            let capitalised = format!("{}{}", spelling[..1].to_uppercase(), &spelling[1..]);
+            assert_eq!(
+                kinds(&capitalised),
+                [TokenKind::Ident, TokenKind::Eof],
+                "keywords are case-sensitive: {capitalised}"
+            );
+            let extended = format!("{spelling}x");
+            assert_eq!(
+                kinds(&extended),
+                [TokenKind::Ident, TokenKind::Eof],
+                "{extended}"
+            );
+            // Dropping the last letter of any keyword leaves a plain identifier.
+            let prefix = &spelling[..spelling.len() - 1];
+            assert_eq!(
+                kinds(prefix),
+                [TokenKind::Ident, TokenKind::Eof],
+                "prefix {prefix}"
+            );
+        }
+        assert_eq!(Keyword::from_word("notakeyword"), None);
+        assert_eq!(
+            kinds("le cons"),
+            [TokenKind::Ident, TokenKind::Ident, TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds("instanceof"),
+            [TokenKind::Keyword(Keyword::Instanceof), TokenKind::Eof],
+            "`in` inside is not matched"
+        );
+        assert_eq!(kinds("input"), [TokenKind::Ident, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn contextual_words_are_identifiers() {
+        for word in [
+            "of",
+            "get",
+            "set",
+            "static",
+            "async",
+            "await",
+            "yield",
+            "from",
+            "as",
+            "undefined",
+            "constructor",
+        ] {
+            assert_eq!(kinds(word), [TokenKind::Ident, TokenKind::Eof], "{word}");
+        }
+    }
+
+    #[test]
+    fn null_and_booleans_are_literals() {
+        assert_eq!(kinds("null"), [TokenKind::Null, TokenKind::Eof]);
+        assert_eq!(kinds("true"), [TokenKind::Bool(true), TokenKind::Eof]);
+        assert_eq!(kinds("false"), [TokenKind::Bool(false), TokenKind::Eof]);
+        assert_eq!(kinds("nullish"), [TokenKind::Ident, TokenKind::Eof]);
+        assert!(
+            messages("null true false").is_empty(),
+            "placement is the parser's job"
+        );
+    }
+
+    #[test]
+    fn removed_words_are_e000_naming_the_replacement() {
+        let expected = [
+            ("var", "`var` is removed; use `const` or `let`"),
+            (
+                "with",
+                "`with` is removed; use nothing: there is no dynamic scope",
+            ),
+            ("void", "`void` is removed; use `undefined`"),
+            (
+                "delete",
+                "`delete` is removed; use assigning `undefined`, or `Map.delete`",
+            ),
+            (
+                "in",
+                "`in` is removed; use a discriminant property or `Object.hasOwn`",
+            ),
+            ("arguments", "`arguments` is removed; use rest parameters"),
+            (
+                "eval",
+                "`eval` is removed; use nothing: there is no code from strings",
+            ),
+            (
+                "debugger",
+                "`debugger` is removed; use nothing: it is a host-side signal",
+            ),
+        ];
+        for (word, message) in expected {
+            let (stream, diagnostics) = lex(&file(word));
+            let keyword = Keyword::from_word(word).expect("a removed word is a keyword");
+            assert_eq!(
+                stream.tokens[0].kind,
+                TokenKind::Keyword(keyword),
+                "{word} is still a keyword token"
+            );
+            assert_eq!(messages(word), [message], "{word}");
+            let d = diagnostics.iter().next().expect("one diagnostic");
+            assert_eq!(
+                (d.code, d.span.byte_start, d.span.byte_end),
+                (Code::E000, 0, word.len())
+            );
+        }
+        let removed: Vec<&str> = Keyword::ALL
+            .iter()
+            .filter(|(k, _)| k.removed_replacement().is_some())
+            .map(|(_, s)| *s)
+            .collect();
+        assert_eq!(
+            removed,
+            [
+                "var",
+                "with",
+                "void",
+                "delete",
+                "in",
+                "arguments",
+                "eval",
+                "debugger"
+            ]
+        );
+        assert_eq!(Keyword::Const.removed_replacement(), None);
+        let (_, diagnostics) = lex(&file("var a in b"));
+        assert_eq!(diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn a_removed_word_after_a_dot_is_a_property_name() {
+        for text in [
+            "a.delete",
+            "a?.delete",
+            "a . delete",
+            "a\n.delete",
+            "a./* c */delete",
+            "m.delete(k)",
+        ] {
+            let found = messages(text);
+            assert!(
+                found.iter().all(|m| !m.contains("removed")),
+                "{text:?}: {found:?}"
+            );
+            assert!(
+                kinds(text).contains(&TokenKind::Keyword(Keyword::Delete)),
+                "{text:?}"
+            );
+        }
+        let removals = |text: &str| -> Vec<String> {
+            messages(text)
+                .into_iter()
+                .filter(|m| m.contains("removed"))
+                .collect()
+        };
+        assert_eq!(
+            removals("delete.a"),
+            ["`delete` is removed; use assigning `undefined`, or `Map.delete`"]
+        );
+        assert_eq!(
+            removals(".a var"),
+            ["`var` is removed; use `const` or `let`"],
+            "only the word right after the dot"
+        );
+        assert_eq!(
+            removals("a.b in"),
+            ["`in` is removed; use a discriminant property or `Object.hasOwn`"]
+        );
+    }
+
+    #[test]
+    fn dollar_signs_are_rejected_at_their_position() {
+        let (stream, diagnostics) = lex(&file("$a a$ a$b"));
+        assert_eq!(
+            stream.tokens.iter().map(|t| t.kind).collect::<Vec<_>>(),
+            [
+                TokenKind::Error,
+                TokenKind::Ident,
+                TokenKind::Ident,
+                TokenKind::Error,
+                TokenKind::Ident,
+                TokenKind::Error,
+                TokenKind::Ident,
+                TokenKind::Eof
+            ]
+        );
+        let positions: Vec<(Position, &str)> = diagnostics
+            .iter()
+            .map(|d| (d.span.start, d.message.as_str()))
+            .collect();
+        assert_eq!(
+            positions,
+            [
+                (Position::new(1, 1), "`$` is not permitted in identifiers"),
+                (Position::new(1, 5), "`$` is not permitted in identifiers"),
+                (Position::new(1, 8), "`$` is not permitted in identifiers"),
+            ]
+        );
+    }
+
+    #[test]
+    fn unicode_escapes_are_one_error_token_each() {
+        let (stream, diagnostics) = lex(&file("\\u0061 \\u{61}b \\uZZ"));
+        let spans: Vec<(TokenKind, usize, usize)> = stream
+            .tokens
+            .iter()
+            .map(|t| (t.kind, t.span.byte_start, t.span.byte_end))
+            .collect();
+        assert_eq!(
+            spans,
+            [
+                (TokenKind::Error, 0, 6),
+                (TokenKind::Error, 7, 13),
+                (TokenKind::Ident, 13, 14),
+                (TokenKind::Error, 15, 17),
+                (TokenKind::Ident, 17, 19),
+                (TokenKind::Eof, 19, 19),
+            ]
+        );
+        assert!(diagnostics
+            .iter()
+            .take(3)
+            .all(|d| d.message == "Unicode escapes are not permitted in identifiers"));
+        assert_eq!(diagnostics.len(), 3);
+        let (stream, _) = lex(&file("\\u{61"));
+        assert_eq!(
+            (stream.tokens[0].kind, stream.tokens[0].span.byte_end),
+            (TokenKind::Error, 5),
+            "an unclosed brace runs to the end"
+        );
+        assert_eq!(
+            kinds("\\x"),
+            [TokenKind::Error, TokenKind::Ident, TokenKind::Eof],
+            "a backslash not starting an escape"
+        );
+    }
+
+    #[test]
+    fn non_ascii_letters_are_rejected_and_split_the_word() {
+        let (stream, diagnostics) = lex(&file("café π"));
+        assert_eq!(
+            stream.tokens.iter().map(|t| t.kind).collect::<Vec<_>>(),
+            [
+                TokenKind::Ident,
+                TokenKind::Error,
+                TokenKind::Error,
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(stream.tokens[0].span.byte_end, 3);
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|d| d.message.clone())
+                .collect::<Vec<_>>(),
+            [
+                "'é' is not permitted in identifiers: only ASCII letters, digits and `_`",
+                "'π' is not permitted in identifiers: only ASCII letters, digits and `_`",
+            ]
+        );
+        assert_eq!(
+            messages("1"),
+            ["unexpected character '1'"],
+            "a digit alone is still unexpected until US-012"
+        );
+    }
+
+    #[test]
+    fn a_hashbang_is_rejected_anywhere_and_swallows_its_line() {
+        let (stream, diagnostics) = lex(&file("#!/usr/bin/env node\nconst"));
+        assert_eq!(
+            stream
+                .tokens
+                .iter()
+                .map(|t| (t.kind, t.span.byte_start, t.span.byte_end))
+                .collect::<Vec<_>>(),
+            [
+                (TokenKind::Error, 0, 19),
+                (TokenKind::Keyword(Keyword::Const), 20, 25),
+                (TokenKind::Eof, 25, 25)
+            ]
+        );
+        assert_eq!(
+            diagnostics.iter().map(|d| d.message.clone()).collect::<Vec<_>>(),
+            ["`#!` is removed; a hashbang line belongs to a host-side launcher outside the subset"]
+        );
+        assert!(stream.tokens[1].has_newline_before);
+        let (_, later) = lex(&file("a\n#! later"));
+        assert_eq!(later.len(), 1, "anywhere, not only on the first line");
+        assert_eq!(
+            messages("#"),
+            ["unexpected character '#'"],
+            "a lone hash is not a hashbang"
+        );
+        assert_eq!(messages("#!"), ["`#!` is removed; a hashbang line belongs to a host-side launcher outside the subset"]);
     }
 }

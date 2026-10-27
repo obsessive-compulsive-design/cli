@@ -46,10 +46,152 @@ impl Trivia {
     }
 }
 
-/// What a token is. US-010 knows only the two ends of the scale; US-011 to US-018 add
-/// identifiers, literals, templates, regexes and punctuators.
+/// A reserved word of the subset, or a removed word kept as a token so the parser can
+/// name it (a removed word after `.` is an ordinary property name, SPEC.md §12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[allow(missing_docs)]
+pub enum Keyword {
+    Break,
+    Case,
+    Catch,
+    Class,
+    Const,
+    Continue,
+    Default,
+    Else,
+    Export,
+    Extends,
+    Finally,
+    For,
+    Function,
+    If,
+    Import,
+    Instanceof,
+    Let,
+    New,
+    Return,
+    Super,
+    Switch,
+    This,
+    Throw,
+    Try,
+    Typeof,
+    While,
+    // Reserved in strict mode and therefore never identifiers; the parser rejects them.
+    Do,
+    Enum,
+    Implements,
+    Interface,
+    Package,
+    Private,
+    Protected,
+    Public,
+    // The eight removed words of SPEC.md §2.
+    Var,
+    With,
+    Void,
+    Delete,
+    In,
+    Arguments,
+    Eval,
+    Debugger,
+}
+
+impl Keyword {
+    /// Every keyword with its spelling.
+    pub const ALL: &'static [(Keyword, &'static str)] = &[
+        (Keyword::Break, "break"),
+        (Keyword::Case, "case"),
+        (Keyword::Catch, "catch"),
+        (Keyword::Class, "class"),
+        (Keyword::Const, "const"),
+        (Keyword::Continue, "continue"),
+        (Keyword::Default, "default"),
+        (Keyword::Else, "else"),
+        (Keyword::Export, "export"),
+        (Keyword::Extends, "extends"),
+        (Keyword::Finally, "finally"),
+        (Keyword::For, "for"),
+        (Keyword::Function, "function"),
+        (Keyword::If, "if"),
+        (Keyword::Import, "import"),
+        (Keyword::Instanceof, "instanceof"),
+        (Keyword::Let, "let"),
+        (Keyword::New, "new"),
+        (Keyword::Return, "return"),
+        (Keyword::Super, "super"),
+        (Keyword::Switch, "switch"),
+        (Keyword::This, "this"),
+        (Keyword::Throw, "throw"),
+        (Keyword::Try, "try"),
+        (Keyword::Typeof, "typeof"),
+        (Keyword::While, "while"),
+        (Keyword::Do, "do"),
+        (Keyword::Enum, "enum"),
+        (Keyword::Implements, "implements"),
+        (Keyword::Interface, "interface"),
+        (Keyword::Package, "package"),
+        (Keyword::Private, "private"),
+        (Keyword::Protected, "protected"),
+        (Keyword::Public, "public"),
+        (Keyword::Var, "var"),
+        (Keyword::With, "with"),
+        (Keyword::Void, "void"),
+        (Keyword::Delete, "delete"),
+        (Keyword::In, "in"),
+        (Keyword::Arguments, "arguments"),
+        (Keyword::Eval, "eval"),
+        (Keyword::Debugger, "debugger"),
+    ];
+
+    /// The keyword spelled `word`, if any (case-sensitive).
+    #[must_use]
+    pub fn from_word(word: &str) -> Option<Keyword> {
+        Keyword::ALL
+            .iter()
+            .find(|(_, spelling)| *spelling == word)
+            .map(|(keyword, _)| *keyword)
+    }
+
+    /// The spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        Keyword::ALL
+            .iter()
+            .find(|(keyword, _)| *keyword == self)
+            .map_or("", |(_, spelling)| spelling)
+    }
+
+    /// For a removed word (SPEC.md §2), the §12 replacement to name in the E000 message.
+    #[must_use]
+    pub fn removed_replacement(self) -> Option<&'static str> {
+        match self {
+            Keyword::Var => Some("`const` or `let`"),
+            Keyword::With => Some("nothing: there is no dynamic scope"),
+            Keyword::Void => Some("`undefined`"),
+            Keyword::Delete => Some("assigning `undefined`, or `Map.delete`"),
+            Keyword::In => Some("a discriminant property or `Object.hasOwn`"),
+            Keyword::Arguments => Some("rest parameters"),
+            Keyword::Eval => Some("nothing: there is no code from strings"),
+            Keyword::Debugger => Some("nothing: it is a host-side signal"),
+            _ => None,
+        }
+    }
+}
+
+/// What a token is. US-011 adds words; US-012 to US-018 add literals, templates,
+/// regexes and punctuators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
+    /// `[A-Za-z_][A-Za-z0-9_]*` that is not a keyword; contextual words (`of`, `get`,
+    /// `set`, `static`, `async`, `await`, `yield`, `from`, `as`) are identifiers here.
+    Ident,
+    /// A reserved or removed word.
+    Keyword(Keyword),
+    /// `null`, a literal whose placement the parser checks (SPEC.md §3.1).
+    Null,
+    /// `true` or `false`.
+    Bool(bool),
     /// A character the lexer does not accept; reported as E000, lexing continues.
     Error,
     /// The end of the file; carries the trailing trivia.
