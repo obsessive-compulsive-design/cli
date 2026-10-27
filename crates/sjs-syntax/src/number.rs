@@ -12,6 +12,11 @@ pub(crate) struct Rejection {
     pub message: String,
 }
 
+/// Significant digits a `0x`/`0o`/`0b` literal may have (SPEC.md §2 sets no limit; this
+/// keeps conversion time bounded, and 4 096 hexadecimal digits already exceed any
+/// double). Decimal literals have no cap: they never need conversion.
+pub const MAX_RADIX_DIGITS: usize = 4096;
+
 /// `Number.MAX_SAFE_INTEGER`: doubles represent every integer up to here.
 const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
@@ -78,7 +83,20 @@ impl Scanner<'_> {
                 format!("expected a {name} digit after `{prefix}`"),
             ));
         }
-        Ok(self.finish_integer(to_decimal(&digits, radix)))
+        // Exact conversion is quadratic in the digit count, so a literal of any length
+        // must not reach it: past the cap a double is infinite anyway, and a bigint that
+        // long is rejected rather than converted.
+        let digits = digits.trim_start_matches('0');
+        if digits.len() > MAX_RADIX_DIGITS {
+            if self.at() == Some(b'n') {
+                return Err(reject(
+                    start,
+                    format!("a bigint literal in a radix may have at most {MAX_RADIX_DIGITS} significant digits"),
+                ));
+            }
+            return Ok(number(f64::INFINITY));
+        }
+        Ok(self.finish_integer(to_decimal(digits, radix)))
     }
 
     fn decimal_literal(&mut self, start: usize) -> Result<TokenKind, Rejection> {
@@ -213,6 +231,11 @@ fn to_decimal(digits: &str, radix: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::to_decimal;
+
+    #[test]
+    fn to_decimal_of_no_digits_is_zero() {
+        assert_eq!(to_decimal("", 16), "0", "the caller strips leading zeros");
+    }
 
     #[test]
     fn to_decimal_is_exact_at_every_width() {

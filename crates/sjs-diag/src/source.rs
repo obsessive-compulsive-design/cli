@@ -58,6 +58,11 @@ pub struct SourceFile {
     path: String,
     text: String,
     lines: Vec<LineRecord>,
+    /// Every character wider than one byte: its byte offset and the extra bytes (beyond
+    /// one per character) up to and including it. Columns count characters, so a
+    /// column is a byte distance minus the extra bytes in between; a binary search here
+    /// keeps every lookup logarithmic however long the line.
+    wide: Vec<(usize, usize)>,
 }
 
 const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
@@ -116,9 +121,15 @@ impl SourceFile {
 
     fn from_text(path: String, text: String) -> Self {
         let mut lines = Vec::new();
+        let mut wide = Vec::new();
+        let mut extra = 0;
         let mut start = 0;
         let mut chars = text.char_indices().peekable();
         while let Some((index, ch)) = chars.next() {
+            if !ch.is_ascii() {
+                extra += ch.len_utf8() - 1;
+                wide.push((index, extra));
+            }
             let terminator = match ch {
                 '\n' => LineTerminator::Lf,
                 '\r' => {
@@ -145,7 +156,18 @@ impl SourceFile {
             end: text.len(),
             terminator: None,
         });
-        Self { path, text, lines }
+        Self {
+            path,
+            text,
+            lines,
+            wide,
+        }
+    }
+
+    /// Extra bytes of the wide characters that start before `offset`.
+    fn extra_before(&self, offset: usize) -> usize {
+        let count = self.wide.partition_point(|&(start, _)| start < offset);
+        count.checked_sub(1).map_or(0, |last| self.wide[last].1)
     }
 
     /// The path as the reporter prints it.
@@ -198,8 +220,10 @@ impl SourceFile {
             return None;
         }
         let index = self.lines.partition_point(|line| line.start <= offset) - 1;
+        let line_start = self.lines[index].start;
         let line = saturating_u32(index + 1);
-        let column = saturating_u32(self.text[self.lines[index].start..offset].chars().count() + 1);
+        let extra = self.extra_before(offset) - self.extra_before(line_start);
+        let column = saturating_u32(offset - line_start - extra + 1);
         Some(Position::new(line, column))
     }
 
@@ -214,12 +238,22 @@ impl SourceFile {
             .get(index + 1)
             .map_or(self.text.len() + 1, |next| next.start);
         let steps = to_usize(position.column).checked_sub(1)?;
-        let offset = self.text[record.start..]
-            .char_indices()
-            .map(|(i, _)| record.start + i)
-            .chain(std::iter::once(self.text.len()))
-            .nth(steps)?;
-        (offset < next_start).then_some(offset)
+        // The `steps`-th character after the line start lies `steps` bytes further plus
+        // the extra bytes of the wide characters among the characters skipped: those
+        // whose index within the line is below `steps`.
+        let line_start = record.start;
+        let base = self.extra_before(line_start);
+        let first = self.wide.partition_point(|&(start, _)| start < line_start);
+        let skipped = self.wide[first..].partition_point(|&(start, through)| {
+            let width = self.text[start..].chars().next().map_or(1, char::len_utf8);
+            let before = through - (width - 1);
+            start - line_start - (before - base) < steps
+        });
+        let extra = skipped
+            .checked_sub(1)
+            .map_or(0, |last| self.wide[first + last].1 - base);
+        let offset = line_start + steps + extra;
+        (offset <= self.text.len() && offset < next_start).then_some(offset)
     }
 
     /// A span over `byte_start..byte_end` with both position forms, or `None` when either

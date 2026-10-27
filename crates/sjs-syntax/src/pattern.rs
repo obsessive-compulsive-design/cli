@@ -43,6 +43,7 @@ pub fn parse(body: &str) -> Result<Pattern, PatternError> {
         scopes: vec![BTreeSet::new()],
         capture_count: 0,
         references: Vec::new(),
+        depth: 0,
     };
     parser.disjunction()?;
     if parser.pos < body.len() {
@@ -120,6 +121,10 @@ fn is_id_continue(ch: char) -> bool {
     is_id_start(ch) || ch.is_numeric() || ch == '\u{200C}' || ch == '\u{200D}'
 }
 
+/// Groups, lookarounds and classes may nest this deep; the parser recurses once per
+/// level, so a bound keeps a hostile literal from overflowing the stack.
+pub const MAX_NESTING: u32 = 200;
+
 struct Parser<'a> {
     text: &'a str,
     pos: usize,
@@ -129,6 +134,8 @@ struct Parser<'a> {
     scopes: Vec<BTreeSet<String>>,
     capture_count: u32,
     references: Vec<(usize, Reference)>,
+    /// Open groups, lookarounds and classes.
+    depth: u32,
 }
 
 impl Parser<'_> {
@@ -209,14 +216,18 @@ impl Parser<'_> {
             }
             '(' if self.starts_with("(?=") || self.starts_with("(?!") => {
                 self.pos += 3;
+                self.enter(start)?;
                 self.disjunction()?;
                 self.expect_close(start)?;
+                self.depth -= 1;
                 false
             }
             '(' if self.starts_with("(?<=") || self.starts_with("(?<!") => {
                 self.pos += 4;
+                self.enter(start)?;
                 self.disjunction()?;
                 self.expect_close(start)?;
+                self.depth -= 1;
                 false
             }
             '(' => {
@@ -257,6 +268,19 @@ impl Parser<'_> {
         } else {
             Ok(())
         }
+    }
+
+    /// One level deeper, at the `(` or `[` at `start`; an error aborts the parse, so
+    /// the matching decrement only matters on the success path.
+    fn enter(&mut self, start: usize) -> Result<(), PatternError> {
+        self.depth += 1;
+        if self.depth > MAX_NESTING {
+            return Err(error(
+                start,
+                format!("groups and classes nest deeper than {MAX_NESTING} levels"),
+            ));
+        }
+        Ok(())
     }
 
     fn expect_close(&mut self, start: usize) -> Result<(), PatternError> {
@@ -338,6 +362,7 @@ impl Parser<'_> {
     /// `(…)`, `(?:…)`, `(?<name>…)` or `(?ims-ims:…)`, at `(`.
     fn group(&mut self, start: usize) -> Result<(), PatternError> {
         self.pos += 1;
+        self.enter(start)?;
         if self.eat('?') {
             if self.eat('<') {
                 let at = self.pos;
@@ -351,7 +376,9 @@ impl Parser<'_> {
             self.capture_count += 1;
         }
         self.disjunction()?;
-        self.expect_close(start)
+        self.expect_close(start)?;
+        self.depth -= 1;
+        Ok(())
     }
 
     /// `(?ims-ims:`: each of `i`, `m`, `s` at most once over both sets, at least one.
@@ -596,6 +623,7 @@ impl Parser<'_> {
     fn class(&mut self) -> Result<bool, PatternError> {
         let start = self.pos;
         self.pos += 1;
+        self.enter(start)?;
         let negated = self.eat('^');
         let strings = self.class_contents()?;
         if !self.eat(']') {
@@ -607,6 +635,7 @@ impl Parser<'_> {
                 "a negated class `[^…]` cannot contain strings",
             ));
         }
+        self.depth -= 1;
         Ok(strings)
     }
 
@@ -863,7 +892,7 @@ impl Parser<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, Pattern, PatternError};
+    use super::{parse, Pattern, PatternError, MAX_NESTING};
 
     fn message(body: &str) -> String {
         parse(body).map_or_else(|e| e.message, |p| format!("parsed: {p:?}"))
@@ -1333,6 +1362,65 @@ mod tests {
             let explanation = message(body);
             assert_eq!(got, *expected, "{body:?}: {explanation}");
         }
+    }
+
+    #[test]
+    fn nesting_is_bounded_so_a_hostile_literal_cannot_overflow_the_stack() {
+        let deep = |open: &str, close: &str, levels: usize| {
+            format!("{}a{}", open.repeat(levels), close.repeat(levels))
+        };
+        let limit = MAX_NESTING as usize;
+        for (open, close) in [
+            ("(", ")"),
+            ("(?:", ")"),
+            ("(?=", ")"),
+            ("(?<=", ")"),
+            ("[", "]"),
+        ] {
+            let at_limit = deep(open, close, limit);
+            assert!(parse(&at_limit).is_ok(), "{open}{close} at the limit");
+            let over = deep(open, close, limit + 1);
+            assert_eq!(
+                parse(&over),
+                Err(PatternError {
+                    offset: open.len() * limit,
+                    message: "groups and classes nest deeper than 200 levels".to_owned()
+                }),
+                "{open}{close} one past the limit"
+            );
+        }
+        let mixed = |groups: usize, classes: usize| {
+            format!(
+                "{}{}a{}{}",
+                "(".repeat(groups),
+                "[".repeat(classes),
+                "]".repeat(classes),
+                ")".repeat(groups)
+            )
+        };
+        assert!(
+            parse(&mixed(100, 100)).is_ok(),
+            "groups and classes share the budget"
+        );
+        assert!(parse(&mixed(101, 100)).is_err());
+        assert!(parse(&mixed(100, 101)).is_err());
+        let sequence = "(a)".repeat(10_000);
+        assert_eq!(
+            parse(&sequence).map(|p| p.capture_count),
+            Ok(10_000),
+            "siblings are not depth"
+        );
+        for unit in [
+            "(?:a)", "(?=a)", "(?!a)", "(?<=a)", "(?<!a)", "[a]", "[[a]]", "(?=[a])",
+        ] {
+            let siblings = unit.repeat(1_000);
+            assert!(
+                parse(&siblings).is_ok(),
+                "{unit}: closing restores the depth"
+            );
+        }
+        let huge = format!("{}a", "(".repeat(100_000));
+        assert!(parse(&huge).is_err(), "no stack overflow");
     }
 
     #[test]

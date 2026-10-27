@@ -3251,3 +3251,82 @@ mod punct_tests {
         assert_eq!(stream.print(&f), text);
     }
 }
+
+#[cfg(test)]
+mod limit_tests {
+    use super::lex;
+    use crate::number::MAX_RADIX_DIGITS;
+    use crate::token::{Number, TokenKind};
+    use sjs_diag::{Code, SourceFile};
+
+    fn file(text: &str) -> SourceFile {
+        SourceFile::new("a.js", text.as_bytes().to_vec()).expect("valid UTF-8")
+    }
+
+    fn bigint_digits(kind: &TokenKind) -> Result<String, String> {
+        match kind {
+            TokenKind::BigInt(digits) => Ok(digits.to_string()),
+            other => Err(format!("{other:?}")),
+        }
+    }
+
+    #[test]
+    fn radix_literals_past_the_digit_cap_are_infinite_or_rejected_without_conversion() {
+        let digits = "f".repeat(MAX_RADIX_DIGITS);
+        let (stream, found) = lex(&file(&format!("0x{digits}")));
+        assert!(found.is_empty());
+        assert_eq!(
+            stream.tokens[0].kind,
+            TokenKind::Number(Number {
+                value: f64::INFINITY,
+                exceeds_safe_integer: true
+            }),
+            "at the cap the exact conversion still runs; the value is beyond any double"
+        );
+        let over = "f".repeat(MAX_RADIX_DIGITS + 1);
+        let (stream, found) = lex(&file(&format!("0x{over}")));
+        assert!(found.is_empty());
+        assert_eq!(
+            stream.tokens[0].kind,
+            TokenKind::Number(Number {
+                value: f64::INFINITY,
+                exceeds_safe_integer: true
+            })
+        );
+        let at_cap = format!("0b1{}n", "0".repeat(MAX_RADIX_DIGITS - 1));
+        let (stream, found) = lex(&file(&at_cap));
+        assert!(found.is_empty(), "exactly the cap converts");
+        let digits = bigint_digits(&stream.tokens[0].kind).expect("a bigint");
+        assert_eq!(digits.len(), 1233, "2^4095 has 1233 decimal digits");
+        assert!(digits.starts_with("5221"));
+        assert_eq!(bigint_digits(&TokenKind::Eof), Err("Eof".to_owned()));
+        let zeros = "0".repeat(10_000);
+        let (stream, found) = lex(&file(&format!("0x{zeros}1n")));
+        assert!(found.is_empty(), "leading zeros do not count");
+        assert_eq!(stream.tokens[0].kind, TokenKind::BigInt("1".into()));
+        let ones = "1".repeat(MAX_RADIX_DIGITS + 1);
+        let (stream, found) = lex(&file(&format!("0b{ones}n")));
+        assert_eq!(stream.tokens[0].kind, TokenKind::Error);
+        let found: Vec<_> = found.iter().collect();
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            (
+                found[0].code,
+                found[0].span.byte_start,
+                found[0].message.as_str()
+            ),
+            (
+                Code::E000,
+                0,
+                "a bigint literal in a radix may have at most 4096 significant digits"
+            )
+        );
+        let text = format!("0x{over}n");
+        let (stream, _) = lex(&file(&text));
+        assert_eq!(
+            stream.tokens[0].span.byte_end,
+            text.len(),
+            "one error token"
+        );
+    }
+}

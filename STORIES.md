@@ -880,7 +880,33 @@ conformance fixtures for `S001` and `E002` (moved here from US-013 and US-015, w
 lexer cannot yet be run through the pipeline).
 
 #### US-019 Lexer fuzzing and error recovery
-§0.2 · After: US-011 … US-018 · Size: S · M0
+§0.2 · After: US-011 … US-018 · Size: S · M0 · **Status: complete** (2026-10-27)
+
+> Delivered: `crates/sjs-syntax/tests/fuzz_lex.rs` with `fuzz_lex` on `sjs_testkit::fuzz`
+> (a dictionary of every construct the lexer treats specially; the target checks that
+> every valid file lexes losslessly with contiguous spans on character boundaries, ends
+> in one `Eof`, and that the incremental `Lexer` agrees with `lex` under its own guess
+> and never panics under the opposite regex hint), regressions replayed from
+> `tests/fuzz-regressions/` (none yet: 600 s locally found nothing), the
+> ten-thousand-deep template substitution edge (closed and unclosed), and a linear-time
+> test over 10 MB of slashes, unterminated strings, unterminated regexes and open
+> substitutions (ten times the bytes may take at most twenty times as long; the full
+> size runs when `SJS_FUZZ_SECONDS` is set, as in the CI fuzz job and `gates.sh`, and a
+> tenth of it otherwise). Fuzzing and the time bound found three real problems, all
+> fixed here: `SourceFile::position` counted characters from the line start on every
+> lookup, so a single-line file lexed in quadratic time (`sjs-diag` now keeps an index
+> of wide characters and both `position` and `offset` are logarithmic, checked against
+> the existing naive-scan tests); the regex pattern parser recursed once per group or
+> class and a hostile literal could overflow the stack (`pattern::MAX_NESTING` = 200
+> levels, E000 beyond it, siblings unlimited); and a `0x`/`0o`/`0b` literal of any
+> length went through a quadratic exact conversion (`number::MAX_RADIX_DIGITS` = 4 096
+> significant digits: beyond it a double is infinite without converting and a bigint is
+> E000). **Decisions:** the `.bin` regressions directory holds only a README until a
+> crash is found, since the loop reads `*.bin` and tolerates an empty directory; the
+> time bound is a ratio plus a fixed ceiling rather than an absolute number, so it holds
+> on slow CI machines yet still catches quadratic behaviour. Verified: 100% lines and
+> regions, 79 mutants (72 caught, 3 unviable, 4 timeouts, 0 missed), `fuzz_lex` 600 s
+> clean.
 
 **Done when**
 - `fuzz_lex` with `SJS_FUZZ_SECONDS=600` locally finds nothing; CI runs it for 60 s per PR.
