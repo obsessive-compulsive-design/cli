@@ -179,9 +179,29 @@ impl Keyword {
     }
 }
 
-/// What a token is. US-011 adds words; US-012 to US-018 add literals, templates,
-/// regexes and punctuators.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The value of a `number` literal (SPEC.md §2).
+#[derive(Debug, Clone, Copy)]
+pub struct Number {
+    /// The double nearest the literal's mathematical value; infinite when it overflows.
+    pub value: f64,
+    /// True for an integer literal beyond ±`Number.MAX_SAFE_INTEGER` (2⁵³ − 1), where
+    /// doubles no longer represent every integer: the type system must not treat the
+    /// value as exact.
+    pub exceeds_safe_integer: bool,
+}
+
+impl PartialEq for Number {
+    fn eq(&self, other: &Self) -> bool {
+        self.value.to_bits() == other.value.to_bits()
+            && self.exceeds_safe_integer == other.exceeds_safe_integer
+    }
+}
+
+impl Eq for Number {}
+
+/// What a token is. US-011 adds words and US-012 numbers; US-013 to US-018 add strings,
+/// templates, regexes and punctuators.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     /// `[A-Za-z_][A-Za-z0-9_]*` that is not a keyword; contextual words (`of`, `get`,
     /// `set`, `static`, `async`, `await`, `yield`, `from`, `as`) are identifiers here.
@@ -192,6 +212,10 @@ pub enum TokenKind {
     Null,
     /// `true` or `false`.
     Bool(bool),
+    /// A `number` literal: decimal, `0x`, `0o` or `0b`, with its value.
+    Number(Number),
+    /// A `bigint` literal (`n` suffix): its decimal digits, no sign, no leading zeros.
+    BigInt(Box<str>),
     /// A character the lexer does not accept; reported as E000, lexing continues.
     Error,
     /// The end of the file; carries the trailing trivia.

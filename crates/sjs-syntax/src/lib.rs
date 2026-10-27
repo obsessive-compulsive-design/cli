@@ -4,12 +4,14 @@
 //! in a trivia run (whitespace, line terminators, comments) or in a token, and printing
 //! the stream reproduces the file byte for byte. US-011 adds words (identifiers,
 //! keywords, the removed words, `null`, booleans, and the rejections of `$`, Unicode
-//! escapes, non-ASCII letters and `#!`). US-012 to US-018 add the remaining token kinds;
+//! escapes, non-ASCII letters and `#!`) and US-012 numeric literals with their values.
+//! US-013 to US-018 add the remaining token kinds;
 //! until then every other character is an `Error` token, so the lexer is not yet part of
 //! the pipeline.
 
 pub mod lexer;
+mod number;
 pub mod token;
 
 pub use lexer::lex;
-pub use token::{Keyword, Token, TokenKind, TokenStream, Trivia, TriviaKind};
+pub use token::{Keyword, Number, Token, TokenKind, TokenStream, Trivia, TriviaKind};

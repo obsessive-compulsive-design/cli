@@ -3,6 +3,7 @@
 
 use sjs_diag::{Code, Diagnostic, Diagnostics, LineTerminator, Position, SourceFile, Span};
 
+use crate::number;
 use crate::token::{Keyword, Token, TokenKind, TokenStream, Trivia, TriviaKind};
 
 /// Lexes a whole file. Never fails: every byte is covered by exactly one trivia run or
@@ -96,6 +97,8 @@ impl Lexer<'_> {
         let kind = match self.bump() {
             None => TokenKind::Eof,
             Some(ch) if ch == '_' || ch.is_ascii_alphabetic() => self.word(start),
+            Some(ch) if ch.is_ascii_digit() => self.number(start),
+            Some('.') if self.peek().is_some_and(|c| c.is_ascii_digit()) => self.number(start),
             Some('$') => self.error(start, "`$` is not permitted in identifiers"),
             Some('\\') if self.peek() == Some('u') => self.unicode_escape(start),
             Some('#') if self.peek() == Some('!') => self.hashbang(start),
@@ -108,7 +111,9 @@ impl Lexer<'_> {
             Some(ch) => self.error(start, &format!("unexpected character {ch:?}")),
         };
         let span = self.span(start, self.pos);
-        self.after_dot = kind != TokenKind::Eof && self.text[start..self.pos].ends_with('.');
+        // `1.` is a number, not a member access.
+        self.after_dot = !matches!(kind, TokenKind::Eof | TokenKind::Number(_))
+            && self.text[start..self.pos].ends_with('.');
         Token {
             kind,
             span,
@@ -151,6 +156,28 @@ impl Lexer<'_> {
                     TokenKind::Keyword(keyword)
                 }
             },
+        }
+    }
+
+    /// A numeric literal (`number.rs`). A rejected literal is one error token covering
+    /// the whole run, with the diagnostic at the exact offending character.
+    fn number(&mut self, start: usize) -> TokenKind {
+        let (end, result) = number::scan(self.text, start);
+        self.pos = end;
+        match result {
+            Ok(kind) => kind,
+            Err(rejection) => {
+                while self
+                    .peek()
+                    .is_some_and(|c| matches!(c, '_' | '$' | '\\') || c.is_alphanumeric())
+                {
+                    self.bump();
+                }
+                let at = rejection.at;
+                let after = at + self.text[at..].chars().next().map_or(0, char::len_utf8);
+                self.report(Code::E000, at, after, rejection.message);
+                TokenKind::Error
+            }
         }
     }
 
@@ -264,7 +291,12 @@ mod tests {
     }
 
     fn kinds(text: &str) -> Vec<TokenKind> {
-        lex(&file(text)).0.tokens.iter().map(|t| t.kind).collect()
+        lex(&file(text))
+            .0
+            .tokens
+            .iter()
+            .map(|t| t.kind.clone())
+            .collect()
     }
 
     fn trivia_kinds(text: &str) -> Vec<TriviaKind> {
@@ -529,7 +561,7 @@ mod tests {
             let (stream, _) = lex(&f);
             assert_eq!(stream.print(&f), *text, "round trip");
             assert_eq!(
-                stream.tokens.last().map(|t| t.kind),
+                stream.tokens.last().map(|t| t.kind.clone()),
                 Some(TokenKind::Eof),
                 "no eof"
             );
@@ -563,7 +595,12 @@ mod word_tests {
     }
 
     fn kinds(text: &str) -> Vec<TokenKind> {
-        lex(&file(text)).0.tokens.iter().map(|t| t.kind).collect()
+        lex(&file(text))
+            .0
+            .tokens
+            .iter()
+            .map(|t| t.kind.clone())
+            .collect()
     }
 
     fn messages(text: &str) -> Vec<String> {
@@ -784,7 +821,11 @@ mod word_tests {
     fn dollar_signs_are_rejected_at_their_position() {
         let (stream, diagnostics) = lex(&file("$a a$ a$b"));
         assert_eq!(
-            stream.tokens.iter().map(|t| t.kind).collect::<Vec<_>>(),
+            stream
+                .tokens
+                .iter()
+                .map(|t| t.kind.clone())
+                .collect::<Vec<_>>(),
             [
                 TokenKind::Error,
                 TokenKind::Ident,
@@ -816,7 +857,7 @@ mod word_tests {
         let spans: Vec<(TokenKind, usize, usize)> = stream
             .tokens
             .iter()
-            .map(|t| (t.kind, t.span.byte_start, t.span.byte_end))
+            .map(|t| (t.kind.clone(), t.span.byte_start, t.span.byte_end))
             .collect();
         assert_eq!(
             spans,
@@ -836,7 +877,10 @@ mod word_tests {
         assert_eq!(diagnostics.len(), 3);
         let (stream, _) = lex(&file("\\u{61"));
         assert_eq!(
-            (stream.tokens[0].kind, stream.tokens[0].span.byte_end),
+            (
+                stream.tokens[0].kind.clone(),
+                stream.tokens[0].span.byte_end
+            ),
             (TokenKind::Error, 5),
             "an unclosed brace runs to the end"
         );
@@ -851,7 +895,11 @@ mod word_tests {
     fn non_ascii_letters_are_rejected_and_split_the_word() {
         let (stream, diagnostics) = lex(&file("café π"));
         assert_eq!(
-            stream.tokens.iter().map(|t| t.kind).collect::<Vec<_>>(),
+            stream
+                .tokens
+                .iter()
+                .map(|t| t.kind.clone())
+                .collect::<Vec<_>>(),
             [
                 TokenKind::Ident,
                 TokenKind::Error,
@@ -872,8 +920,8 @@ mod word_tests {
         );
         assert_eq!(
             messages("1"),
-            ["unexpected character '1'"],
-            "a digit alone is still unexpected until US-012"
+            Vec::<String>::new(),
+            "a digit starts a number"
         );
     }
 
@@ -884,7 +932,7 @@ mod word_tests {
             stream
                 .tokens
                 .iter()
-                .map(|t| (t.kind, t.span.byte_start, t.span.byte_end))
+                .map(|t| (t.kind.clone(), t.span.byte_start, t.span.byte_end))
                 .collect::<Vec<_>>(),
             [
                 (TokenKind::Error, 0, 19),
@@ -905,5 +953,402 @@ mod word_tests {
             "a lone hash is not a hashbang"
         );
         assert_eq!(messages("#!"), ["`#!` is removed; a hashbang line belongs to a host-side launcher outside the subset"]);
+    }
+}
+
+#[cfg(test)]
+mod number_tests {
+    use super::lex;
+    use crate::token::{Number, TokenKind};
+    use sjs_diag::{Code, SourceFile};
+    use sjs_testkit::prop::{check_with, Config, U64};
+
+    fn file(text: &str) -> SourceFile {
+        SourceFile::new("a.js", text.as_bytes().to_vec()).expect("valid UTF-8")
+    }
+
+    fn kinds(text: &str) -> Vec<TokenKind> {
+        lex(&file(text))
+            .0
+            .tokens
+            .iter()
+            .map(|t| t.kind.clone())
+            .collect()
+    }
+
+    /// The one token of `text`, which must lex cleanly to a number.
+    fn number(text: &str) -> Number {
+        let (stream, diagnostics) = lex(&file(text));
+        assert!(diagnostics.is_empty(), "{text}: {diagnostics:?}");
+        assert_eq!(stream.tokens.len(), 2, "{text} is one token");
+        as_number(&stream.tokens[0].kind).expect("a number")
+    }
+
+    fn as_number(kind: &TokenKind) -> Result<Number, String> {
+        match kind {
+            TokenKind::Number(number) => Ok(*number),
+            other => Err(format!("{other:?} is not a number")),
+        }
+    }
+
+    fn as_bigint(kind: &TokenKind) -> Result<String, String> {
+        match kind {
+            TokenKind::BigInt(digits) => Ok(digits.to_string()),
+            other => Err(format!("{other:?} is not a bigint")),
+        }
+    }
+
+    #[test]
+    fn the_helpers_name_a_wrong_kind() {
+        assert_eq!(
+            as_number(&TokenKind::Eof),
+            Err("Eof is not a number".to_owned())
+        );
+        assert_eq!(
+            as_bigint(&TokenKind::Null),
+            Err("Null is not a bigint".to_owned())
+        );
+    }
+
+    fn value(text: &str) -> f64 {
+        number(text).value
+    }
+
+    fn bigint(text: &str) -> String {
+        let (stream, diagnostics) = lex(&file(text));
+        assert!(diagnostics.is_empty(), "{text}: {diagnostics:?}");
+        assert_eq!(stream.tokens.len(), 2, "{text} is one token");
+        as_bigint(&stream.tokens[0].kind).expect("a bigint")
+    }
+
+    /// The single E000 of `text` as (column, message), with the error token's extent.
+    fn rejection(text: &str) -> (u32, String, usize) {
+        let (stream, diagnostics) = lex(&file(text));
+        assert_eq!(stream.tokens[0].kind, TokenKind::Error, "{text}");
+        assert_eq!(diagnostics.len(), 1, "{text}: {diagnostics:?}");
+        let d = diagnostics.iter().next().expect("one diagnostic");
+        assert_eq!(d.code, Code::E000);
+        (
+            d.span.start.column,
+            d.message.clone(),
+            stream.tokens[0].span.byte_end,
+        )
+    }
+
+    #[test]
+    fn decimal_literals_have_their_double_value() {
+        let cases: [(&str, f64); 16] = [
+            ("0", 0.0),
+            ("1", 1.0),
+            ("42", 42.0),
+            ("1.5", 1.5),
+            (".5", 0.5),
+            ("1.", 1.0),
+            ("0.25", 0.25),
+            ("1e3", 1000.0),
+            ("1E-3", 0.001),
+            ("1.e3", 1000.0),
+            ("1.5e+2", 150.0),
+            ("0e1", 0.0),
+            ("1_000_000", 1_000_000.0),
+            ("1_0.0_1e1_0", 100_100_000_000.0),
+            ("0.1", 0.1),
+            ("123456789012345678901234567890", 1.234_567_890_123_456_8e29),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(value(text).to_bits(), expected.to_bits(), "{text}");
+        }
+        assert_eq!(
+            value("1e400"),
+            f64::INFINITY,
+            "overflow is infinity, not an error"
+        );
+        assert_eq!(value("1e-400"), 0.0, "underflow is zero");
+    }
+
+    #[test]
+    fn radix_literals_are_exact_then_rounded_once() {
+        let cases: [(&str, f64); 10] = [
+            ("0x1F", 31.0),
+            ("0XfF", 255.0),
+            ("0x0", 0.0),
+            ("0o17", 15.0),
+            ("0O7", 7.0),
+            ("0b101", 5.0),
+            ("0B1", 1.0),
+            ("0xFF_FF", 65535.0),
+            ("0b1_0", 2.0),
+            ("0x1_0000_0000_0000_0000", 18_446_744_073_709_551_616.0),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(value(text).to_bits(), expected.to_bits(), "{text}");
+        }
+        assert_eq!(
+            value("0x20000000000001"),
+            9_007_199_254_740_992.0,
+            "2^53 + 1 rounds to even"
+        );
+        assert_eq!(
+            value("0x20000000000003"),
+            9_007_199_254_740_996.0,
+            "2^53 + 3 rounds up"
+        );
+    }
+
+    #[test]
+    fn bigint_literals_carry_their_decimal_digits() {
+        let cases = [
+            ("0n", "0"),
+            ("1n", "1"),
+            ("1_000n", "1000"),
+            ("0x10n", "16"),
+            ("0o10n", "8"),
+            ("0b11n", "3"),
+            ("0x0n", "0"),
+            ("0b0_0n", "0"),
+            ("9007199254740993n", "9007199254740993"),
+            ("12345678901234567890123n", "12345678901234567890123"),
+            ("0xFFFF_FFFF_FFFF_FFFF_FFFFn", "1208925819614629174706175"),
+        ];
+        for (text, digits) in cases {
+            assert_eq!(bigint(text), digits, "{text}");
+        }
+    }
+
+    #[test]
+    fn integers_beyond_the_safe_range_are_flagged() {
+        for text in [
+            "0",
+            "1",
+            "1.5",
+            "1e15",
+            "9007199254740991",
+            "0x1FFFFFFFFFFFFF",
+            "1e-400",
+        ] {
+            assert!(!number(text).exceeds_safe_integer, "{text}");
+        }
+        for text in [
+            "9007199254740992",
+            "9007199254740993",
+            "0x20000000000000",
+            "1e16",
+            "1e400",
+        ] {
+            assert!(number(text).exceeds_safe_integer, "{text}");
+        }
+        assert_ne!(number("9007199254740991"), number("9007199254740992"));
+        assert_eq!(number("1e3"), number("1000"));
+        assert_ne!(number("0"), number("1"));
+    }
+
+    #[test]
+    fn leading_zeros_are_rejected_at_the_first_column() {
+        assert_eq!(
+            rejection("017"),
+            (
+                1,
+                "`017` is a legacy octal literal; write `0o17`".to_owned(),
+                3
+            )
+        );
+        assert_eq!(
+            rejection("0017"),
+            (
+                1,
+                "`0017` is a legacy octal literal; write `0o17`".to_owned(),
+                4
+            )
+        );
+        assert_eq!(
+            rejection("08"),
+            (1, "`08` has a leading zero; write `8`".to_owned(), 2)
+        );
+        assert_eq!(
+            rejection("09"),
+            (1, "`09` has a leading zero; write `9`".to_owned(), 2)
+        );
+        assert_eq!(
+            rejection("0189"),
+            (1, "`0189` has a leading zero; write `189`".to_owned(), 4)
+        );
+        assert_eq!(
+            rejection("00"),
+            (1, "`00` has a leading zero; write `0`".to_owned(), 2)
+        );
+        assert_eq!(
+            rejection("01n"),
+            (
+                1,
+                "`01` is a legacy octal literal; write `0o1`".to_owned(),
+                3
+            )
+        );
+        assert_eq!(
+            rejection("0_1"),
+            (
+                2,
+                "a numeric separator `_` must sit between two digits".to_owned(),
+                3
+            )
+        );
+    }
+
+    #[test]
+    fn malformed_literals_are_e000_at_the_exact_column() {
+        let separator = "a numeric separator `_` must sit between two digits";
+        let run_in = "a numeric literal must not run into an identifier or another digit";
+        let cases: [(&str, u32, &str); 20] = [
+            ("1__0", 3, separator),
+            ("1_", 2, separator),
+            ("0x_1", 3, separator),
+            ("1_n", 2, separator),
+            ("1_.5", 2, separator),
+            ("1._5", 3, separator),
+            ("1e_3", 3, separator),
+            ("1_e3", 2, separator),
+            (
+                "1.5n",
+                4,
+                "a bigint literal must be an integer: no fraction and no exponent",
+            ),
+            (
+                "1e3n",
+                4,
+                "a bigint literal must be an integer: no fraction and no exponent",
+            ),
+            (
+                ".5n",
+                3,
+                "a bigint literal must be an integer: no fraction and no exponent",
+            ),
+            ("0b2", 3, "expected a binary digit after `0b`"),
+            ("0o8", 3, "expected a octal digit after `0o`"),
+            ("0xG", 3, "expected a hexadecimal digit after `0x`"),
+            ("0X", 3, "expected a hexadecimal digit after `0X`"),
+            ("3in", 2, run_in),
+            ("0b12", 4, run_in),
+            ("1é", 2, run_in),
+            ("1$", 2, run_in),
+            ("1e", 3, "expected an exponent digit"),
+        ];
+        for (text, column, message) in cases {
+            let (at, found, _) = rejection(text);
+            assert_eq!((at, found.as_str()), (column, message), "{text}");
+        }
+        assert_eq!(rejection("1e+").0, 4);
+        assert_eq!(rejection("1\\u0061").0, 2);
+    }
+
+    #[test]
+    fn a_rejected_literal_is_one_error_token_and_lexing_continues() {
+        let (stream, diagnostics) = lex(&file("3in 4 1__0 x 1é"));
+        let tokens: Vec<(TokenKind, usize, usize)> = stream
+            .tokens
+            .iter()
+            .map(|t| (t.kind.clone(), t.span.byte_start, t.span.byte_end))
+            .collect();
+        assert_eq!(
+            tokens,
+            [
+                (TokenKind::Error, 0, 3),
+                (TokenKind::Number(number("4")), 4, 5),
+                (TokenKind::Error, 6, 10),
+                (TokenKind::Ident, 11, 12),
+                (TokenKind::Error, 13, 16),
+                (TokenKind::Eof, 16, 16),
+            ]
+        );
+        assert_eq!(diagnostics.len(), 3);
+        assert_eq!(stream.print(&file("3in 4 1__0 x 1é")), "3in 4 1__0 x 1é");
+        let (stream, _) = lex(&file("0x"));
+        assert_eq!(
+            (
+                stream.tokens[0].span.byte_start,
+                stream.tokens[0].span.byte_end
+            ),
+            (0, 2)
+        );
+    }
+
+    #[test]
+    fn a_number_ends_where_the_grammar_says() {
+        assert_eq!(
+            kinds("1.5.3"),
+            [
+                TokenKind::Number(number("1.5")),
+                TokenKind::Number(number(".3")),
+                TokenKind::Eof
+            ],
+            "`1.5.3` is `1.5` then `.3`"
+        );
+        assert_eq!(
+            kinds("1..5"),
+            [
+                TokenKind::Number(number("1.")),
+                TokenKind::Number(number(".5")),
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(
+            kinds("_1"),
+            [TokenKind::Ident, TokenKind::Eof],
+            "`_1` is an identifier"
+        );
+        assert_eq!(
+            kinds("..5")[0],
+            TokenKind::Error,
+            "a lone `.` is not a number"
+        );
+        assert_eq!(
+            rejection("1.in").0,
+            3,
+            "`1.in` runs a number into a word, as in ES2025"
+        );
+        let messages: Vec<String> = lex(&file("1. in"))
+            .1
+            .iter()
+            .map(|d| d.message.clone())
+            .collect();
+        assert_eq!(
+            messages,
+            ["`in` is removed; use a discriminant property or `Object.hasOwn`"],
+            "`1.` is a number, not a member access, so the removed word is reported"
+        );
+    }
+
+    #[test]
+    fn random_integers_round_trip_through_every_radix() {
+        let config = Config::from_vars(None, None);
+        let gen = U64 {
+            lo: 0,
+            hi: u64::MAX,
+        };
+        check_with(&config, &gen, &|n: &u64| {
+            let n = *n;
+            let decimal = format!("{n}");
+            let safe = n <= 9_007_199_254_740_991;
+            // The rounded double is what the lexer must reproduce.
+            #[allow(clippy::cast_precision_loss)]
+            let expected = n as f64;
+            for text in [
+                decimal.clone(),
+                format!("0x{n:x}"),
+                format!("0X{n:X}"),
+                format!("0o{n:o}"),
+                format!("0b{n:b}"),
+            ] {
+                let got = number(&text);
+                assert_eq!(got.value.to_bits(), expected.to_bits(), "{text}: value");
+                assert_ne!(got.exceeds_safe_integer, safe, "{text}: safe flag");
+                assert_eq!(
+                    bigint(&format!("{text}n")),
+                    decimal,
+                    "{text}n: bigint digits"
+                );
+            }
+            Ok(())
+        })
+        .expect("every integer lexes to its value");
     }
 }

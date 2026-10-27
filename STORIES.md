@@ -616,7 +616,25 @@ removed word after `.` (`a.delete`) lexes as a keyword token and the parser acce
 a property name, because `Map.prototype.delete` is kept (§12).
 
 #### US-012 Numeric literals
-§2 · After: US-010 · Size: S · M0
+§2 · After: US-010 · Size: S · M0 · **Status: complete** (2026-10-27)
+
+> Delivered in `sjs-syntax`: `number.rs`, a grammar-driven scanner for decimal (`1`,
+> `1.5`, `.5`, `1.`, `1e3`, `1E-3`, `1.e3`), `0x`/`0o`/`0b`, `_` separators and the `n`
+> suffix; `TokenKind::Number(Number { value: f64, exceeds_safe_integer })` and
+> `TokenKind::BigInt(Box<str>)` holding the decimal digits. Radix digits are converted
+> exactly (base-10⁹ limbs) and rounded once, so `0x20000000000001` rounds like the spec
+> says and bigints of any width are exact. `017` is E000 "legacy octal; write `0o17`",
+> `08`/`09` "has a leading zero"; every malformed form in the story (`1__0`, `1_`,
+> `0x_1`, `1_n`, `1.5n`, `1e3n`, `0b2`, `0o8`, `0xG`, `3in`, `1e`) is E000 at the exact
+> column, as one error token covering the run, and lexing continues. `1.5.3` is `1.5`
+> then `.3`. A property test checks every `u64` through all four radixes and as a bigint.
+> **Decisions:** `_1` matches the identifier grammar of US-011, so it is an identifier,
+> not an E000 (the story's edge list was wrong on that one); `exceeds_safe_integer` is
+> the "not safely representable" flag, true for any integer-valued literal beyond
+> ±(2⁵³ − 1) including overflow to infinity; `TokenKind` is no longer `Copy` because a
+> bigint carries its digits; `1.` is a number, so `1. in` reports the removed word
+> rather than treating it as a property name. Verified: 100% lines and regions, 88
+> mutants (68 caught, 11 unviable, 9 timeouts, 0 missed).
 
 **Done when**
 - Decimal (`1`, `1.5`, `.5`, `1.`, `1e3`, `1E-3`), `0x`, `0o`, `0b`, `_` separators and
