@@ -253,7 +253,7 @@ impl Punct {
 }
 
 /// A regex literal's parts (SPEC.md §2). The body is the text between the slashes as
-/// written; US-016 parses it.
+/// written, already checked against the `v`-mode grammar (US-016).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Regex {
     /// Between the slashes, as written.
@@ -261,6 +261,9 @@ pub struct Regex {
     /// After the closing slash, as written: each of `d g i m s v y` at most once. A
     /// well-formed set lacking `v` is reported as E002 but still lexes.
     pub flags: Box<str>,
+    /// The named groups in source order (US-016); a name recurs when two alternatives
+    /// declare it.
+    pub groups: Box<[Box<str>]>,
 }
 
 impl Regex {

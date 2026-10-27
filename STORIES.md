@@ -756,7 +756,35 @@ containing a line terminator is `E000`; `/a/v.test(s)` continues with `.test`; `
 `/` after a block is a regex and after an object literal is division (both tested).
 
 #### US-016 Regex pattern parser (v-mode)
-§2, §6.1 RegExp · After: US-015 · Size: L · M0
+§2, §6.1 RegExp · After: US-015 · Size: L · M0 · **Status: complete** (2026-10-27)
+
+> Delivered in `sjs-syntax`: `pattern::parse(body) -> Result<Pattern { groups,
+> capture_count }, PatternError { offset, message }>`, a recursive-descent validator for
+> the ES2025 grammar under `[+UnicodeMode, +UnicodeSetsMode, +NamedCaptureGroups]`:
+> disjunction, quantifiers (lazy, `{n}`, `{n,}`, `{n,m}` with order checked, no
+> quantified assertions, a bare `{` `}` `]` rejected), lookahead and lookbehind, groups,
+> named groups with `\u` escapes in names, modifier groups `(?ims-ims:…)`, every escape
+> (`\d \w \s \b \B \f \n \r \t \v \0 \cX \xHH \uHHHH \u{…}` with surrogate pairs,
+> identity escapes of syntax characters and `/`, `\k<name>`, `\N` checked against the
+> capture count with forward references), `\p{…}`/`\P{…}` against the ECMA-262 tables
+> of binary properties, properties of strings, `General_Category` and `Script` values
+> (`unicode_property.rs`, Unicode 16.0, exact and case-sensitive), and the `v`-mode class
+> syntax: nested classes, `--` and `&&` with bracketing enforced, ranges by code point,
+> `\q{…|…}`, reserved punctuators and double punctuators, and "may contain strings"
+> tracked so `[^…]` never holds a string. Named groups come back in source order;
+> duplicates are rejected unless in different alternatives (scope stack per
+> alternative, merged upward). The lexer parses every regex body: a malformed one is
+> `E000` at the offending column inside the literal and the token is an `Error`;
+> otherwise `Regex.groups` carries the names. Tests: 215 valid patterns and 203 invalid
+> ones with their offsets, every message, and the story's edges (`\k<x>` without a
+> group, `\2` before or without a group, a literal `{`, `[a-]`, `(?<a>x)|(?<a>y)`,
+> `[ab&&c]`, `\p{Foo}`). **Decisions:** no tree is built, since nothing matches and the
+> type system needs only the names; `ID_Start`/`ID_Continue` in group names are
+> approximated with the standard library's letter and number classes plus `$`, `_`, ZWNJ
+> and ZWJ; the US-015 edge `/[/]/v` still scans as one literal but is now `E000`
+> because `v`-mode requires `\/` inside a class; a flags problem and a body problem are
+> both reported. Verified: 100% lines and regions, 281 mutants (253 caught, 4 unviable,
+> 24 timeouts, 0 missed).
 
 As the type system I want every regex body parsed under `v`-mode syntax so named groups
 are known and a malformed pattern is a compile error rather than a runtime `SyntaxError`.

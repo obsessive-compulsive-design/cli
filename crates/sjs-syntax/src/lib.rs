@@ -9,16 +9,19 @@
 //! template literals as head, middle, tail and whole pieces with a brace-depth stack so
 //! substitutions nest. US-015 adds regex literals with their flags checked (E002 for a
 //! set lacking `v`) behind a regex-allowed hint the parser passes to [`Lexer::next_token`]
-//! (`lex` guesses it from the previous token). US-016 to US-018 add the remaining token
-//! kinds;
+//! (`lex` guesses it from the previous token). US-016 parses every regex body under
+//! `v`-mode syntax ([`pattern`]), so a malformed pattern is E000 and the named groups
+//! ride on the token. US-017 and US-018 add the remaining token kinds;
 //! until then every other character is an `Error` token, so the lexer is not yet part of
 //! the pipeline.
 
 pub mod lexer;
 mod number;
+pub mod pattern;
 mod regex;
 mod string;
 pub mod token;
+mod unicode_property;
 
 pub use lexer::{lex, regex_allowed_after, Lexer};
 pub use token::{

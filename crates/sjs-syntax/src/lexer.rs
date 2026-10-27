@@ -4,6 +4,7 @@
 use sjs_diag::{Code, Diagnostic, Diagnostics, LineTerminator, Position, SourceFile, Span};
 
 use crate::number;
+use crate::pattern;
 use crate::regex::{self, Flags, ScanKind};
 use crate::string::{self, TemplateEnd};
 use crate::token::{
@@ -196,6 +197,12 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// E000 covering the one character at `at` (empty at the end of the file).
+    fn report_at(&mut self, at: usize, message: String) {
+        let after = at + self.text[at..].chars().next().map_or(0, char::len_utf8);
+        self.report(Code::E000, at, after, message);
+    }
+
     fn error(&mut self, start: usize, message: &str) -> TokenKind {
         self.report(Code::E000, start, self.pos, message.to_owned());
         TokenKind::Error
@@ -355,21 +362,32 @@ impl<'a> Lexer<'a> {
                 flags,
                 flags_at,
             } => {
+                let mut malformed = false;
+                let groups = match pattern::parse(&body) {
+                    Ok(parsed) => parsed.groups,
+                    Err(error) => {
+                        malformed = true;
+                        self.report_at(start + 1 + error.offset, error.message);
+                        Vec::new()
+                    }
+                };
                 match regex::check_flags(&flags) {
                     Flags::Ok => {}
                     Flags::Syntax { offset, message } => {
-                        let at = flags_at + offset;
-                        let after = at + self.text[at..].chars().next().map_or(0, char::len_utf8);
-                        self.report(Code::E000, at, after, message);
-                        return TokenKind::Error;
+                        malformed = true;
+                        self.report_at(flags_at + offset, message);
                     }
                     Flags::MissingV(message) => {
                         self.report(Code::E002, start, scan.end, message);
                     }
                 }
+                if malformed {
+                    return TokenKind::Error;
+                }
                 TokenKind::Regex(Regex {
                     body: body.into_boxed_str(),
                     flags: flags.into_boxed_str(),
+                    groups: groups.into_iter().map(String::into_boxed_str).collect(),
                 })
             }
         }
@@ -762,7 +780,8 @@ mod tests {
             [
                 TokenKind::Regex(crate::token::Regex {
                     body: " ".into(),
-                    flags: "".into()
+                    flags: "".into(),
+                    groups: Box::default(),
                 }),
                 TokenKind::Eof
             ],
@@ -2243,6 +2262,7 @@ mod regex_tests {
         TokenKind::Regex(Regex {
             body: body.into(),
             flags: flags.into(),
+            groups: Box::default(),
         })
     }
 
@@ -2259,7 +2279,7 @@ mod regex_tests {
     fn a_regex_with_v_is_one_token_with_body_and_flags() {
         for (text, body, flags) in [
             ("/a/v", "a", "v"),
-            ("/[/]/v", "[/]", "v"),
+            ("/[\\/]/v", "[\\/]", "v"),
             ("/\\//v", "\\/", "v"),
             ("/=/v", "=", "v"),
             ("/a/dgimsyv", "a", "dgimsyv"),
@@ -2291,8 +2311,27 @@ mod regex_tests {
         let r = Regex {
             body: "a".into(),
             flags: "vgi".into(),
+            groups: Box::default(),
         };
         assert!(r.has_flag('g') && r.has_flag('v') && !r.has_flag('y'));
+        let (stream, found) = lex(&file("/[/]/v"));
+        assert_eq!(
+            (
+                stream.tokens[0].kind.clone(),
+                stream.tokens[0].span.byte_end
+            ),
+            (TokenKind::Error, 6),
+            "a bare `/` in a class does not end the literal, but v-mode syntax rejects it"
+        );
+        let found: Vec<&Diagnostic> = found.iter().collect();
+        assert_eq!(
+            (
+                found.len(),
+                found[0].span.start.column,
+                found[0].message.as_str()
+            ),
+            (1, 3, "`/` must be escaped as `\\/` inside a class")
+        );
     }
 
     #[test]
@@ -2561,6 +2600,72 @@ mod regex_tests {
     }
 
     #[test]
+    fn the_token_carries_the_named_groups_in_source_order() {
+        let (stream, found) = lex(&file("/(?<y>a)(?<z>b)(c)|(?<y>d)/v"));
+        assert!(found.is_empty(), "{found:?}");
+        assert_eq!(
+            stream.tokens[0].kind,
+            TokenKind::Regex(Regex {
+                body: "(?<y>a)(?<z>b)(c)|(?<y>d)".into(),
+                flags: "v".into(),
+                groups: ["y", "z", "y"].map(Into::into).into(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_malformed_pattern_is_e000_at_the_offending_column_inside_the_literal() {
+        for (text, column, message) in [
+            ("/\\k<x>/v", 2, "`\\k<x>` names no group in the pattern"),
+            (
+                "/(?<y>a)\\k<x>/v",
+                9,
+                "`\\k<x>` names no group in the pattern",
+            ),
+            ("/a{2,1}/v", 3, "quantifier `{2,1}` is out of order"),
+            (
+                "/[a-]/v",
+                4,
+                "`-` must be escaped as `\\-` unless it forms a range",
+            ),
+            ("/x(/v", 3, "unterminated group: expected `)`"),
+        ] {
+            let (stream, found) = lex(&file(text));
+            assert_eq!(
+                (
+                    stream.tokens[0].kind.clone(),
+                    stream.tokens[0].span.byte_end
+                ),
+                (TokenKind::Error, text.len()),
+                "{text}: the whole literal is one error token"
+            );
+            let found: Vec<&Diagnostic> = found.iter().collect();
+            assert_eq!(found.len(), 1, "{text}: {found:?}");
+            assert_eq!(
+                (
+                    found[0].code,
+                    found[0].span.start,
+                    found[0].message.as_str()
+                ),
+                (Code::E000, Position::new(1, column), message),
+                "{text}"
+            );
+        }
+        let found = diagnostics("/\\k<x>/");
+        assert_eq!(
+            found.iter().map(|d| d.code).collect::<Vec<_>>(),
+            [Code::E002, Code::E000],
+            "a bad pattern and missing flags are both reported (ordered by position)"
+        );
+        assert_eq!(
+            diagnostics("/\\k<x>/vx").len(),
+            2,
+            "a bad pattern and a bad flag are both reported"
+        );
+        assert_eq!(kinds("/\\k<x>/vx"), [TokenKind::Error, TokenKind::Eof]);
+    }
+
+    #[test]
     fn random_bodies_without_slashes_lex_back_to_themselves() {
         let gen = Text {
             alphabet: &['a', ' ', '[', ']', '*', '+', '(', ')', '=', 'é', '.', '\\'],
@@ -2593,9 +2698,16 @@ mod regex_tests {
                     TokenKind::Error,
                     "{text:?}: unclosed class"
                 );
-            } else {
+            } else if crate::pattern::parse(body).is_ok() {
                 assert_eq!(stream.tokens[0].kind, regex(body, "v"), "{text:?}");
                 assert!(found.is_empty(), "{text:?}");
+            } else {
+                assert_eq!(
+                    stream.tokens[0].kind,
+                    TokenKind::Error,
+                    "{text:?}: bad pattern"
+                );
+                assert_eq!(found.len(), 1, "{text:?}");
             }
             Ok(())
         })
