@@ -545,7 +545,23 @@ generated numeric literals stay within `int32` unless doubles are requested.
 ### Epic 1 · Lexer
 
 #### US-010 Token model and lossless token stream
-§2, §11.1 · After: US-004, US-009 · Size: M · M0
+§2, §11.1 · After: US-004, US-009 · Size: M · M0 · **Status: complete** (2026-10-26)
+
+> Delivered in `sjs-syntax`: `token` (`TriviaKind` for whitespace, each line terminator,
+> line and block comments with a `has_line_terminator` flag; `Trivia`; `TokenKind` with
+> `Error` and `Eof` for now; `Token { kind, span, leading, has_newline_before }`;
+> `TokenStream::print` reassembling the file) and `lexer::lex(&SourceFile) ->
+> (TokenStream, Diagnostics)`, which never fails: ES2025 `WhiteSpace` (TAB, VT, FF, ZWNBSP
+> and every `Zs` character), `\n`/`\r\n`/`\r`/U+2028/U+2029, `//` comments up to the
+> terminator and `/* */` comments (an unterminated one runs to the end and is `E000` at
+> its start), and every other character is an `Error` token carrying `E000`.
+> `has_newline_before` is set by a terminator or a block comment containing one. Tests:
+> empty and trivia-only input, each terminator, the ASI rule table, comment ends, the
+> unterminated case, error tokens with exact spans and columns, 2 000 corpus programs and
+> 400 random strings round-tripping byte for byte with every byte covered exactly once.
+> **Decisions:** the lexer is not wired into the pipeline until it recognises every token
+> kind (US-018), since today it would report every character; trivia is owned by the
+> following token (the file's trailing run by `Eof`).
 
 As the formatter I want tokens carrying exact source text, leading trivia and a "preceded
 by line terminator" flag, so that `print(lex(x)) == x` for any input.
