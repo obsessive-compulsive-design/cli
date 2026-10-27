@@ -15,10 +15,17 @@ pub enum TriviaKind {
     LineTerminator(LineTerminator),
     /// `// …` up to, not including, the line terminator.
     LineComment,
-    /// `/* … */`, which may span lines.
+    /// `/* … */`, which may span lines; `/**/` is one of these.
     BlockComment {
         /// True when the comment contains a line terminator, which makes it count as a
         /// newline for ASI purposes (ES2025 §12.4).
+        has_line_terminator: bool,
+    },
+    /// `/** … */`: a block comment starting with `/**` and longer than `/**/`, so
+    /// `/***/` is a doc comment whose body is `*` (SPEC.md §2, §13.7). It documents
+    /// the declaration on the next line; see [`Token::doc_comment`].
+    DocComment {
+        /// As for `BlockComment`.
         has_line_terminator: bool,
     },
 }
@@ -40,6 +47,9 @@ impl Trivia {
             self.kind,
             TriviaKind::LineTerminator(_)
                 | TriviaKind::BlockComment {
+                    has_line_terminator: true
+                }
+                | TriviaKind::DocComment {
                     has_line_terminator: true
                 }
         )
@@ -320,6 +330,27 @@ pub struct Token {
     /// True when a line terminator, or a block comment containing one, lies between the
     /// previous token and this one (SPEC.md §2 E001 depends on it).
     pub has_newline_before: bool,
+}
+
+impl Token {
+    /// The doc comment attached to this token (SPEC.md §2, §8.4): a `/** … */` whose
+    /// closing line is directly above the token's line, with nothing but whitespace
+    /// between them. A blank line, another comment, or sharing the token's line breaks
+    /// the attachment and leaves the comment floating.
+    #[must_use]
+    pub fn doc_comment(&self) -> Option<&Trivia> {
+        let mut before = self
+            .leading
+            .iter()
+            .rev()
+            .skip_while(|t| t.kind == TriviaKind::Whitespace);
+        if !matches!(before.next()?.kind, TriviaKind::LineTerminator(_)) {
+            return None;
+        }
+        before
+            .find(|t| t.kind != TriviaKind::Whitespace)
+            .filter(|t| matches!(t.kind, TriviaKind::DocComment { .. }))
+    }
 }
 
 /// Every token of a file, `Eof` last.

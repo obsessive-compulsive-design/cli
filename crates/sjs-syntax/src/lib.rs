@@ -11,7 +11,9 @@
 //! set lacking `v`) behind a regex-allowed hint the parser passes to [`Lexer::next_token`]
 //! (`lex` guesses it from the previous token). US-016 parses every regex body under
 //! `v`-mode syntax ([`pattern`]), so a malformed pattern is E000 and the named groups
-//! ride on the token. US-017 and US-018 add the remaining token kinds;
+//! ride on the token. US-017 distinguishes `/** … */` doc comments from other block
+//! comments and attaches them to the token on the next line (`Token::doc_comment`).
+//! US-018 adds the remaining token kinds;
 //! until then every other character is an `Error` token, so the lexer is not yet part of
 //! the pipeline.
 

@@ -499,8 +499,10 @@ impl<'a> Lexer<'a> {
         out
     }
 
-    /// `/* … */`; an unterminated comment runs to the end of the file and is E000 at its
-    /// start (SPEC.md §2 comments are `//` and `/* */` only).
+    /// `/* … */` or `/** … */`; an unterminated comment runs to the end of the file and
+    /// is E000 at its start (SPEC.md §2 comments are `//` and `/* */` only). `<!--` and
+    /// `-->` are never comments: a module has no HTML-like comments, so they lex as
+    /// operators for the parser to reject.
     fn block_comment(&mut self, start: usize) -> TriviaKind {
         self.bump();
         self.bump();
@@ -523,8 +525,17 @@ impl<'a> Lexer<'a> {
                 Some(ch) => has_line_terminator |= line_terminator(ch).is_some(),
             }
         }
-        TriviaKind::BlockComment {
-            has_line_terminator,
+        // Starts with `/**` and is longer than `/**/`: `/**/` is an empty block comment,
+        // `/***/` a doc comment whose body is `*`.
+        let text = &self.text[start..self.pos];
+        if text.starts_with("/**") && text.len() > 4 {
+            TriviaKind::DocComment {
+                has_line_terminator,
+            }
+        } else {
+            TriviaKind::BlockComment {
+                has_line_terminator,
+            }
         }
     }
 }
@@ -2712,5 +2723,238 @@ mod regex_tests {
             Ok(())
         })
         .expect("every body round-trips");
+    }
+}
+
+#[cfg(test)]
+mod comment_tests {
+    use super::lex;
+    use crate::token::{Token, TokenKind, TriviaKind};
+    use sjs_diag::{Code, Position, SourceFile};
+
+    fn file(text: &str) -> SourceFile {
+        SourceFile::new("a.js", text.as_bytes().to_vec()).expect("valid UTF-8")
+    }
+
+    fn first_trivia(text: &str) -> Vec<TriviaKind> {
+        lex(&file(text)).0.tokens[0]
+            .leading
+            .iter()
+            .map(|t| t.kind)
+            .collect()
+    }
+
+    const BLOCK: TriviaKind = TriviaKind::BlockComment {
+        has_line_terminator: false,
+    };
+    const DOC: TriviaKind = TriviaKind::DocComment {
+        has_line_terminator: false,
+    };
+
+    #[test]
+    fn the_three_comment_kinds_are_distinct_trivia() {
+        assert_eq!(
+            first_trivia("// a\nx"),
+            [
+                TriviaKind::LineComment,
+                TriviaKind::LineTerminator(sjs_diag::LineTerminator::Lf)
+            ]
+        );
+        assert_eq!(first_trivia("/* a */x"), [BLOCK]);
+        assert_eq!(first_trivia("/** a */x"), [DOC]);
+        assert_eq!(
+            first_trivia("/**/x"),
+            [BLOCK],
+            "`/**/` is an empty block comment"
+        );
+        assert_eq!(
+            first_trivia("/***/x"),
+            [DOC],
+            "`/***/` is a doc comment whose body is `*`"
+        );
+        assert_eq!(first_trivia("/****/x"), [DOC]);
+        assert_eq!(first_trivia("/**a*/x"), [DOC]);
+        assert_eq!(first_trivia("/* */x"), [BLOCK]);
+        assert_eq!(
+            first_trivia("/*/x"),
+            [BLOCK],
+            "`/*/` opens a comment that never closes, so it all belongs to Eof"
+        );
+        assert_eq!(
+            first_trivia("/**\n*/x"),
+            [TriviaKind::DocComment {
+                has_line_terminator: true
+            }]
+        );
+        let (stream, _) = lex(&file("/**\n * a\n */\nconst"));
+        assert!(stream.tokens[0].has_newline_before);
+        assert!(
+            stream.tokens[0].leading[0].is_newline(),
+            "a multi-line doc comment is a newline for ASI"
+        );
+        let text = "/** d */ /* b */ // l\nx /**/";
+        let f = file(text);
+        assert_eq!(lex(&f).0.print(&f), text);
+    }
+
+    #[test]
+    fn an_unterminated_doc_comment_is_e000_at_its_start() {
+        let multi_line = TriviaKind::DocComment {
+            has_line_terminator: true,
+        };
+        for (text, kind) in [
+            ("/** never", DOC),
+            ("/**", BLOCK),
+            ("/***", BLOCK),
+            ("/****", DOC),
+            ("x /** a\n b", multi_line),
+        ] {
+            let (stream, found) = lex(&file(text));
+            let found: Vec<_> = found.iter().collect();
+            assert_eq!(found.len(), 1, "{text:?}");
+            assert_eq!(found[0].code, Code::E000, "{text:?}");
+            assert_eq!(found[0].message, "unterminated block comment", "{text:?}");
+            let at = text.find("/**").expect("has an opener");
+            assert_eq!(found[0].span.byte_start, at, "{text:?}");
+            let last = stream.eof().leading.last().expect("trailing trivia").kind;
+            assert_eq!(last, kind, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn html_like_comments_are_tokens_not_trivia() {
+        for text in ["<!-- a\nb", "a <!-- b", "-->\nb", "a\n--> b", "x\n  --> y"] {
+            let f = file(text);
+            let (stream, _) = lex(&f);
+            assert!(
+                stream
+                    .tokens
+                    .iter()
+                    .all(|t| t.leading.iter().all(|tr| matches!(
+                        tr.kind,
+                        TriviaKind::Whitespace | TriviaKind::LineTerminator(_)
+                    ))),
+                "{text:?}: no comment trivia"
+            );
+            let last = stream.tokens.len() - 2;
+            assert_eq!(
+                stream.tokens[last].kind,
+                TokenKind::Ident,
+                "{text:?}: the text after is still code"
+            );
+            assert_eq!(stream.print(&f), text);
+        }
+    }
+
+    fn doc_of(text: &str, index: usize) -> Option<String> {
+        let f = file(text);
+        let (stream, _) = lex(&f);
+        let token: &Token = &stream.tokens[index];
+        token
+            .doc_comment()
+            .map(|t| f.slice(&t.span).unwrap_or("").to_owned())
+    }
+
+    #[test]
+    fn a_doc_comment_attaches_to_the_token_on_the_next_line() {
+        assert_eq!(doc_of("/** a */\nconst", 0), Some("/** a */".to_owned()));
+        assert_eq!(
+            doc_of("/** a */   \n   const", 0),
+            Some("/** a */".to_owned()),
+            "trailing and leading whitespace"
+        );
+        assert_eq!(
+            doc_of("/**\n * a\n */\r\nexport", 0),
+            Some("/**\n * a\n */".to_owned()),
+            "multi-line, CRLF"
+        );
+        assert_eq!(
+            doc_of("x\n\n/** a */\nconst", 1),
+            Some("/** a */".to_owned()),
+            "after other code"
+        );
+        assert_eq!(
+            doc_of("/* b */\n/** a */\nconst", 0),
+            Some("/** a */".to_owned()),
+            "an earlier comment does not matter"
+        );
+        assert_eq!(
+            doc_of("/** a */\n", 0),
+            Some("/** a */".to_owned()),
+            "at the end of the file it attaches to Eof; the parser has no declaration for it"
+        );
+    }
+
+    #[test]
+    fn a_blank_line_another_comment_or_the_same_line_breaks_the_attachment() {
+        assert_eq!(doc_of("/** a */\n\nconst", 0), None, "a blank line");
+        assert_eq!(
+            doc_of("/** a */\n  \nconst", 0),
+            None,
+            "a blank line with whitespace"
+        );
+        assert_eq!(
+            doc_of("/** a */\n// c\nconst", 0),
+            None,
+            "a line comment between"
+        );
+        assert_eq!(
+            doc_of("/** a */\n/* c */\nconst", 0),
+            None,
+            "a block comment between"
+        );
+        assert_eq!(
+            doc_of("/** a */\n/** c */\nconst", 0),
+            Some("/** c */".to_owned()),
+            "only the nearest doc comment"
+        );
+        assert_eq!(doc_of("/** a */ const", 0), None, "the same line");
+        assert_eq!(
+            doc_of("/** a */ /* c */\nconst", 0),
+            None,
+            "a comment after it on its line"
+        );
+        assert_eq!(doc_of("/* a */\nconst", 0), None, "a plain block comment");
+        assert_eq!(
+            doc_of("/**/\nconst", 0),
+            None,
+            "`/**/` is not a doc comment"
+        );
+        assert_eq!(doc_of("// a\nconst", 0), None, "a line comment");
+        assert_eq!(doc_of("const", 0), None, "nothing before");
+        assert_eq!(doc_of("\nconst", 0), None, "only a terminator before");
+        assert_eq!(
+            doc_of("x /** a */\nconst", 1),
+            Some("/** a */".to_owned()),
+            "a doc comment ending the previous line attaches even after code"
+        );
+    }
+
+    #[test]
+    fn comments_inside_strings_and_at_the_end_of_the_file() {
+        let (stream, found) = lex(&file("\"/** */\" '/* a */' `// x`"));
+        assert_eq!(stream.tokens[0].kind, TokenKind::String("/** */".into()));
+        assert!(stream
+            .tokens
+            .iter()
+            .all(|t| t.leading.iter().all(|tr| tr.kind == TriviaKind::Whitespace)));
+        assert_eq!(found.len(), 1, "only the S001");
+        let (stream, found) = lex(&file("const a = 1 // tail"));
+        assert!(found
+            .iter()
+            .all(|d| d.message.starts_with("unexpected character")));
+        assert_eq!(
+            stream
+                .eof()
+                .leading
+                .iter()
+                .map(|t| t.kind)
+                .collect::<Vec<_>>(),
+            [TriviaKind::Whitespace, TriviaKind::LineComment],
+            "a comment at the end of the file without a newline belongs to Eof"
+        );
+        let (stream, _) = lex(&file("x /** d */"));
+        assert_eq!(stream.eof().leading.last().map(|t| t.kind), Some(DOC));
+        assert_eq!(stream.eof().span.start, Position::new(1, 11));
     }
 }

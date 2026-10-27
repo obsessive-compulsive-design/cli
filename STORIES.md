@@ -805,7 +805,27 @@ group `x`; back-reference to a later group; a literal `{` in `v`-mode; `[a-]`;
 `(?<a>x)|(?<a>y)` permitted; unbracketed nested set operators; unknown `\p{}` property.
 
 #### US-017 Comments and doc comments
-§2, §9.5, §8.4 (E162 attachment) · After: US-010 · Size: S · M0
+§2, §9.5, §8.4 (E162 attachment) · After: US-010 · Size: S · M0 · **Status: complete** (2026-10-27)
+
+> Delivered in `sjs-syntax`: `TriviaKind::DocComment { has_line_terminator }` beside
+> `LineComment` and `BlockComment`, decided by "starts with `/**` and is longer than
+> `/**/`", so `/**/` is an empty block comment and `/***/` a doc comment whose body is
+> `*`; an unterminated block or doc comment is still `E000` at its start; `<!--` and
+> `-->` are never comments (a module has no HTML-like comments) and lex as tokens for
+> the parser to reject. `Token::doc_comment()` implements attachment (§2, §8.4): the
+> nearest `/** … */` whose closing line is directly above the token's line with only
+> whitespace between; a blank line, another comment (line or block) on the way, or
+> sharing the token's line leaves the comment floating. Tests: the three kinds, the
+> `/**/` and `/***/` edges, multi-line doc comments as ASI newlines, unterminated
+> variants, HTML-like comment syntax, every attachment and non-attachment case, `/** */`
+> inside strings and templates, and comments at the end of the file without a trailing
+> newline (they belong to `Eof`). **Decisions:** attachment is a token-level query so
+> the US-020 parser can ask for it on any declaration's first token without the lexer
+> knowing what a declaration is; a doc comment at the end of a file attaches to `Eof`
+> and the parser decides it documents nothing (the module comment of §13.7 is a later
+> story's concern); a doc comment on the same line as the declaration does not attach,
+> because §2 says "directly above". Verified: 100% lines and regions, 12 mutants (10
+> caught, 2 unviable, 0 missed).
 
 **Done when**
 - `//`, `/* */`, `/** */` are distinct trivia kinds; `/**/` is an empty block comment;
