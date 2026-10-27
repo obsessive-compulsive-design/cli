@@ -1,6 +1,7 @@
 //! String literals (SPEC.md §2, §8.5): `"…"` with the ES2025 escapes, cooked to their
 //! value; `'…'` is the same literal reported as S001 with a double-quoted replacement.
 //! Legacy octal escapes, `\8`, `\9`, malformed `\x`/`\u` and lone surrogates are E000.
+//! Template parts (US-014) share the escapes and add `${` and `` ` `` as terminators.
 
 /// An E000 inside a literal: the escape at `start..end`.
 pub(crate) struct Problem {
@@ -34,6 +35,50 @@ pub(crate) fn scan(text: &str, start: usize) -> Scan {
         end: scanner.pos,
         terminated,
         cooked: scanner.cooked,
+        problems: scanner.problems,
+    }
+}
+
+/// How a template part ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TemplateEnd {
+    /// The closing `` ` ``.
+    Backtick,
+    /// A `${`, which opens a substitution.
+    Substitution,
+    /// The end of the file: unterminated.
+    Eof,
+}
+
+/// What scanning a template part found.
+pub(crate) struct TemplateScan {
+    /// After the `` ` `` or `${` that ended the part; the end of the file otherwise.
+    pub end: usize,
+    pub ending: TemplateEnd,
+    /// The template value: escapes decoded, continuations removed, CR and CRLF as LF.
+    pub cooked: String,
+    /// The raw value (`String.raw`): the text as written, CR and CRLF as LF.
+    pub raw: String,
+    pub problems: Vec<Problem>,
+}
+
+/// Scans a template part whose text begins at `start`: right after the opening `` ` ``
+/// or after the `}` that closed a substitution.
+pub(crate) fn scan_template(text: &str, start: usize) -> TemplateScan {
+    let mut scanner = Scanner {
+        text,
+        pos: start,
+        cooked: String::new(),
+        problems: Vec::new(),
+    };
+    let (ending, content_end) = scanner.template_body();
+    TemplateScan {
+        end: scanner.pos,
+        ending,
+        cooked: scanner.cooked,
+        raw: text[start..content_end]
+            .replace("\r\n", "\n")
+            .replace('\r', "\n"),
         problems: scanner.problems,
     }
 }
@@ -86,6 +131,38 @@ impl Scanner<'_> {
                 _ if ch == quote => {
                     self.pos += 1;
                     return true;
+                }
+                '\\' => self.escape(),
+                _ => {
+                    self.cooked.push(ch);
+                    self.pos += ch.len_utf8();
+                }
+            }
+        }
+    }
+
+    /// A template part up to `` ` ``, `${` or the end of the file; returns how it ended
+    /// and where its text stops.
+    fn template_body(&mut self) -> (TemplateEnd, usize) {
+        loop {
+            let Some(ch) = self.peek() else {
+                return (TemplateEnd::Eof, self.pos);
+            };
+            match ch {
+                '`' => {
+                    self.pos += 1;
+                    return (TemplateEnd::Backtick, self.pos - 1);
+                }
+                '$' if self.text[self.pos + 1..].starts_with('{') => {
+                    self.pos += 2;
+                    return (TemplateEnd::Substitution, self.pos - 2);
+                }
+                '\r' => {
+                    self.pos += 1;
+                    if self.peek() == Some('\n') {
+                        self.pos += 1;
+                    }
+                    self.cooked.push('\n');
                 }
                 '\\' => self.escape(),
                 _ => {
@@ -233,7 +310,7 @@ impl Scanner<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{double_quoted, scan};
+    use super::{double_quoted, scan, scan_template, TemplateEnd};
 
     fn cooked(literal: &str) -> String {
         let scan = scan(literal, 0);
@@ -453,6 +530,122 @@ mod tests {
             "ab",
             "a continuation then no close"
         );
+    }
+
+    fn template(text: &str, start: usize) -> (TemplateEnd, usize, String, String) {
+        let part = scan_template(text, start);
+        assert!(part.problems.is_empty(), "{text:?}");
+        (part.ending, part.end, part.cooked, part.raw)
+    }
+
+    #[test]
+    fn template_parts_end_at_a_backtick_a_substitution_or_the_file_end() {
+        assert_eq!(
+            template("`abc`", 1),
+            (TemplateEnd::Backtick, 5, "abc".to_owned(), "abc".to_owned())
+        );
+        assert_eq!(
+            template("``", 1),
+            (TemplateEnd::Backtick, 2, String::new(), String::new())
+        );
+        assert_eq!(
+            template("`a${b}c`", 1),
+            (TemplateEnd::Substitution, 4, "a".to_owned(), "a".to_owned())
+        );
+        assert_eq!(
+            template("`a${b}c`", 6),
+            (TemplateEnd::Backtick, 8, "c".to_owned(), "c".to_owned()),
+            "a part after a substitution"
+        );
+        assert_eq!(
+            template("`a$b$`", 1),
+            (
+                TemplateEnd::Backtick,
+                6,
+                "a$b$".to_owned(),
+                "a$b$".to_owned()
+            ),
+            "a `$` not followed by `{{` is text"
+        );
+        assert_eq!(
+            template("`${", 1),
+            (TemplateEnd::Substitution, 3, String::new(), String::new())
+        );
+        assert_eq!(
+            template("`abc", 1),
+            (TemplateEnd::Eof, 4, "abc".to_owned(), "abc".to_owned())
+        );
+        assert_eq!(
+            template("`a$", 1),
+            (TemplateEnd::Eof, 3, "a$".to_owned(), "a$".to_owned()),
+            "a trailing `$` at the end of the file"
+        );
+        assert_eq!(
+            template("`a\\", 1),
+            (TemplateEnd::Eof, 3, "a".to_owned(), "a\\".to_owned()),
+            "a trailing backslash"
+        );
+    }
+
+    #[test]
+    fn template_values_decode_escapes_and_normalise_line_terminators() {
+        assert_eq!(
+            template("`\\n\\u{41}\\x42\\`\\${`", 1).2,
+            "\nAB`${",
+            "escapes cook; `\\`` and `\\$` are themselves"
+        );
+        assert_eq!(
+            template("`\\n\\u{41}`", 1).3,
+            "\\n\\u{41}",
+            "raw keeps the escapes"
+        );
+        assert_eq!(
+            template("`a\r\nb\rc\nd\u{2028}e\u{2029}f`", 1),
+            (
+                TemplateEnd::Backtick,
+                18,
+                "a\nb\nc\nd\u{2028}e\u{2029}f".to_owned(),
+                "a\nb\nc\nd\u{2028}e\u{2029}f".to_owned()
+            ),
+            "CR and CRLF become LF in both values; LS and PS stay"
+        );
+        assert_eq!(
+            template("`a\\\nb\\\r\nc`", 1),
+            (
+                TemplateEnd::Backtick,
+                10,
+                "abc".to_owned(),
+                "a\\\nb\\\nc".to_owned()
+            ),
+            "a continuation cooks to nothing and is raw with LF"
+        );
+        assert_eq!(
+            template("`*/ // \"'`", 1).2,
+            "*/ // \"'",
+            "comment and quote characters are text"
+        );
+    }
+
+    #[test]
+    fn template_escapes_have_the_same_problems_as_strings() {
+        for (text, end) in [
+            ("`\\u{`", 4),
+            ("`\\1`", 3),
+            ("`\\x`", 3),
+            ("`\\8`", 3),
+            ("`\\01`", 4),
+        ] {
+            let part = scan_template(text, 1);
+            assert_eq!(part.ending, TemplateEnd::Backtick, "{text}: still closes");
+            assert_eq!(part.end, text.len(), "{text}");
+            assert_eq!(part.problems.len(), 1, "{text}");
+            assert_eq!(
+                (part.problems[0].start, part.problems[0].end),
+                (1, end),
+                "{text}"
+            );
+        }
+        assert_eq!(scan_template("`\\1${", 1).ending, TemplateEnd::Substitution);
     }
 
     #[test]

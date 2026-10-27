@@ -199,8 +199,54 @@ impl PartialEq for Number {
 
 impl Eq for Number {}
 
-/// What a token is. US-011 adds words, US-012 numbers and US-013 strings; US-014 to
-/// US-018 add templates, regexes and punctuators.
+/// Which piece of a template literal a token is (SPEC.md §2). `` `a${b}c${d}e` `` lexes
+/// as `Head("a")`, `b`, `Middle("c")`, `d`, `Tail("e")`; `` `a` `` is `Whole("a")`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplatePart {
+    /// `` `…` ``: no substitution.
+    Whole,
+    /// `` `…${ ``.
+    Head,
+    /// `}…${`.
+    Middle,
+    /// `` }…` ``.
+    Tail,
+}
+
+/// A template literal token's values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Template {
+    /// Which piece.
+    pub part: TemplatePart,
+    /// Escapes decoded, continuations removed, CR and CRLF as LF.
+    pub cooked: Box<str>,
+    /// As written (`String.raw`), with CR and CRLF as LF.
+    pub raw: Box<str>,
+}
+
+/// A punctuator. US-014 needs the braces to balance template substitutions; US-018
+/// adds the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Punct {
+    /// `{`
+    LBrace,
+    /// `}`
+    RBrace,
+}
+
+impl Punct {
+    /// The spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Punct::LBrace => "{",
+            Punct::RBrace => "}",
+        }
+    }
+}
+
+/// What a token is. US-011 adds words, US-012 numbers, US-013 strings and US-014
+/// templates and the braces; US-015 to US-018 add regexes and the other punctuators.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     /// `[A-Za-z_][A-Za-z0-9_]*` that is not a keyword; contextual words (`of`, `get`,
@@ -219,6 +265,11 @@ pub enum TokenKind {
     /// A string literal, cooked: escapes decoded, line continuations removed. The raw
     /// text is the span. A `'…'` literal is this kind too, reported as S001.
     String(Box<str>),
+    /// A piece of a template literal with its cooked and raw values; the span covers the
+    /// piece including its `` ` ``, `${` and `}` delimiters.
+    Template(Template),
+    /// A punctuator.
+    Punct(Punct),
     /// A character the lexer does not accept; reported as E000, lexing continues.
     Error,
     /// The end of the file; carries the trailing trivia.

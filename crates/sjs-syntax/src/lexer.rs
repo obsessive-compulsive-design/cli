@@ -4,8 +4,10 @@
 use sjs_diag::{Code, Diagnostic, Diagnostics, LineTerminator, Position, SourceFile, Span};
 
 use crate::number;
-use crate::string;
-use crate::token::{Keyword, Token, TokenKind, TokenStream, Trivia, TriviaKind};
+use crate::string::{self, TemplateEnd};
+use crate::token::{
+    Keyword, Punct, Template, TemplatePart, Token, TokenKind, TokenStream, Trivia, TriviaKind,
+};
 
 /// Lexes a whole file. Never fails: every byte is covered by exactly one trivia run or
 /// token, so [`TokenStream::print`] reproduces the file; problems are diagnostics.
@@ -17,6 +19,7 @@ pub fn lex(file: &SourceFile) -> (TokenStream, Diagnostics) {
         pos: 0,
         diagnostics: Diagnostics::new(),
         after_dot: false,
+        substitutions: Vec::new(),
     };
     let mut tokens = Vec::new();
     loop {
@@ -38,6 +41,17 @@ struct Lexer<'a> {
     /// True when the previous token's text ends with `.`: the next word is a property
     /// name, where a removed word is ordinary (`Map.delete`, SPEC.md §12).
     after_dot: bool,
+    /// The open template substitutions, innermost last: a `}` closes the innermost one
+    /// only when no `{` inside it is still open.
+    substitutions: Vec<Substitution>,
+}
+
+/// A `${` whose `}` has not been seen yet.
+struct Substitution {
+    /// Byte offset of the `${`.
+    opened_at: usize,
+    /// `{` seen inside it and not yet closed.
+    depth: u32,
 }
 
 /// ES2025 `WhiteSpace`: TAB, VT, FF, ZWNBSP and every `Zs` character.
@@ -96,7 +110,15 @@ impl Lexer<'_> {
         let has_newline_before = leading.iter().any(Trivia::is_newline);
         let start = self.pos;
         let kind = match self.bump() {
-            None => TokenKind::Eof,
+            None => self.eof(start),
+            Some('`') => self.template(TemplateEnd::Backtick),
+            Some('{') => {
+                if let Some(open) = self.substitutions.last_mut() {
+                    open.depth += 1;
+                }
+                TokenKind::Punct(Punct::LBrace)
+            }
+            Some('}') => self.close_brace(),
             Some(ch) if ch == '_' || ch.is_ascii_alphabetic() => self.word(start),
             Some(ch) if ch.is_ascii_digit() => self.number(start),
             Some('.') if self.peek().is_some_and(|c| c.is_ascii_digit()) => self.number(start),
@@ -181,6 +203,82 @@ impl Lexer<'_> {
                 TokenKind::Error
             }
         }
+    }
+
+    /// The end of the file: every `${` still open is E000 here.
+    fn eof(&mut self, start: usize) -> TokenKind {
+        for open in std::mem::take(&mut self.substitutions) {
+            let at = self
+                .file
+                .position(open.opened_at)
+                .unwrap_or(Position::new(1, 1));
+            self.report(
+                Code::E000,
+                start,
+                start,
+                format!(
+                    "unterminated template literal: the `${{` at {}:{} is never closed by `}}`",
+                    at.line, at.column
+                ),
+            );
+        }
+        TokenKind::Eof
+    }
+
+    /// `}`: closes the innermost substitution when no `{` inside it is open, resuming the
+    /// template; otherwise it is a brace.
+    fn close_brace(&mut self) -> TokenKind {
+        if let Some(open) = self.substitutions.last_mut() {
+            if open.depth == 0 {
+                self.substitutions.pop();
+                return self.template(TemplateEnd::Substitution);
+            }
+            open.depth -= 1;
+        }
+        TokenKind::Punct(Punct::RBrace)
+    }
+
+    /// A template piece opened by `` ` `` (`opener` is `Backtick`) or by the `}` of a
+    /// substitution (`opener` is `Substitution`), already consumed. Bad escapes make it
+    /// an error token with an E000 per escape; a piece the file ends inside is E000 at
+    /// the end of the file.
+    fn template(&mut self, opener: TemplateEnd) -> TokenKind {
+        let piece = string::scan_template(self.text, self.pos);
+        self.pos = piece.end;
+        let malformed = !piece.problems.is_empty();
+        for problem in piece.problems {
+            self.report(Code::E000, problem.start, problem.end, problem.message);
+        }
+        let part = match (opener, piece.ending) {
+            (_, TemplateEnd::Eof) => {
+                self.report(
+                    Code::E000,
+                    piece.end,
+                    piece.end,
+                    "unterminated template literal: expected `` ` `` before the end of the file"
+                        .to_owned(),
+                );
+                return TokenKind::Error;
+            }
+            (TemplateEnd::Backtick, TemplateEnd::Backtick) => TemplatePart::Whole,
+            (TemplateEnd::Backtick, TemplateEnd::Substitution) => TemplatePart::Head,
+            (_, TemplateEnd::Backtick) => TemplatePart::Tail,
+            (_, TemplateEnd::Substitution) => TemplatePart::Middle,
+        };
+        if piece.ending == TemplateEnd::Substitution {
+            self.substitutions.push(Substitution {
+                opened_at: piece.end - 2,
+                depth: 0,
+            });
+        }
+        if malformed {
+            return TokenKind::Error;
+        }
+        TokenKind::Template(Template {
+            part,
+            cooked: piece.cooked.into_boxed_str(),
+            raw: piece.raw.into_boxed_str(),
+        })
     }
 
     /// A string literal (`string.rs`). Bad escapes make it one error token with an E000
@@ -1624,5 +1722,390 @@ mod string_tests {
             Ok(())
         })
         .expect("every quote-free body is its own value");
+    }
+}
+
+#[cfg(test)]
+mod template_tests {
+    use super::lex;
+    use crate::token::{Punct, Template, TemplatePart, TokenKind};
+    use sjs_diag::{Code, Diagnostic, Position, SourceFile};
+    use sjs_testkit::prop::{check_with, Config, Text};
+
+    fn file(text: &str) -> SourceFile {
+        SourceFile::new("a.js", text.as_bytes().to_vec()).expect("valid UTF-8")
+    }
+
+    fn kinds(text: &str) -> Vec<TokenKind> {
+        lex(&file(text))
+            .0
+            .tokens
+            .iter()
+            .map(|t| t.kind.clone())
+            .collect()
+    }
+
+    fn diagnostics(text: &str) -> Vec<Diagnostic> {
+        lex(&file(text)).1.iter().cloned().collect()
+    }
+
+    fn piece(part: TemplatePart, cooked: &str, raw: &str) -> TokenKind {
+        TokenKind::Template(Template {
+            part,
+            cooked: cooked.into(),
+            raw: raw.into(),
+        })
+    }
+
+    fn template(part: TemplatePart, text: &str) -> TokenKind {
+        piece(part, text, text)
+    }
+
+    use Punct::{LBrace, RBrace};
+    use TemplatePart::{Head, Middle, Tail, Whole};
+
+    #[test]
+    fn a_template_without_substitutions_is_one_token_with_both_values() {
+        let text = "`a\\n\\u{41}` ``";
+        let (stream, found) = lex(&file(text));
+        assert!(found.is_empty(), "{found:?}");
+        let tokens: Vec<(TokenKind, usize, usize)> = stream
+            .tokens
+            .iter()
+            .map(|t| (t.kind.clone(), t.span.byte_start, t.span.byte_end))
+            .collect();
+        assert_eq!(
+            tokens,
+            [
+                (piece(Whole, "a\nA", "a\\n\\u{41}"), 0, 11),
+                (template(Whole, ""), 12, 14),
+                (TokenKind::Eof, 14, 14),
+            ]
+        );
+        assert_eq!(stream.print(&file(text)), text);
+    }
+
+    #[test]
+    fn substitutions_split_a_template_into_head_middle_and_tail() {
+        let text = "`a${b}c${d}e`";
+        let (stream, found) = lex(&file(text));
+        assert!(found.is_empty(), "{found:?}");
+        let tokens: Vec<(TokenKind, usize, usize)> = stream
+            .tokens
+            .iter()
+            .map(|t| (t.kind.clone(), t.span.byte_start, t.span.byte_end))
+            .collect();
+        assert_eq!(
+            tokens,
+            [
+                (template(Head, "a"), 0, 4),
+                (TokenKind::Ident, 4, 5),
+                (template(Middle, "c"), 5, 9),
+                (TokenKind::Ident, 9, 10),
+                (template(Tail, "e"), 10, 13),
+                (TokenKind::Eof, 13, 13),
+            ],
+            "each piece owns its delimiters"
+        );
+        assert_eq!(
+            kinds("`${a}`"),
+            [
+                template(Head, ""),
+                TokenKind::Ident,
+                template(Tail, ""),
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(
+            kinds("`${a}${b}`"),
+            [
+                template(Head, ""),
+                TokenKind::Ident,
+                template(Middle, ""),
+                TokenKind::Ident,
+                template(Tail, ""),
+                TokenKind::Eof
+            ],
+            "adjacent substitutions"
+        );
+        assert_eq!(
+            kinds("`${}`"),
+            [template(Head, ""), template(Tail, ""), TokenKind::Eof],
+            "an empty substitution is the parser's problem"
+        );
+    }
+
+    #[test]
+    fn every_nesting_case_round_trips() {
+        let cases: [(&str, Vec<TokenKind>); 7] = [
+            (
+                "`${ {a:1}.a }`",
+                vec![
+                    template(Head, ""),
+                    TokenKind::Punct(LBrace),
+                    TokenKind::Ident,
+                    TokenKind::Error,
+                    TokenKind::Number(crate::token::Number {
+                        value: 1.0,
+                        exceeds_safe_integer: false,
+                    }),
+                    TokenKind::Punct(RBrace),
+                    TokenKind::Error,
+                    TokenKind::Ident,
+                    template(Tail, ""),
+                    TokenKind::Eof,
+                ],
+            ),
+            (
+                "`a${`b${c}d`}e`",
+                vec![
+                    template(Head, "a"),
+                    template(Head, "b"),
+                    TokenKind::Ident,
+                    template(Tail, "d"),
+                    template(Tail, "e"),
+                    TokenKind::Eof,
+                ],
+            ),
+            (
+                "`${\"}\"}`",
+                vec![
+                    template(Head, ""),
+                    TokenKind::String("}".into()),
+                    template(Tail, ""),
+                    TokenKind::Eof,
+                ],
+            ),
+            (
+                "`${ \"`\" }`",
+                vec![
+                    template(Head, ""),
+                    TokenKind::String("`".into()),
+                    template(Tail, ""),
+                    TokenKind::Eof,
+                ],
+            ),
+            (
+                "`${ { x: { y: `z` } } }`",
+                vec![
+                    template(Head, ""),
+                    TokenKind::Punct(LBrace),
+                    TokenKind::Ident,
+                    TokenKind::Error,
+                    TokenKind::Punct(LBrace),
+                    TokenKind::Ident,
+                    TokenKind::Error,
+                    template(Whole, "z"),
+                    TokenKind::Punct(RBrace),
+                    TokenKind::Punct(RBrace),
+                    template(Tail, ""),
+                    TokenKind::Eof,
+                ],
+            ),
+            (
+                "`*/ /* ${a} // `",
+                vec![
+                    template(Head, "*/ /* "),
+                    TokenKind::Ident,
+                    template(Tail, " // "),
+                    TokenKind::Eof,
+                ],
+            ),
+            (
+                "{ `${a}` }",
+                vec![
+                    TokenKind::Punct(LBrace),
+                    template(Head, ""),
+                    TokenKind::Ident,
+                    template(Tail, ""),
+                    TokenKind::Punct(RBrace),
+                    TokenKind::Eof,
+                ],
+            ),
+        ];
+        for (text, expected) in cases {
+            let f = file(text);
+            let (stream, found) = lex(&f);
+            let kinds: Vec<TokenKind> = stream.tokens.iter().map(|t| t.kind.clone()).collect();
+            assert_eq!(kinds, expected, "{text}");
+            assert_eq!(stream.print(&f), text, "{text}");
+            assert!(
+                found
+                    .iter()
+                    .all(|d| d.message.starts_with("unexpected character")),
+                "{text}: only the punctuators US-018 adds are reported: {found:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn braces_outside_templates_are_plain_punctuators() {
+        assert_eq!(
+            kinds("} { } }"),
+            [
+                TokenKind::Punct(RBrace),
+                TokenKind::Punct(LBrace),
+                TokenKind::Punct(RBrace),
+                TokenKind::Punct(RBrace),
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(diagnostics("} { } }").len(), 0);
+        assert_eq!(
+            kinds("} `${a}`"),
+            [
+                TokenKind::Punct(RBrace),
+                template(Head, ""),
+                TokenKind::Ident,
+                template(Tail, ""),
+                TokenKind::Eof
+            ],
+            "a stray `}}` does not confuse a later template"
+        );
+        assert_eq!(Punct::LBrace.as_str(), "{");
+        assert_eq!(Punct::RBrace.as_str(), "}");
+    }
+
+    #[test]
+    fn an_unterminated_template_is_e000_at_the_end_of_the_file() {
+        for (text, kinds_expected, columns) in [
+            ("`abc", vec![TokenKind::Error, TokenKind::Eof], vec![5]),
+            (
+                "`a${b}c",
+                vec![
+                    template(Head, "a"),
+                    TokenKind::Ident,
+                    TokenKind::Error,
+                    TokenKind::Eof,
+                ],
+                vec![8],
+            ),
+            (
+                "`a${b",
+                vec![template(Head, "a"), TokenKind::Ident, TokenKind::Eof],
+                vec![6],
+            ),
+            ("`${", vec![template(Head, ""), TokenKind::Eof], vec![4]),
+            (
+                "`${`${",
+                vec![template(Head, ""), template(Head, ""), TokenKind::Eof],
+                vec![7, 7],
+            ),
+            (
+                "`${ {",
+                vec![template(Head, ""), TokenKind::Punct(LBrace), TokenKind::Eof],
+                vec![6],
+            ),
+        ] {
+            assert_eq!(kinds(text), kinds_expected, "{text}");
+            let found = diagnostics(text);
+            assert_eq!(
+                found
+                    .iter()
+                    .map(|d| d.span.start.column)
+                    .collect::<Vec<_>>(),
+                columns,
+                "{text}: {found:?}"
+            );
+            assert!(found.iter().all(|d| d.code == Code::E000), "{text}");
+        }
+        assert_eq!(
+            diagnostics("`abc")[0].message,
+            "unterminated template literal: expected `` ` `` before the end of the file"
+        );
+        let found = diagnostics("x\n`a${b");
+        assert_eq!(
+            (found[0].span.start, found[0].message.as_str()),
+            (
+                Position::new(2, 6),
+                "unterminated template literal: the `${` at 2:3 is never closed by `}`"
+            )
+        );
+        let found = diagnostics("`${`${");
+        assert!(
+            found[0].message.contains("at 1:2 ") && found[1].message.contains("at 1:5 "),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn an_invalid_escape_in_a_template_is_e000() {
+        for text in ["`\\u{`", "`\\1`", "`\\x`", "`\\8`", "`\\u{110000}`"] {
+            let (stream, found) = lex(&file(text));
+            assert_eq!(stream.tokens[0].kind, TokenKind::Error, "{text}");
+            assert_eq!(
+                stream.tokens[0].span.byte_end,
+                text.len(),
+                "{text}: the whole piece"
+            );
+            let found: Vec<&Diagnostic> = found.iter().collect();
+            assert_eq!(found.len(), 1, "{text}");
+            assert_eq!(
+                (found[0].code, found[0].span.start),
+                (Code::E000, Position::new(1, 2)),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            kinds("`\\1${a}b${c}\\8`"),
+            [
+                TokenKind::Error,
+                TokenKind::Ident,
+                template(Middle, "b"),
+                TokenKind::Ident,
+                TokenKind::Error,
+                TokenKind::Eof
+            ],
+            "a malformed piece still opens and closes its substitution"
+        );
+        assert_eq!(diagnostics("`\\1${a}b${c}\\8`").len(), 2);
+    }
+
+    #[test]
+    fn a_multi_line_template_keeps_its_terminators_in_the_source_and_normalises_its_values() {
+        let text = "`a\r\nb\rc\nd` e";
+        let f = file(text);
+        let (stream, found) = lex(&f);
+        assert!(found.is_empty());
+        assert_eq!(stream.tokens[0].kind, template(Whole, "a\nb\nc\nd"));
+        assert_eq!(
+            stream.print(&f),
+            text,
+            "the span keeps CR and CRLF as written"
+        );
+        assert_eq!(f.slice(&stream.tokens[0].span), Some("`a\r\nb\rc\nd`"));
+        assert_eq!(stream.tokens[0].span.end, Position::new(4, 3));
+        assert!(
+            !stream.tokens[1].has_newline_before,
+            "line terminators inside a template are not line breaks between tokens"
+        );
+        assert_eq!(
+            kinds("`a\\\nb`"),
+            [piece(Whole, "ab", "a\\\nb"), TokenKind::Eof],
+            "a continuation is raw but not cooked"
+        );
+    }
+
+    #[test]
+    fn random_template_soup_round_trips_and_ends_with_eof() {
+        let gen = Text {
+            alphabet: &['`', '$', '{', '}', '\\', '\n', '\r', '"', 'a', ' ', 'u'],
+            max_len: 24,
+        };
+        check_with(&Config::new(400), &gen, &|text: &String| {
+            let f = file(text);
+            let (stream, _) = lex(&f);
+            assert_eq!(stream.print(&f), *text, "{text:?}");
+            assert_eq!(stream.eof().kind, TokenKind::Eof, "{text:?}");
+            let last = stream.tokens.len() - 1;
+            assert!(
+                stream.tokens[..last]
+                    .iter()
+                    .all(|t| t.kind != TokenKind::Eof),
+                "{text:?}"
+            );
+            Ok(())
+        })
+        .expect("every soup round-trips");
     }
 }

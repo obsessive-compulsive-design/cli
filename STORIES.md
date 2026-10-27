@@ -682,7 +682,28 @@ a string are permitted; `"\0"` is permitted when not followed by a digit; a stri
 containing both quote kinds gets the minimal-escape replacement.
 
 #### US-014 Template literals
-§2, §4.1 · After: US-013 · Size: M · M0
+§2, §4.1 · After: US-013 · Size: M · M0 · **Status: complete** (2026-10-27)
+
+> Delivered in `sjs-syntax`: `string::scan_template` (sharing the US-013 escapes, with
+> `` ` `` and `${` as terminators and CR/CRLF normalised to LF in both values),
+> `TokenKind::Template(Template { part: Whole | Head | Middle | Tail, cooked, raw })`
+> whose span covers the piece with its delimiters, and `TokenKind::Punct(Punct::{LBrace,
+> RBrace})`. The lexer keeps a heap stack of open substitutions, each with its own
+> brace depth, so `}` resumes a template only when every `{` inside the substitution is
+> closed: `${ {a:1}.a }`, nested templates, `}` and `` ` `` inside strings inside a
+> substitution, `*/` and `//` inside a template, braces outside any template, and empty
+> or adjacent substitutions all round-trip byte for byte. An invalid escape (`` `\u{` ``,
+> `\1`, `\x`, `\8`, a code point above 10FFFF) is E000 at the backslash and the piece is
+> an `Error` token that still opens or closes its substitution. A piece the file ends
+> inside is E000 at the end of the file; a `${` never closed is E000 at the end of the
+> file naming the line and column of the `${`. A multi-line template keeps its original
+> terminators in the source and `print` (never reflowed); only the values normalise.
+> **Decisions:** the two braces become punctuators now rather than waiting for US-018,
+> because the substitution stack needs them and `Error` tokens for `{` would have made
+> the nesting tests meaningless; the other punctuators inside substitutions (`:`, `.`)
+> are still `Error` tokens until US-018, which the nesting tests state explicitly.
+> Verified: 100% lines and regions, 189 mutants (149 caught, 18 unviable, 22 timeouts,
+> 0 missed).
 
 **Scope.** Template token modes with a heap-allocated brace-depth stack so
 `${ {a:1}.a }` and nested templates lex; raw and cooked values; positions for US-029's
