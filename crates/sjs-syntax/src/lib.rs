@@ -13,7 +13,8 @@
 //! `v`-mode syntax ([`pattern`]), so a malformed pattern is E000 and the named groups
 //! ride on the token. US-017 distinguishes `/** … */` doc comments from other block
 //! comments and attaches them to the token on the next line (`Token::doc_comment`).
-//! US-018 adds the remaining token kinds;
+//! US-018 adds every punctuator by longest match, private names and the rejection of
+//! decorators, which completes the token kinds;
 //! until then every other character is an `Error` token, so the lexer is not yet part of
 //! the pipeline.
 

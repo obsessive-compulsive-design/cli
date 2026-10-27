@@ -2,7 +2,9 @@
 //!
 //! Each story that lands a pass extends [`check_files`]; the conformance harness
 //! (`tests/conformance.rs`) runs every fixture through it, so a fixture can only expect
-//! what the pipeline can already find. Today that is US-004: UTF-8 and BOM validation.
+//! what the pipeline can already find. Today that is US-004 (UTF-8 and BOM validation)
+//! and the lexer (US-010 to US-018: E000 for what the lexer rejects, E002 for regex
+//! flags, S001 for single-quoted strings).
 
 use sjs_diag::{Diagnostics, SourceFile};
 
@@ -21,8 +23,12 @@ pub struct InputFile {
 pub fn check_files(files: &[InputFile]) -> Diagnostics {
     let mut diagnostics = Diagnostics::new();
     for file in files {
-        if let Err(diagnostic) = SourceFile::new(file.path.clone(), file.bytes.clone()) {
-            diagnostics.push(*diagnostic);
+        match SourceFile::new(file.path.clone(), file.bytes.clone()) {
+            Err(diagnostic) => diagnostics.push(*diagnostic),
+            Ok(source) => {
+                let (_, found) = sjs_syntax::lex(&source);
+                diagnostics.extend(found.iter().cloned());
+            }
         }
     }
     diagnostics

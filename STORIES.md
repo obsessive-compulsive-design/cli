@@ -842,7 +842,30 @@ comment, declaration (not attached); `/** */` inside a string; a comment at EOF 
 trailing newline.
 
 #### US-018 Punctuators
-§2 · After: US-010 · Size: S · M0
+§2 · After: US-010 · Size: S · M0 · **Status: complete** (2026-10-27)
+
+> Delivered in `sjs-syntax`: `Punct` now holds all 57 ES2025 punctuators with `ALL`,
+> `as_str`, `longest_match` and `is_removed` (`==`, `!=`, `||=`, `&&=`, `++`, `--` lex
+> without a diagnostic so the parser can name them); the lexer takes the longest
+> punctuator at each position, and `?.` directly before a decimal digit is `?` so
+> `a?.5:1` is a ternary. `#name` is `TokenKind::PrivateName` (the `#` must be followed
+> directly by an identifier; `# a`, `#`, `#1` are `E000` at the `#`), `@` is `E000`
+> naming decorators and their §12 replacement, and `<!--`/`-->` lex as operators.
+> `regex_allowed_after` now says a `/` after `)`, `]` or a private name is a division.
+> The lexer is wired into the pipeline: `sjs-cli` depends on `sjs-syntax` (an edge the
+> DAG test already allowed) and `check_files` lexes every valid file, so the
+> conformance fixtures can expect what the lexer finds. Fixtures added under
+> `tests/conformance/02-lexical/`: `S001` (single-quoted, both quote kinds with their
+> replacements), `E002` (no flags, `u`, flags without `v`), and `E000` for a hashbang, a
+> decorator, a `$` identifier, an unterminated string, a legacy octal literal and a
+> private name with a space, plus a conforming `punctuators.js` covering the
+> longest-match cases; `near-miss-multibyte.js` now keeps its accented letter out of the
+> identifier, since identifiers are ASCII. **Decisions:** `#` is not a punctuator token
+> on its own; `#name` is one `PrivateName` token because that is the only place `#`
+> may appear, which is also how `# a` becomes an error; `Error` tokens are now rare
+> (`@`, `$`, `\u`, non-ASCII letters, bad literals, stray bytes), so the US-014 and
+> US-015 tests that expected punctuators to be errors were updated. Verified: 100% lines
+> and regions, 24 mutants (18 caught, 4 unviable, 2 timeouts, 0 missed).
 
 **Done when**
 - Every ES2025 punctuator lexes with longest match, including `?.`, `??`, `??=`, `**`,

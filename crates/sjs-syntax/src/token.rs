@@ -234,31 +234,164 @@ pub struct Template {
     pub raw: Box<str>,
 }
 
-/// A punctuator. US-014 needs the braces to balance template substitutions and US-015
-/// the division operators that a `/` is when it does not start a regex; US-018 adds
-/// the rest.
+/// Every ES2025 punctuator (SPEC.md §2), including the removed `==`, `!=`, `||=`,
+/// `&&=`, `++` and `--`, which lex so the parser can name them in its E000.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[allow(missing_docs)]
 pub enum Punct {
-    /// `{`
     LBrace,
-    /// `}`
     RBrace,
-    /// `/`
+    LParen,
+    RParen,
+    LBracket,
+    RBracket,
+    Dot,
+    Ellipsis,
+    Semicolon,
+    Comma,
+    Lt,
+    Gt,
+    LtEq,
+    GtEq,
+    EqEq,
+    BangEq,
+    EqEqEq,
+    BangEqEq,
+    Plus,
+    Minus,
+    Star,
+    Percent,
+    StarStar,
+    PlusPlus,
+    MinusMinus,
+    Shl,
+    Shr,
+    UShr,
+    Amp,
+    Pipe,
+    Caret,
+    Bang,
+    Tilde,
+    AmpAmp,
+    PipePipe,
+    QuestionQuestion,
+    Question,
+    QuestionDot,
+    Colon,
+    Eq,
+    PlusEq,
+    MinusEq,
+    StarEq,
+    PercentEq,
+    StarStarEq,
+    ShlEq,
+    ShrEq,
+    UShrEq,
+    AmpEq,
+    PipeEq,
+    CaretEq,
+    AmpAmpEq,
+    PipePipeEq,
+    QuestionQuestionEq,
+    Arrow,
     Slash,
-    /// `/=`
     SlashEq,
 }
 
 impl Punct {
+    /// Every punctuator with its spelling.
+    pub const ALL: &'static [(Punct, &'static str)] = &[
+        (Punct::LBrace, "{"),
+        (Punct::RBrace, "}"),
+        (Punct::LParen, "("),
+        (Punct::RParen, ")"),
+        (Punct::LBracket, "["),
+        (Punct::RBracket, "]"),
+        (Punct::Dot, "."),
+        (Punct::Ellipsis, "..."),
+        (Punct::Semicolon, ";"),
+        (Punct::Comma, ","),
+        (Punct::Lt, "<"),
+        (Punct::Gt, ">"),
+        (Punct::LtEq, "<="),
+        (Punct::GtEq, ">="),
+        (Punct::EqEq, "=="),
+        (Punct::BangEq, "!="),
+        (Punct::EqEqEq, "==="),
+        (Punct::BangEqEq, "!=="),
+        (Punct::Plus, "+"),
+        (Punct::Minus, "-"),
+        (Punct::Star, "*"),
+        (Punct::Percent, "%"),
+        (Punct::StarStar, "**"),
+        (Punct::PlusPlus, "++"),
+        (Punct::MinusMinus, "--"),
+        (Punct::Shl, "<<"),
+        (Punct::Shr, ">>"),
+        (Punct::UShr, ">>>"),
+        (Punct::Amp, "&"),
+        (Punct::Pipe, "|"),
+        (Punct::Caret, "^"),
+        (Punct::Bang, "!"),
+        (Punct::Tilde, "~"),
+        (Punct::AmpAmp, "&&"),
+        (Punct::PipePipe, "||"),
+        (Punct::QuestionQuestion, "??"),
+        (Punct::Question, "?"),
+        (Punct::QuestionDot, "?."),
+        (Punct::Colon, ":"),
+        (Punct::Eq, "="),
+        (Punct::PlusEq, "+="),
+        (Punct::MinusEq, "-="),
+        (Punct::StarEq, "*="),
+        (Punct::PercentEq, "%="),
+        (Punct::StarStarEq, "**="),
+        (Punct::ShlEq, "<<="),
+        (Punct::ShrEq, ">>="),
+        (Punct::UShrEq, ">>>="),
+        (Punct::AmpEq, "&="),
+        (Punct::PipeEq, "|="),
+        (Punct::CaretEq, "^="),
+        (Punct::AmpAmpEq, "&&="),
+        (Punct::PipePipeEq, "||="),
+        (Punct::QuestionQuestionEq, "??="),
+        (Punct::Arrow, "=>"),
+        (Punct::Slash, "/"),
+        (Punct::SlashEq, "/="),
+    ];
+
     /// The spelling.
     #[must_use]
     pub fn as_str(self) -> &'static str {
-        match self {
-            Punct::LBrace => "{",
-            Punct::RBrace => "}",
-            Punct::Slash => "/",
-            Punct::SlashEq => "/=",
-        }
+        Punct::ALL
+            .iter()
+            .find(|(punct, _)| *punct == self)
+            .map_or("", |(_, spelling)| spelling)
+    }
+
+    /// The longest punctuator `text` starts with.
+    #[must_use]
+    pub fn longest_match(text: &str) -> Option<Punct> {
+        Punct::ALL
+            .iter()
+            .filter(|(_, spelling)| text.starts_with(spelling))
+            .max_by_key(|(_, spelling)| spelling.len())
+            .map(|(punct, _)| *punct)
+    }
+
+    /// True for the punctuators SPEC.md §12 removes: `==`, `!=`, `||=`, `&&=`, `++`
+    /// and `--`. They lex so the parser can report them with the right message.
+    #[must_use]
+    pub fn is_removed(self) -> bool {
+        matches!(
+            self,
+            Punct::EqEq
+                | Punct::BangEq
+                | Punct::PipePipeEq
+                | Punct::AmpAmpEq
+                | Punct::PlusPlus
+                | Punct::MinusMinus
+        )
     }
 }
 
@@ -284,9 +417,8 @@ impl Regex {
     }
 }
 
-/// What a token is. US-011 adds words, US-012 numbers, US-013 strings, US-014 templates
-/// and the braces, US-015 regexes and the division operators; US-016 to US-018 add the
-/// other punctuators.
+/// What a token is: words (US-011), numbers (US-012), strings (US-013), templates
+/// (US-014), regexes (US-015, US-016), punctuators and private names (US-018).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     /// `[A-Za-z_][A-Za-z0-9_]*` that is not a keyword; contextual words (`of`, `get`,
@@ -312,6 +444,8 @@ pub enum TokenKind {
     Regex(Regex),
     /// A punctuator.
     Punct(Punct),
+    /// `#name`: a private class member name, without the `#`.
+    PrivateName(Box<str>),
     /// A character the lexer does not accept; reported as E000, lexing continues.
     Error,
     /// The end of the file; carries the trailing trivia.

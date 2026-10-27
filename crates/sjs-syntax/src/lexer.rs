@@ -34,20 +34,22 @@ pub fn lex(file: &SourceFile) -> (TokenStream, Diagnostics) {
 
 /// Whether a `/` right after a token of kind `previous` starts a regex literal rather
 /// than a division, judged from that token alone: a regex can only start where an
-/// expression starts, so it never follows a value. A `}` is taken to end a block (the
-/// parser knows when it ends an object literal instead), and an `Error` token is taken
-/// not to be a value.
+/// expression starts, so it never follows a value, `)` or `]`. A `}` is taken to end a
+/// block (the parser knows when it ends an object literal instead), and an `Error`
+/// token is taken not to be a value.
 #[must_use]
 pub fn regex_allowed_after(previous: &TokenKind) -> bool {
     match previous {
         TokenKind::Ident
+        | TokenKind::PrivateName(_)
         | TokenKind::Null
         | TokenKind::Bool(_)
         | TokenKind::Number(_)
         | TokenKind::BigInt(_)
         | TokenKind::String(_)
         | TokenKind::Regex(_)
-        | TokenKind::Keyword(Keyword::This | Keyword::Super) => false,
+        | TokenKind::Keyword(Keyword::This | Keyword::Super)
+        | TokenKind::Punct(Punct::RParen | Punct::RBracket) => false,
         TokenKind::Template(template) => {
             !matches!(template.part, TemplatePart::Whole | TemplatePart::Tail)
         }
@@ -177,13 +179,18 @@ impl<'a> Lexer<'a> {
             Some('$') => self.error(start, "`$` is not permitted in identifiers"),
             Some('\\') if self.peek() == Some('u') => self.unicode_escape(start),
             Some('#') if self.peek() == Some('!') => self.hashbang(start),
+            Some('#') => self.private_name(start),
+            Some('@') => self.error(
+                start,
+                "decorators are removed; use explicit wrapping functions (SPEC.md §12)",
+            ),
             Some(ch) if ch.is_alphabetic() => self.error(
                 start,
                 &format!(
                     "{ch:?} is not permitted in identifiers: only ASCII letters, digits and `_`"
                 ),
             ),
-            Some(ch) => self.error(start, &format!("unexpected character {ch:?}")),
+            Some(ch) => self.punct(start, ch),
         };
         let span = self.span(start, self.pos);
         // `1.` is a number, not a member access.
@@ -238,6 +245,43 @@ impl<'a> Lexer<'a> {
                 }
             },
         }
+    }
+
+    /// The longest punctuator at `start` (`ch` is its first character, already consumed);
+    /// `?.` directly before a decimal digit is `?`, so `a?.5:1` is a ternary.
+    fn punct(&mut self, start: usize, ch: char) -> TokenKind {
+        let rest = &self.text[start..];
+        let Some(punct) = Punct::longest_match(rest) else {
+            return self.error(start, &format!("unexpected character {ch:?}"));
+        };
+        let punct =
+            if punct == Punct::QuestionDot && rest[2..].starts_with(|c: char| c.is_ascii_digit()) {
+                Punct::Question
+            } else {
+                punct
+            };
+        self.pos = start + punct.as_str().len();
+        TokenKind::Punct(punct)
+    }
+
+    /// `#name`: the `#` must be followed directly by an identifier.
+    fn private_name(&mut self, start: usize) -> TokenKind {
+        if !self
+            .peek()
+            .is_some_and(|c| c == '_' || c.is_ascii_alphabetic())
+        {
+            return self.error(
+                start,
+                "`#` begins a private name and must be followed directly by its identifier",
+            );
+        }
+        while self
+            .peek()
+            .is_some_and(|c| c == '_' || c.is_ascii_alphanumeric())
+        {
+            self.bump();
+        }
+        TokenKind::PrivateName(self.text[start + 1..self.pos].into())
     }
 
     /// A numeric literal (`number.rs`). A rejected literal is one error token covering
@@ -747,10 +791,10 @@ mod tests {
 
     #[test]
     fn unrecognised_characters_become_error_tokens_with_e000_and_lexing_continues() {
-        let f = file("#é\u{1F600}");
+        let f = file("\\é\u{1F600}");
         let (stream, diagnostics) = lex(&f);
         assert_eq!(
-            kinds("#é\u{1F600}"),
+            kinds("\\é\u{1F600}"),
             [
                 TokenKind::Error,
                 TokenKind::Error,
@@ -768,7 +812,7 @@ mod tests {
         assert_eq!(
             messages,
             [
-                "unexpected character '#'",
+                "unexpected character '\\\\'",
                 "'é' is not permitted in identifiers: only ASCII letters, digits and `_`",
                 "unexpected character '\u{1F600}'"
             ]
@@ -776,7 +820,7 @@ mod tests {
         assert!(diagnostics
             .iter()
             .all(|d| d.code == Code::E000 && d.path == "a.js"));
-        assert_eq!(stream.print(&f), "#é\u{1F600}");
+        assert_eq!(stream.print(&f), "\\é\u{1F600}");
     }
 
     #[test]
@@ -1062,10 +1106,7 @@ mod word_tests {
             "m.delete(k)",
         ] {
             let found = messages(text);
-            assert!(
-                found.iter().all(|m| !m.contains("removed")),
-                "{text:?}: {found:?}"
-            );
+            assert_eq!(found, Vec::<String>::new(), "{text:?}");
             assert!(
                 kinds(text).contains(&TokenKind::Keyword(Keyword::Delete)),
                 "{text:?}"
@@ -1224,7 +1265,7 @@ mod word_tests {
         assert_eq!(later.len(), 1, "anywhere, not only on the first line");
         assert_eq!(
             messages("#"),
-            ["unexpected character '#'"],
+            ["`#` begins a private name and must be followed directly by its identifier"],
             "a lone hash is not a hashbang"
         );
         assert_eq!(messages("#!"), ["`#!` is removed; a hashbang line belongs to a host-side launcher outside the subset"]);
@@ -1572,7 +1613,7 @@ mod number_tests {
         );
         assert_eq!(
             kinds("..5")[0],
-            TokenKind::Error,
+            TokenKind::Punct(crate::token::Punct::Dot),
             "a lone `.` is not a number"
         );
         assert_eq!(
@@ -1979,13 +2020,13 @@ mod template_tests {
                     template(Head, ""),
                     TokenKind::Punct(LBrace),
                     TokenKind::Ident,
-                    TokenKind::Error,
+                    TokenKind::Punct(Punct::Colon),
                     TokenKind::Number(crate::token::Number {
                         value: 1.0,
                         exceeds_safe_integer: false,
                     }),
                     TokenKind::Punct(RBrace),
-                    TokenKind::Error,
+                    TokenKind::Punct(Punct::Dot),
                     TokenKind::Ident,
                     template(Tail, ""),
                     TokenKind::Eof,
@@ -2026,10 +2067,10 @@ mod template_tests {
                     template(Head, ""),
                     TokenKind::Punct(LBrace),
                     TokenKind::Ident,
-                    TokenKind::Error,
+                    TokenKind::Punct(Punct::Colon),
                     TokenKind::Punct(LBrace),
                     TokenKind::Ident,
-                    TokenKind::Error,
+                    TokenKind::Punct(Punct::Colon),
                     template(Whole, "z"),
                     TokenKind::Punct(RBrace),
                     TokenKind::Punct(RBrace),
@@ -2064,12 +2105,7 @@ mod template_tests {
             let kinds: Vec<TokenKind> = stream.tokens.iter().map(|t| t.kind.clone()).collect();
             assert_eq!(kinds, expected, "{text}");
             assert_eq!(stream.print(&f), text, "{text}");
-            assert!(
-                found
-                    .iter()
-                    .all(|d| d.message.starts_with("unexpected character")),
-                "{text}: only the punctuators US-018 adds are reported: {found:?}"
-            );
+            assert!(found.is_empty(), "{text}: {found:?}");
         }
     }
 
@@ -2427,7 +2463,7 @@ mod regex_tests {
             ("/a", 3, TokenKind::Eof),
             ("/a\nb", 3, TokenKind::Ident),
             ("/a\r\nb", 3, TokenKind::Ident),
-            ("/[a\u{2028}]/v", 4, TokenKind::Error),
+            ("/[a\u{2028}]/v", 4, TokenKind::Punct(Punct::RBracket)),
             ("/a\\", 4, TokenKind::Eof),
             ("/a\\\nb", 4, TokenKind::Ident),
             ("/", 2, TokenKind::Eof),
@@ -2602,12 +2638,7 @@ mod regex_tests {
             (4, TokenKind::Ident, 5),
             "`.` then `test` follow"
         );
-        assert!(
-            found.iter().all(|d| d.message == "unexpected character '.'"
-                || d.message.starts_with("unexpected character '(")
-                || d.message.starts_with("unexpected character ')")),
-            "only the punctuators US-018 adds: {found:?}"
-        );
+        assert_eq!(found.len(), 0, "{found:?}");
     }
 
     #[test]
@@ -2940,9 +2971,7 @@ mod comment_tests {
             .all(|t| t.leading.iter().all(|tr| tr.kind == TriviaKind::Whitespace)));
         assert_eq!(found.len(), 1, "only the S001");
         let (stream, found) = lex(&file("const a = 1 // tail"));
-        assert!(found
-            .iter()
-            .all(|d| d.message.starts_with("unexpected character")));
+        assert_eq!(found.len(), 0, "{found:?}");
         assert_eq!(
             stream
                 .eof()
@@ -2956,5 +2985,269 @@ mod comment_tests {
         let (stream, _) = lex(&file("x /** d */"));
         assert_eq!(stream.eof().leading.last().map(|t| t.kind), Some(DOC));
         assert_eq!(stream.eof().span.start, Position::new(1, 11));
+    }
+}
+
+#[cfg(test)]
+mod punct_tests {
+    use super::lex;
+    use crate::token::{Number, Punct, TokenKind};
+    use sjs_diag::{Code, Diagnostic, Position, SourceFile};
+
+    fn file(text: &str) -> SourceFile {
+        SourceFile::new("a.js", text.as_bytes().to_vec()).expect("valid UTF-8")
+    }
+
+    fn kinds(text: &str) -> Vec<TokenKind> {
+        lex(&file(text))
+            .0
+            .tokens
+            .iter()
+            .map(|t| t.kind.clone())
+            .collect()
+    }
+
+    fn diagnostics(text: &str) -> Vec<Diagnostic> {
+        lex(&file(text)).1.iter().cloned().collect()
+    }
+
+    fn punct(p: Punct) -> TokenKind {
+        TokenKind::Punct(p)
+    }
+
+    fn number(value: f64) -> TokenKind {
+        TokenKind::Number(Number {
+            value,
+            exceeds_safe_integer: false,
+        })
+    }
+
+    #[test]
+    fn every_punctuator_lexes_alone_and_between_identifiers() {
+        assert_eq!(Punct::ALL.len(), 57);
+        for (p, spelling) in Punct::ALL {
+            assert_eq!(p.as_str(), *spelling);
+            assert_eq!(Punct::longest_match(spelling), Some(*p), "{spelling}");
+            let expected_alone = if matches!(p, Punct::Slash | Punct::SlashEq) {
+                TokenKind::Error
+            } else {
+                punct(*p)
+            };
+            let found = kinds(spelling);
+            assert_eq!(
+                found[0], expected_alone,
+                "{spelling} alone (a leading `/` opens a regex)"
+            );
+            let text = format!("a {spelling} b");
+            assert_eq!(
+                kinds(&text),
+                [
+                    TokenKind::Ident,
+                    punct(*p),
+                    TokenKind::Ident,
+                    TokenKind::Eof
+                ],
+                "{text}"
+            );
+            assert!(
+                diagnostics(&text).is_empty(),
+                "{text}: punctuators are never diagnostics"
+            );
+        }
+        assert_eq!(Punct::longest_match("x"), None);
+        assert_eq!(Punct::longest_match(""), None);
+        assert_eq!(kinds("a @ b")[1], TokenKind::Error);
+    }
+
+    #[test]
+    fn the_longest_punctuator_wins() {
+        let cases: [(&str, &[Punct]); 14] = [
+            (">>>=", &[Punct::UShrEq]),
+            (">>>", &[Punct::UShr]),
+            (">>=", &[Punct::ShrEq]),
+            (">>", &[Punct::Shr]),
+            (">=", &[Punct::GtEq]),
+            ("**=", &[Punct::StarStarEq]),
+            ("??=", &[Punct::QuestionQuestionEq]),
+            ("...", &[Punct::Ellipsis]),
+            ("=>", &[Punct::Arrow]),
+            ("===", &[Punct::EqEqEq]),
+            ("!==", &[Punct::BangEqEq]),
+            ("....", &[Punct::Ellipsis, Punct::Dot]),
+            ("=>=", &[Punct::Arrow, Punct::Eq]),
+            (">>>>", &[Punct::UShr, Punct::Gt]),
+        ];
+        for (text, expected) in cases {
+            let text = format!("a {text} b");
+            let found = kinds(&text);
+            let mut expected_kinds = vec![TokenKind::Ident];
+            expected_kinds.extend(expected.iter().map(|p| punct(*p)));
+            expected_kinds.extend([TokenKind::Ident, TokenKind::Eof]);
+            assert_eq!(found, expected_kinds, "{text}");
+        }
+        assert_eq!(
+            kinds("a ?. b"),
+            [
+                TokenKind::Ident,
+                punct(Punct::QuestionDot),
+                TokenKind::Ident,
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(
+            kinds("a?.5:1"),
+            [
+                TokenKind::Ident,
+                punct(Punct::Question),
+                number(0.5),
+                punct(Punct::Colon),
+                number(1.0),
+                TokenKind::Eof
+            ],
+            "`?.` before a digit is `?` then `.5`: a ternary"
+        );
+        assert_eq!(
+            kinds("a?.b"),
+            [
+                TokenKind::Ident,
+                punct(Punct::QuestionDot),
+                TokenKind::Ident,
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(
+            kinds("a?.[0]")[1..3],
+            [punct(Punct::QuestionDot), punct(Punct::LBracket)]
+        );
+    }
+
+    #[test]
+    fn removed_punctuators_lex_without_a_diagnostic_for_the_parser_to_report() {
+        for (text, p) in [
+            ("==", Punct::EqEq),
+            ("!=", Punct::BangEq),
+            ("||=", Punct::PipePipeEq),
+            ("&&=", Punct::AmpAmpEq),
+            ("++", Punct::PlusPlus),
+            ("--", Punct::MinusMinus),
+        ] {
+            assert!(p.is_removed(), "{text}");
+            let text = format!("a {text} b");
+            assert_eq!(kinds(&text)[1], punct(p), "{text}");
+            assert!(diagnostics(&text).is_empty(), "{text}");
+        }
+        let removed = Punct::ALL.iter().filter(|(p, _)| p.is_removed()).count();
+        assert_eq!(removed, 6);
+        assert!(!Punct::EqEqEq.is_removed());
+        assert!(!Punct::Plus.is_removed());
+        assert_eq!(
+            kinds("<!-- a -->"),
+            [
+                punct(Punct::Lt),
+                punct(Punct::Bang),
+                punct(Punct::MinusMinus),
+                TokenKind::Ident,
+                punct(Punct::MinusMinus),
+                punct(Punct::Gt),
+                TokenKind::Eof
+            ],
+            "HTML-like comments are operators in a module"
+        );
+    }
+
+    #[test]
+    fn a_private_name_is_hash_directly_followed_by_an_identifier() {
+        assert_eq!(
+            kinds("this.#a"),
+            [
+                TokenKind::Keyword(crate::token::Keyword::This),
+                punct(Punct::Dot),
+                TokenKind::PrivateName("a".into()),
+                TokenKind::Eof
+            ]
+        );
+        assert_eq!(kinds("#_x1")[0], TokenKind::PrivateName("_x1".into()));
+        assert_eq!(
+            kinds("#class")[0],
+            TokenKind::PrivateName("class".into()),
+            "any identifier name"
+        );
+        let (stream, _) = lex(&file("#ab cd"));
+        assert_eq!(
+            (
+                stream.tokens[0].span.byte_start,
+                stream.tokens[0].span.byte_end
+            ),
+            (0, 3)
+        );
+        for (text, column) in [("# a", 1), ("#", 1), ("#1", 1), ("#$a", 1), ("x #", 3)] {
+            let found = diagnostics(text);
+            assert_eq!(found[0].code, Code::E000, "{text}");
+            assert_eq!(found[0].span.start, Position::new(1, column), "{text}");
+            assert_eq!(
+                found[0].message,
+                "`#` begins a private name and must be followed directly by its identifier"
+            );
+        }
+        assert_eq!(
+            kinds("# a"),
+            [TokenKind::Error, TokenKind::Ident, TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds("#!x")[0],
+            TokenKind::Error,
+            "a hashbang is still a hashbang"
+        );
+    }
+
+    #[test]
+    fn a_decorator_is_e000_naming_the_replacement() {
+        let found = diagnostics("@dec\nclass A {}");
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            (
+                found[0].code,
+                found[0].span.start,
+                found[0].span.end,
+                found[0].message.as_str()
+            ),
+            (
+                Code::E000,
+                Position::new(1, 1),
+                Position::new(1, 2),
+                "decorators are removed; use explicit wrapping functions (SPEC.md §12)"
+            )
+        );
+        assert_eq!(kinds("@dec")[..2], [TokenKind::Error, TokenKind::Ident]);
+    }
+
+    #[test]
+    fn a_slash_after_a_closing_paren_or_bracket_is_division() {
+        assert_eq!(kinds("(a) / 2")[3], punct(Punct::Slash), "after `)`");
+        assert_eq!(kinds("a[0] / 2")[4], punct(Punct::Slash), "after `]`");
+        assert_eq!(
+            kinds("a.#b / 2")[3],
+            punct(Punct::Slash),
+            "after a private name"
+        );
+        let regex = TokenKind::Regex(crate::token::Regex {
+            body: "a".into(),
+            flags: "v".into(),
+            groups: Box::default(),
+        });
+        assert_eq!(kinds("x = /a/v")[2], regex, "after `=`");
+        assert_eq!(kinds("f(/a/v)")[2], regex, "after `(`");
+        assert_eq!(kinds("[/a/v]")[1], regex, "after `[`");
+        assert_eq!(kinds("a, /a/v")[2], regex, "after `,`");
+    }
+
+    #[test]
+    fn a_whole_program_lexes_without_error_tokens() {
+        let text = "export const f = (a, b, ...rest) => {\n  const c = a ** b >>> 1\n  const d = c?.x ?? rest[0]\n  let e = 1\n  e **= 2\n  e >>>= 1\n  e ??= 3\n  return { c, d, e, ...rest }\n}\n";
+        let f = file(text);
+        let (stream, found) = lex(&f);
+        assert!(found.is_empty(), "{found:?}");
+        assert!(stream.tokens.iter().all(|t| t.kind != TokenKind::Error));
+        assert_eq!(stream.print(&f), text);
     }
 }
