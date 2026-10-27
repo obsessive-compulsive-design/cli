@@ -921,7 +921,32 @@ substitution depth 10 000 does not overflow the stack.
 ### Epic 2 · Parser
 
 #### US-020 Syntax tree, spans, trivia attachment and exact printer
-§11.1, §2 · After: US-010, US-009 · Size: M · M0
+§11.1, §2 · After: US-010, US-009 · Size: M · M0 · **Status: complete** (2026-10-27)
+
+> Delivered in `sjs-syntax`: `tree.rs` (`SyntaxTree` as an arena of nodes over the
+> token sequence; `NodeKind::Module` only until the grammar stories; `NodeId`,
+> `TokenId`; `NodeRef` with `kind`, `parent` (`None` for the root), `children` as
+> `Element::{Node, Token}`, `tokens` and `span`; `TokenRef` with `token` and `parent`;
+> `print` sharing `token::print_tokens` with the token stream) and `parser.rs`
+> (`Parser` owning the `Lexer` with one token of lookahead, `start_node`/`bump`/
+> `finish_node`/`finish`, and `parse(&SourceFile)`, which builds "a module is a list of
+> tokens"). The tree is immutable by construction: private fields, `&self` accessors
+> only, and `TreeBuilder` consumed by `finish`; a `compile_fail` doctest assigns through
+> `tree.tokens()` and is rejected, beside a passing doctest of the read API (`cargo test
+> --doc` is already a CI step). A node's span runs from its first token's own text to
+> its last token's end, leading trivia excluded; a node without tokens has the empty
+> span where its next token's text starts (`Eof` guarantees one). Tests: round trip on
+> 2 000 corpus programs, every valid conformance fixture file and random text; token
+> and diagnostic agreement with `lex`; parent links, children, spans of nested and
+> empty nodes, token ownership by the innermost node, and the builder's tolerance of
+> unfinished or empty builds. **Decisions:** the regex hint is handled by re-lexing:
+> the parser lexes every lookahead as division first (which reports nothing) and lexes
+> a `/` or `/=` again as a regex when `peek(true)`/`bump(true)` asks, via a crate-private
+> `Lexer::rewind`; a regex once asked for stays, since division lexing after a regex
+> lex could leave stale diagnostics; `parse()` passes `regex_allowed_after` as the hint
+> until the grammar knows better; a token peeked but never consumed is not part of the
+> tree. Verified: 100% lines and regions, 59 mutants (27 caught, 26 unviable, 6
+> timeouts, 0 missed).
 
 As the formatter and every pass I want an arena-allocated, immutable, lossless tree with a
 printer reproducing the source exactly, so "the AST is never rewritten" (§11) is a

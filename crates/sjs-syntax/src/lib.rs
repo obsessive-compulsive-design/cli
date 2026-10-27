@@ -14,20 +14,24 @@
 //! ride on the token. US-017 distinguishes `/** … */` doc comments from other block
 //! comments and attaches them to the token on the next line (`Token::doc_comment`).
 //! US-018 adds every punctuator by longest match, private names and the rejection of
-//! decorators, which completes the token kinds;
-//! until then every other character is an `Error` token, so the lexer is not yet part of
-//! the pipeline.
+//! decorators, which completes the token kinds. US-020 adds the arena [`tree`] and the
+//! [`parser`] driver: a module is a list of tokens under one root until the grammar
+//! stories add productions.
 
 pub mod lexer;
 mod number;
+pub mod parser;
 pub mod pattern;
 mod regex;
 mod string;
 pub mod token;
+pub mod tree;
 mod unicode_property;
 
 pub use lexer::{lex, regex_allowed_after, Lexer};
+pub use parser::{parse, Parser};
 pub use token::{
     Keyword, Number, Punct, Regex, Template, TemplatePart, Token, TokenKind, TokenStream, Trivia,
     TriviaKind,
 };
+pub use tree::{Element, NodeId, NodeKind, NodeRef, SyntaxTree, TokenId, TokenRef};

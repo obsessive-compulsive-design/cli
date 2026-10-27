@@ -119,6 +119,14 @@ impl<'a> Lexer<'a> {
         self.diagnostics
     }
 
+    /// Moves back to `offset` so the parser can lex a `/` token again as a regex. The
+    /// offset is one the lexer handed out as a trivia or token start, so it is a
+    /// character boundary; only the position moves, since a `/` token changes nothing
+    /// else and reports nothing.
+    pub(crate) fn rewind(&mut self, offset: usize) {
+        self.pos = offset;
+    }
+
     fn peek(&self) -> Option<char> {
         self.text[self.pos..].chars().next()
     }

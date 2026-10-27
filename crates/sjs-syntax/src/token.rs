@@ -494,18 +494,24 @@ pub struct TokenStream {
     pub tokens: Vec<Token>,
 }
 
+/// The source text, reassembled from every token's trivia and text in order.
+#[must_use]
+pub fn print_tokens(tokens: &[Token], file: &SourceFile) -> String {
+    let mut out = String::with_capacity(file.len());
+    for token in tokens {
+        for trivia in &token.leading {
+            out.push_str(file.slice(&trivia.span).unwrap_or(""));
+        }
+        out.push_str(file.slice(&token.span).unwrap_or(""));
+    }
+    out
+}
+
 impl TokenStream {
     /// The source text, reassembled from trivia and tokens.
     #[must_use]
     pub fn print(&self, file: &SourceFile) -> String {
-        let mut out = String::with_capacity(file.len());
-        for token in &self.tokens {
-            for trivia in &token.leading {
-                out.push_str(file.slice(&trivia.span).unwrap_or(""));
-            }
-            out.push_str(file.slice(&token.span).unwrap_or(""));
-        }
-        out
+        print_tokens(&self.tokens, file)
     }
 
     /// The `Eof` token, which every stream ends with.
