@@ -647,7 +647,28 @@ lexes with a "not safely representable" flag for the type system; `3in` is `E000
 (numeric literal followed by an identifier start).
 
 #### US-013 String literals
-§2, S001 · After: US-010 · Size: S · M0
+§2, S001 · After: US-010 · Size: S · M0 · **Status: complete** (2026-10-27)
+
+> Delivered in `sjs-syntax`: `string.rs`, a scanner for `"…"` and `'…'` with every
+> ES2025 escape (`\n \t \r \b \f \v \0 \' \" \\`, `\xHH`, `\uHHHH`, `\u{…}`, line
+> continuations over every terminator, non-escape characters as themselves), cooked into
+> `TokenKind::String(Box<str>)`; the raw text is the span and prints back byte for byte.
+> `'…'` lexes to the same token and is `S001` spanning the literal with the fix
+> `'say "hi"'` → `"say \"hi\""`, `'it\'s'` → `"it's"`: only `\'` and bare `"` change,
+> every other escape stays as written. E000 at the backslash for legacy octal (`\1`,
+> `\01`, `\00`, naming the `\xHH` spelling), `\8`/`\9`, a short `\x`, a malformed `\u`
+> or a code point above 10FFFF, and a lone surrogate; the literal is then one `Error`
+> token. An unterminated literal is E000 at the line end, the token stops there, and the
+> terminator starts the next token's trivia. U+2028/U+2029 are permitted inside; `\0` is
+> permitted when no digit follows. **Decisions:** a surrogate pair written as two escapes
+> (`\uD83D\uDE00`, in either spelling) is one character and a lone surrogate is E000,
+> because the subset's string values are Unicode text (SPEC.md §3.1 iterates code
+> points) and a `String` cannot hold half a pair; a malformed single-quoted literal
+> reports its E000s only, not S001; the `S001` conformance fixtures move to US-018,
+> which wires the lexer into the pipeline (`codes.txt` updated, US-018 text extended),
+> since the US-010 decision keeps the lexer out of the pipeline until every token kind
+> exists. Verified: 100% lines and regions, 153 mutants (123 caught, 12 unviable, 18
+> timeouts, 0 missed).
 
 **Done when**
 - `"a\n\t\"\\A\u{1F600}\x41"` yields the cooked value; raw text is kept.
@@ -738,7 +759,10 @@ trailing newline.
 - `?.` followed by a decimal digit lexes as `?` then `.5`.
 
 **Tests.** Table over every punctuator; longest-match pairs. Edge: `a?.5:1` is a ternary;
-`#a` is a private name and `# a` is an error; `@` is `E000` naming decorators.
+`#a` is a private name and `# a` is an error; `@` is `E000` naming decorators. This story
+also wires the lexer into the pipeline (the US-010 decision) and therefore owns the
+conformance fixtures for `S001` (moved here from US-013, whose lexer cannot yet be run
+through the pipeline).
 
 #### US-019 Lexer fuzzing and error recovery
 §0.2 · After: US-011 … US-018 · Size: S · M0

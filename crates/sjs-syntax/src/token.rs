@@ -199,8 +199,8 @@ impl PartialEq for Number {
 
 impl Eq for Number {}
 
-/// What a token is. US-011 adds words and US-012 numbers; US-013 to US-018 add strings,
-/// templates, regexes and punctuators.
+/// What a token is. US-011 adds words, US-012 numbers and US-013 strings; US-014 to
+/// US-018 add templates, regexes and punctuators.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     /// `[A-Za-z_][A-Za-z0-9_]*` that is not a keyword; contextual words (`of`, `get`,
@@ -216,6 +216,9 @@ pub enum TokenKind {
     Number(Number),
     /// A `bigint` literal (`n` suffix): its decimal digits, no sign, no leading zeros.
     BigInt(Box<str>),
+    /// A string literal, cooked: escapes decoded, line continuations removed. The raw
+    /// text is the span. A `'…'` literal is this kind too, reported as S001.
+    String(Box<str>),
     /// A character the lexer does not accept; reported as E000, lexing continues.
     Error,
     /// The end of the file; carries the trailing trivia.

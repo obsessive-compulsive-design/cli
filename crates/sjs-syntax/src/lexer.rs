@@ -4,6 +4,7 @@
 use sjs_diag::{Code, Diagnostic, Diagnostics, LineTerminator, Position, SourceFile, Span};
 
 use crate::number;
+use crate::string;
 use crate::token::{Keyword, Token, TokenKind, TokenStream, Trivia, TriviaKind};
 
 /// Lexes a whole file. Never fails: every byte is covered by exactly one trivia run or
@@ -99,6 +100,7 @@ impl Lexer<'_> {
             Some(ch) if ch == '_' || ch.is_ascii_alphabetic() => self.word(start),
             Some(ch) if ch.is_ascii_digit() => self.number(start),
             Some('.') if self.peek().is_some_and(|c| c.is_ascii_digit()) => self.number(start),
+            Some('"' | '\'') => self.string(start),
             Some('$') => self.error(start, "`$` is not permitted in identifiers"),
             Some('\\') if self.peek() == Some('u') => self.unicode_escape(start),
             Some('#') if self.peek() == Some('!') => self.hashbang(start),
@@ -179,6 +181,46 @@ impl Lexer<'_> {
                 TokenKind::Error
             }
         }
+    }
+
+    /// A string literal (`string.rs`). Bad escapes make it one error token with an E000
+    /// per escape; an unterminated one is E000 at the line end and the terminator starts
+    /// the next token's trivia. A `'…'` literal is S001 with its double-quoted spelling.
+    fn string(&mut self, start: usize) -> TokenKind {
+        let literal = string::scan(self.text, start);
+        self.pos = literal.end;
+        let malformed = !literal.problems.is_empty();
+        for problem in literal.problems {
+            self.report(Code::E000, problem.start, problem.end, problem.message);
+        }
+        if !literal.terminated {
+            let quote = &self.text[start..=start];
+            self.report(
+                Code::E000,
+                literal.end,
+                literal.end,
+                format!(
+                    "unterminated string literal: expected `{quote}` before the end of the line"
+                ),
+            );
+            return TokenKind::Error;
+        }
+        if malformed {
+            return TokenKind::Error;
+        }
+        if self.text.as_bytes()[start] == b'\'' {
+            let raw = &self.text[start..literal.end];
+            let span = self.span(start, literal.end);
+            let finding = Diagnostic::new(
+                Code::S001,
+                self.file.path(),
+                span,
+                "single-quoted string: strings are written with double quotes",
+            )
+            .with_fix(raw, string::double_quoted(raw));
+            self.diagnostics.extend(finding.ok());
+        }
+        TokenKind::String(literal.cooked.into_boxed_str())
     }
 
     /// `\uXXXX` or `\u{…}`: one error token for the whole escape.
@@ -1350,5 +1392,237 @@ mod number_tests {
             Ok(())
         })
         .expect("every integer lexes to its value");
+    }
+}
+
+#[cfg(test)]
+mod string_tests {
+    use super::lex;
+    use crate::token::TokenKind;
+    use sjs_diag::{Code, Diagnostic, Position, SourceFile};
+    use sjs_testkit::prop::{check_with, Config, Text};
+
+    fn file(text: &str) -> SourceFile {
+        SourceFile::new("a.js", text.as_bytes().to_vec()).expect("valid UTF-8")
+    }
+
+    fn kinds(text: &str) -> Vec<TokenKind> {
+        lex(&file(text))
+            .0
+            .tokens
+            .iter()
+            .map(|t| t.kind.clone())
+            .collect()
+    }
+
+    fn diagnostics(text: &str) -> Vec<Diagnostic> {
+        lex(&file(text)).1.iter().cloned().collect()
+    }
+
+    fn string(cooked: &str) -> TokenKind {
+        TokenKind::String(cooked.into())
+    }
+
+    #[test]
+    fn double_quoted_strings_are_one_token_with_their_cooked_value() {
+        let text = r#""a\n\t\"\\A\u{1F600}\x41" "" "é\u{2028}x""#;
+        let (stream, diagnostics) = lex(&file(text));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let tokens: Vec<(TokenKind, usize, usize)> = stream
+            .tokens
+            .iter()
+            .map(|t| (t.kind.clone(), t.span.byte_start, t.span.byte_end))
+            .collect();
+        assert_eq!(
+            tokens,
+            [
+                (string("a\n\t\"\\A\u{1F600}A"), 0, 25),
+                (string(""), 26, 28),
+                (string("é\u{2028}x"), 29, 42),
+                (TokenKind::Eof, 42, 42),
+            ]
+        );
+        assert_eq!(stream.print(&file(text)), text, "the raw text is kept");
+        assert_eq!(kinds(r#""\0""#), [string("\0"), TokenKind::Eof]);
+        assert_eq!(
+            kinds("\"a\\\nb\""),
+            [string("ab"), TokenKind::Eof],
+            "a continuation"
+        );
+        assert!(
+            !lex(&file("\"a\\\nb\" c")).0.tokens[1].has_newline_before,
+            "a continuation inside a string is not a line break between tokens"
+        );
+    }
+
+    #[test]
+    fn single_quoted_strings_are_s001_with_the_double_quoted_replacement() {
+        let cases = [
+            ("'a'", "\"a\"", "a"),
+            (r#"'say "hi"'"#, r#""say \"hi\"""#, "say \"hi\""),
+            (r"'it\'s'", r#""it's""#, "it's"),
+            (r#"'a\'b"c'"#, r#""a'b\"c""#, "a'b\"c"),
+            ("''", "\"\"", ""),
+            (r"'\n'", r#""\n""#, "\n"),
+        ];
+        for (raw, replacement, cooked) in cases {
+            let text = format!("x {raw}");
+            let (stream, found) = lex(&file(&text));
+            assert_eq!(stream.tokens[1].kind, string(cooked), "{raw}");
+            let found: Vec<&Diagnostic> = found.iter().collect();
+            assert_eq!(found.len(), 1, "{raw}: {found:?}");
+            let d = found[0];
+            assert_eq!(d.code, Code::S001, "{raw}");
+            assert_eq!(
+                (d.span.byte_start, d.span.byte_end, d.span.start, d.span.end),
+                (
+                    2,
+                    text.len(),
+                    Position::new(1, 3),
+                    Position::new(1, u32::try_from(text.len()).expect("small") + 1)
+                ),
+                "{raw}: the finding spans the whole literal"
+            );
+            assert_eq!(
+                (d.current.as_deref(), d.replacement.as_deref()),
+                (Some(raw), Some(replacement)),
+                "{raw}"
+            );
+            assert_eq!(
+                d.message,
+                "single-quoted string: strings are written with double quotes"
+            );
+        }
+        assert_eq!(diagnostics("'a' 'b'").len(), 2, "one finding per literal");
+    }
+
+    #[test]
+    fn bad_escapes_make_an_error_token_with_an_e000_per_escape() {
+        for text in [
+            r#""\1""#,
+            r#""\01""#,
+            r#""\8""#,
+            r#""\9""#,
+            r#""\u{110000}""#,
+            r#""\x4""#,
+        ] {
+            let (stream, found) = lex(&file(text));
+            assert_eq!(stream.tokens[0].kind, TokenKind::Error, "{text}");
+            assert_eq!(
+                (stream.tokens[0].span.byte_end, stream.tokens.len()),
+                (text.len(), 2),
+                "{text}: the whole literal is one token"
+            );
+            let found: Vec<&Diagnostic> = found.iter().collect();
+            assert_eq!(found.len(), 1, "{text}");
+            assert_eq!(
+                (found[0].code, found[0].span.start),
+                (Code::E000, Position::new(1, 2)),
+                "{text}"
+            );
+        }
+        let found = diagnostics(r#""\1\8""#);
+        assert_eq!(found.len(), 2);
+        assert_eq!(
+            found
+                .iter()
+                .map(|d| d.span.start.column)
+                .collect::<Vec<_>>(),
+            [2, 4]
+        );
+        let found = diagnostics(r"'\1'");
+        assert_eq!(
+            found.len(),
+            1,
+            "a malformed single-quoted literal is E000 only"
+        );
+        assert_eq!(found[0].code, Code::E000);
+        assert_eq!(kinds(r"'\1'"), [TokenKind::Error, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn an_unterminated_string_is_e000_at_the_line_end_and_lexing_resumes() {
+        let text = "\"abc\nconst";
+        let (stream, found) = lex(&file(text));
+        let tokens: Vec<(TokenKind, usize, usize, bool)> = stream
+            .tokens
+            .iter()
+            .map(|t| {
+                (
+                    t.kind.clone(),
+                    t.span.byte_start,
+                    t.span.byte_end,
+                    t.has_newline_before,
+                )
+            })
+            .collect();
+        assert_eq!(
+            tokens,
+            [
+                (TokenKind::Error, 0, 4, false),
+                (
+                    TokenKind::Keyword(crate::token::Keyword::Const),
+                    5,
+                    10,
+                    true
+                ),
+                (TokenKind::Eof, 10, 10, false),
+            ]
+        );
+        let found: Vec<&Diagnostic> = found.iter().collect();
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            (
+                found[0].code,
+                found[0].span.start,
+                found[0].span.end,
+                found[0].message.as_str()
+            ),
+            (
+                Code::E000,
+                Position::new(1, 5),
+                Position::new(1, 5),
+                "unterminated string literal: expected `\"` before the end of the line"
+            )
+        );
+        assert_eq!(stream.print(&file(text)), text);
+        for (text, column) in [
+            ("\"abc", 5),
+            ("'abc", 5),
+            ("\"abc\r\nx", 5),
+            ("x \"", 4),
+            ("\"a\\", 4),
+        ] {
+            let found = diagnostics(text);
+            assert_eq!(found.len(), 1, "{text:?}");
+            assert_eq!(found[0].span.start.column, column, "{text:?}");
+        }
+        assert_eq!(
+            diagnostics("'abc")[0].message,
+            "unterminated string literal: expected `'` before the end of the line"
+        );
+        let found = diagnostics("\"\\1\n");
+        assert_eq!(
+            found.len(),
+            2,
+            "a bad escape and the missing quote are both reported"
+        );
+    }
+
+    #[test]
+    fn random_quote_free_text_cooks_to_itself() {
+        let gen = Text {
+            alphabet: &[
+                'a', ' ', '\t', '\u{2028}', '\u{2029}', 'é', '😀', '/', '*', '\'',
+            ],
+            max_len: 24,
+        };
+        check_with(&Config::new(200), &gen, &|body: &String| {
+            let text = format!("\"{body}\"");
+            assert_eq!(kinds(&text), [string(body), TokenKind::Eof], "{text:?}");
+            assert!(diagnostics(&text).is_empty(), "{text:?}");
+            Ok(())
+        })
+        .expect("every quote-free body is its own value");
     }
 }
