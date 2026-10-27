@@ -500,7 +500,28 @@ the fuzz loop respects its time budget within 10 %; `process` on a missing binar
 typed error, not a panic.
 
 #### US-009 Program generator for the §2 grammar
-§11.2 M0 · After: US-008 · Size: M · M0
+§11.2 M0 · After: US-008 · Size: M · M0 · **Status: complete** (2026-10-26)
+
+> Delivered in `sjs_testkit::program`: a small syntax tree (`Program`, `Item`, `Decl`,
+> `Member`, `Stmt`, `Expr`, patterns, params), a renderer in the canonical layout with
+> precedence-exact parentheses (`??` guarded beside `||`/`&&`, `**` right-associative
+> with unary operands parenthesised, object-literal arrow bodies wrapped), `ProgramGen`
+> implementing `Gen` with statement-level shrinking (drop any item, statement, member,
+> case, `else`, `catch` or `finally`), `Options` (`max_depth`, `max_items`, `doubles`),
+> and a `Production` enum of 148 productions recorded during generation; a context tracks
+> function/async/generator/loop/switch/class/derived-constructor so `yield`, `await`,
+> `break`, `return`, `this` and `super` appear only where the grammar allows, expression
+> statements never start with an ASI-hazard token, every body is braced, every regex
+> carries `v`, numbers are `int32` unless doubles are requested, and identifiers come
+> from a pool disjoint from `RESERVED` (keywords plus every §6 global). Tests: a snapshot
+> of one tree using every construct, a precedence table, production coverage over 600
+> programs, determinism, a removed-syntax scanner over 400 programs, reserved-name and
+> numeric checks, shrinking to a one-item program. **Decisions:** the 10 000-program corpus
+> is reproduced from seeds 0..10 000 with default options and pinned by a committed
+> manifest of per-program FNV-1a hashes (`tests/snapshots/program-corpus-manifest.snap`)
+> rather than a 10 MB tarball, since the generator is deterministic on every platform;
+> template substitutions are member/call chains (no nested templates); a classic `for`
+> test is always `var < simple`; programs are grammatically valid but not type-correct.
 
 As the parser and formatter stories I want a generator (on `sjs-testkit::prop`) producing
 random Strict JS programs covering every production in §2, so round-trip and idempotence

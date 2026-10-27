@@ -1,0 +1,165 @@
+import { alpha, beta as gamma } from "./util.js"
+
+import * as shapes from "./shapes/circle.js"
+
+import config from "./config.json" with { type: "json" }
+
+export const { alpha, beta: [gamma = 1, ...rest], delta = item, ...others } = { alpha, beta: 2, "a \"key\"": "line\nbreak\t\\", ["k"]: true, ...delta }
+
+export { alpha, beta as gamma }
+
+export { delta } from "../lib/parse.js"
+
+let count = undefined
+
+async function* walk(left, right = false, ...more) {
+  yield
+  yield left
+  yield* await right
+  return left ?? right ? 1 : 2
+}
+
+class Widget extends shapes.Shape {
+  constructor(width) {
+    super(width)
+    this.width = width
+  }
+  static total = 0
+  #secret
+  static async *[Symbol.asyncIterator]() {
+    super.render()
+  }
+  #hidden() {
+  }
+  get area() {
+    return this.width
+  }
+  static set area(value) {
+  }
+  static {
+    Widget.total += 1
+  }
+}
+
+{
+  const inner = 3
+}
+
+if (alpha === null) {
+  throw new Error("empty")
+} else if (alpha !== 0) {
+  alpha?.()
+} else {
+  console.log(alpha)
+}
+
+for await (let [key, value] of Object.entries(shape)) {
+  continue
+}
+
+for (let index = 0; index < items.length; index += 1) {
+  break
+}
+
+for (let i = 9; i > 0; i -= 1) {
+}
+
+for (let j = 0; j < 2; j++) {
+}
+
+for (let k = 2; k > 0; k--) {
+}
+
+for (let m = 0; m <= 2; ++m) {
+}
+
+for (let n = 2; n >= 0; --n) {
+}
+
+while (!done) {
+  done ??= true
+}
+
+switch (token) {
+  case "a":
+  case "b":
+  {
+    break
+  }
+  case 1n:
+  {
+    return
+  }
+  default:
+  {
+    fallback()
+  }
+}
+
+try {
+  risky()
+}
+catch (error) {
+  throw error
+}
+finally {
+  cleanup()
+}
+
+try {
+}
+catch {
+}
+
+try {
+}
+finally {
+}
+
+total **= (-2) ** 3 ** 2
+
+total *= (1 + 2) * (3 - 4)
+
+total /= 8 / 2 % 3
+
+total -= a << 1 >>> (b >> 2)
+
+total %= (a | b) & (c ^ d)
+
+flag = (a || b) ?? (c && (d ?? e))
+
+flag = a instanceof Widget && typeof b === "string"
+
+bits = ~+(5)
+
+list = [1, ...rest, () => 0]
+
+empty = {}
+
+make = async (x) => ({ x })
+
+run = () => {
+  return (() => 1)()
+}
+
+text = `n=${a + 1} done`
+
+raw = String.raw`\d+`
+
+re = /a+b/gv.test(text)
+
+shape = new shapes.Circle(1, 2)
+
+lazy = import("./util.js")
+
+deep = a?.b?.[0][key]
+
+called = (await promise).then?.(alpha)
+
+neg = (-a) ** -b
+
+cond = (x = 1) ? y ? 2 : 3 : () => 4
+
+sum = 1 - 2 - (3 - 4)
+
+a.b.c(z += 1)

@@ -8,6 +8,7 @@
 //! - [`process`]: run a program and capture what it did.
 //! - [`fs`]: a throwaway directory.
 //! - [`conformance`]: the fixture format of STORIES.md §0.3.
+//! - [`program`]: random Strict JS programs over the §2 grammar, with shrinking.
 
 pub mod bench;
 pub mod conformance;
@@ -15,5 +16,6 @@ pub mod fs;
 pub mod fuzz;
 pub mod prng;
 pub mod process;
+pub mod program;
 pub mod prop;
 pub mod snapshot;
