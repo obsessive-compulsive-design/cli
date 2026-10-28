@@ -965,7 +965,34 @@ module is a list of tokens".
 the union of its tokens' spans excluding leading trivia; parent of root is `None`.
 
 #### US-021 Import declarations
-§2, §5.1 · After: US-020 · Size: M · M0
+§2, §5.1 · After: US-020 · Size: M · M0 · **Status: complete** (2026-10-27)
+
+> Delivered in `sjs-syntax`: `parser/imports.rs` parses `import { a, b as c } from
+> "./x.js"` (trailing comma permitted), `import * as ns from "../y.js"` and `import cfg
+> from "./c.json" with { type: "json" }` into `ImportDecl` nodes holding `NamedImports`
+> / `ImportSpecifier`, `NamespaceImport`, `DefaultImport` and `ImportAttributes`; the
+> driver (`parser/mod.rs`) parses the import section first, then the items (still a
+> token list), where an import declaration is E000 and parsed anyway, while `import(`
+> and `a.import` are not declarations. Every removed form is E000 once at the offending
+> token: default import of a `.js` module, side-effect import, `import x, { y }`,
+> `import { default as x }`, `import {}`, a named or namespace import of a `.json`
+> module, and every malformed `with` clause (a key other than `type`, a value other
+> than the string `json` including `"JSON"`, a duplicate key, an empty clause). Path
+> rules: E201 on the string for anything not starting with `./` or `../`, containing
+> `\` or an empty segment, or whose last segment has an extension other than `.js` or
+> `.json` (`.mjs`, `.ts`, none); `"./a.js/"`, `"./"` and `"././a.js"` pass to US-060;
+> E205 for `.js` with a `with` clause or `.json` without one. The parser gained a second
+> token of lookahead (always lexed as division), `text`, `at_word`, `eat`, `error` and
+> `report`; `SyntaxTree::to_sexp` renders a tree for tests. The parser is now the
+> pipeline's pass, so fixtures under `tests/conformance/05-modules/` cover E201 (nine
+> cases plus a near-miss file), E205 (two) and the E000 forms (seven). **Decisions:**
+> `with` is no longer reported by the lexer, since it is the import-attributes keyword;
+> the parser will report `WithStatement`. A syntax error ends the declaration at the
+> offending token, reported once, and the rest of the line flows into the items. A
+> foreign path reports E201 only; a default import of a `.js` path reports E000 only.
+> `import * as from "./x.js"` binds the namespace `from`, as in ES2025. Extensions are
+> compared exactly, since the path names a file as it is on disk. Verified: 100% lines
+> and regions, 92 mutants (80 caught, 8 unviable, 4 timeouts, 0 missed).
 
 As a programmer I want `import { a, b as c } from "./x.js"`, `import * as ns from
 "../y.js"` and `import cfg from "./c.json" with { type: "json" }` parsed, with every other

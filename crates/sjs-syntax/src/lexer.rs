@@ -239,8 +239,10 @@ impl<'a> Lexer<'a> {
             _ => match Keyword::from_word(word) {
                 None => TokenKind::Ident,
                 Some(keyword) => {
+                    // `with` has one permitted use, the import-attributes keyword, so the
+                    // parser reports `WithStatement`; the other removed words have none.
                     if let Some(replacement) = keyword.removed_replacement() {
-                        if !self.after_dot {
+                        if !self.after_dot && keyword != Keyword::With {
                             self.report(
                                 Code::E000,
                                 start,
@@ -1042,10 +1044,6 @@ mod word_tests {
     fn removed_words_are_e000_naming_the_replacement() {
         let expected = [
             ("var", "`var` is removed; use `const` or `let`"),
-            (
-                "with",
-                "`with` is removed; use nothing: there is no dynamic scope",
-            ),
             ("void", "`void` is removed; use `undefined`"),
             (
                 "delete",
@@ -1099,6 +1097,20 @@ mod word_tests {
             ]
         );
         assert_eq!(Keyword::Const.removed_replacement(), None);
+        assert_eq!(
+            kinds("with"),
+            [TokenKind::Keyword(Keyword::With), TokenKind::Eof],
+            "`with` is a keyword token"
+        );
+        assert!(
+            messages("with").is_empty(),
+            "but the lexer does not report it: it is the import-attributes keyword, and the parser reports a `with` statement"
+        );
+        assert_eq!(
+            Keyword::With.removed_replacement(),
+            Some("nothing: there is no dynamic scope"),
+            "the parser's message still names the replacement"
+        );
         let (_, diagnostics) = lex(&file("var a in b"));
         assert_eq!(diagnostics.len(), 2);
     }

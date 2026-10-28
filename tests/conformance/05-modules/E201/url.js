@@ -1,0 +1,2 @@
+// expect: E201 foreign-import @2:19
+import { a } from "https://example.com/a.js"

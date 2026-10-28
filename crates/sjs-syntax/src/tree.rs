@@ -26,15 +26,29 @@
 //! assert!(tree.root().parent().is_none());
 //! ```
 
+use std::fmt::Write as _;
+
 use sjs_diag::{SourceFile, Span};
 
 use crate::token::{print_tokens, Token};
 
-/// What a node is. US-020 knows only the module; the grammar stories add the rest.
+/// What a node is; the grammar stories add kinds as they land.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NodeKind {
     /// The root: a whole file, `Eof` included.
     Module,
+    /// `import … from "…"` with its optional attributes (US-021).
+    ImportDecl,
+    /// `{ a, b as c }` of an import.
+    NamedImports,
+    /// `a` or `a as b` inside `NamedImports`.
+    ImportSpecifier,
+    /// `* as ns`.
+    NamespaceImport,
+    /// The bound name of `import cfg from "./c.json" …`.
+    DefaultImport,
+    /// `with { type: "json" }`.
+    ImportAttributes,
 }
 
 /// A node's index in the arena; `NodeId(0)` is the root.
@@ -115,6 +129,15 @@ impl SyntaxTree {
     #[must_use]
     pub fn print(&self, file: &SourceFile) -> String {
         print_tokens(&self.tokens, file)
+    }
+
+    /// The tree as nested parentheses: each node as `(Kind child …)` and each token as
+    /// its text, trivia dropped. For tests and debugging.
+    #[must_use]
+    pub fn to_sexp(&self, file: &SourceFile) -> String {
+        let mut out = String::new();
+        self.root().write_sexp(file, &mut out);
+        out
     }
 
     fn data(&self, id: NodeId) -> &NodeData {
@@ -233,6 +256,24 @@ impl<'t> NodeRef<'t> {
             next.span.byte_start,
             next.span.byte_start,
         )
+    }
+}
+
+impl NodeRef<'_> {
+    fn write_sexp(self, file: &SourceFile, out: &mut String) {
+        out.push('(');
+        let _ = write!(out, "{:?}", self.kind());
+        for child in self.children() {
+            out.push(' ');
+            match child {
+                Element::Node(node) => node.write_sexp(file, out),
+                Element::Token(token) => {
+                    let text = file.slice(&token.token().span).unwrap_or("");
+                    out.push_str(if text.is_empty() { "<eof>" } else { text });
+                }
+            }
+        }
+        out.push(')');
     }
 }
 
@@ -524,6 +565,12 @@ mod tests {
         assert_eq!(tree.token(TokenId(2)).token().kind, TokenKind::Ident);
         let b = as_token(tree.root().children().nth(1)).expect("second child is a token");
         assert_eq!(b.id(), TokenId(1));
+    }
+
+    #[test]
+    fn the_sexp_rendering_shows_nodes_and_token_text() {
+        let (f, tree) = nested("a b  c");
+        assert_eq!(tree.to_sexp(&f), "(Module (Module a) b (Module) c <eof>)");
     }
 
     #[test]

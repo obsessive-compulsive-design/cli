@@ -1,16 +1,19 @@
-//! The parser driver (SPEC.md §11.1): owns the lexer, pulls one token at a time with the
-//! regex-allowed hint (US-015) and builds the [`SyntaxTree`]. US-020 knows no grammar: a
-//! module is a list of tokens. The grammar stories add the productions.
+//! The parser driver (SPEC.md §11.1): owns the lexer, pulls tokens with the
+//! regex-allowed hint (US-015) and builds the [`SyntaxTree`]. A module is its import
+//! declarations (US-021, `imports.rs`) followed by its items, which stay a list of
+//! tokens until the grammar stories add their productions.
 //!
 //! A `/` is lexed as a division until the grammar asks for an expression there; then
 //! the lookahead is lexed again as a regex literal. Division lexing never reports
 //! anything, so re-lexing leaves no stale diagnostic. The reverse never happens: once a
 //! regex has been asked for, it stays.
 
-use sjs_diag::{Diagnostics, SourceFile};
+mod imports;
+
+use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
 
 use crate::lexer::{regex_allowed_after, Lexer};
-use crate::token::{Punct, Token, TokenKind};
+use crate::token::{Keyword, Punct, Token, TokenKind};
 use crate::tree::{NodeId, NodeKind, SyntaxTree, TokenId, TreeBuilder};
 
 /// Parses a whole file into its tree and diagnostics. Never fails.
@@ -18,24 +21,50 @@ use crate::tree::{NodeId, NodeKind, SyntaxTree, TokenId, TreeBuilder};
 pub fn parse(file: &SourceFile) -> (SyntaxTree, Diagnostics) {
     let mut parser = Parser::new(file);
     parser.start_node(NodeKind::Module);
-    let mut previous = TokenKind::Eof;
-    loop {
-        let regex_allowed = regex_allowed_after(&previous);
-        let token = parser.bump(regex_allowed);
-        if token.kind == TokenKind::Eof {
-            break;
-        }
-        previous = token.kind.clone();
-    }
+    imports::import_section(&mut parser);
+    items(&mut parser);
     parser.finish_node();
     parser.finish()
 }
 
-/// One token of lookahead over the lexer, feeding a [`TreeBuilder`].
+/// The module items after the imports: a list of tokens until the grammar stories land,
+/// in which an import declaration is E000 (SPEC.md §2: imports come first) and is then
+/// parsed anyway so the tree still records it. `import(` is a dynamic import, an
+/// expression, and `a.import` a property name: neither is a declaration.
+fn items(parser: &mut Parser<'_>) {
+    let mut previous = TokenKind::Eof;
+    loop {
+        let regex_allowed = regex_allowed_after(&previous);
+        let kind = parser.peek(regex_allowed).kind.clone();
+        if kind == TokenKind::Eof {
+            parser.bump(false);
+            return;
+        }
+        if kind == TokenKind::Keyword(Keyword::Import)
+            && !matches!(previous, TokenKind::Punct(Punct::Dot | Punct::QuestionDot))
+            && parser.peek_second().kind != TokenKind::Punct(Punct::LParen)
+        {
+            let span = parser.peek(false).span;
+            parser.error(
+                span,
+                "an import must precede every other module item (SPEC.md §2 `Module`)",
+            );
+            imports::import_decl(parser);
+            previous = TokenKind::Eof;
+            continue;
+        }
+        parser.bump(regex_allowed);
+        previous = kind;
+    }
+}
+
+/// Up to two tokens of lookahead over the lexer, feeding a [`TreeBuilder`].
 pub struct Parser<'a> {
+    file: &'a SourceFile,
     lexer: Lexer<'a>,
     builder: TreeBuilder,
-    lookahead: Option<Token>,
+    lookahead: Vec<Token>,
+    diagnostics: Diagnostics,
 }
 
 impl<'a> Parser<'a> {
@@ -43,43 +72,92 @@ impl<'a> Parser<'a> {
     #[must_use]
     pub fn new(file: &'a SourceFile) -> Self {
         Parser {
+            file,
             lexer: Lexer::new(file),
             builder: TreeBuilder::new(),
-            lookahead: None,
+            lookahead: Vec::new(),
+            diagnostics: Diagnostics::new(),
         }
     }
 
     /// The next token without consuming it. With `regex_allowed`, a `/` or `/=` there
     /// is lexed again as a regex literal.
     pub fn peek(&mut self, regex_allowed: bool) -> &Token {
-        let token = self.next(regex_allowed);
-        self.lookahead.insert(token)
+        self.fill(1);
+        if regex_allowed
+            && matches!(
+                self.lookahead[0].kind,
+                TokenKind::Punct(Punct::Slash | Punct::SlashEq)
+            )
+        {
+            let token = &self.lookahead[0];
+            let start = token
+                .leading
+                .first()
+                .map_or(token.span.byte_start, |trivia| trivia.span.byte_start);
+            self.lexer.rewind(start);
+            self.lookahead.clear();
+            let regex = self.lexer.next_token(true);
+            self.lookahead.push(regex);
+        }
+        &self.lookahead[0]
+    }
+
+    /// The token after the next one, always lexed as division: it only ever decides
+    /// between forms, never starts an expression.
+    pub fn peek_second(&mut self) -> &Token {
+        self.fill(2);
+        &self.lookahead[1]
     }
 
     /// Consumes the next token into the innermost open node and returns it.
     pub fn bump(&mut self, regex_allowed: bool) -> &Token {
-        let token = self.next(regex_allowed);
+        self.peek(regex_allowed);
+        // `peek` filled the lookahead, so the front exists.
+        let token = self.lookahead.remove(0);
         let id = self.builder.token(token);
         self.token(id)
     }
 
-    /// The next token, taken out of the lookahead or lexed, re-lexed as a regex when
-    /// asked and it is a `/` or `/=`.
-    fn next(&mut self, regex_allowed: bool) -> Token {
-        let token = self
-            .lookahead
-            .take()
-            .unwrap_or_else(|| self.lexer.next_token(false));
-        if !regex_allowed || !matches!(token.kind, TokenKind::Punct(Punct::Slash | Punct::SlashEq))
-        {
-            return token;
+    fn fill(&mut self, count: usize) {
+        while self.lookahead.len() < count {
+            let token = self.lexer.next_token(false);
+            self.lookahead.push(token);
         }
-        let start = token
-            .leading
-            .first()
-            .map_or(token.span.byte_start, |trivia| trivia.span.byte_start);
-        self.lexer.rewind(start);
-        self.lexer.next_token(true)
+    }
+
+    /// The source text of a token.
+    #[must_use]
+    pub fn text(&self, token: &Token) -> &'a str {
+        self.file.slice(&token.span).unwrap_or("")
+    }
+
+    /// True when the next token is the identifier `word` (a contextual keyword).
+    pub fn at_word(&mut self, word: &str) -> bool {
+        let token = self.peek(false);
+        let (is_ident, span) = (token.kind == TokenKind::Ident, token.span);
+        is_ident && self.file.slice(&span) == Some(word)
+    }
+
+    /// Consumes the next token when it is `kind`.
+    pub fn eat(&mut self, kind: &TokenKind) -> bool {
+        if &self.peek(false).kind == kind {
+            self.bump(false);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// E000 at `span`.
+    pub fn error(&mut self, span: Span, message: impl Into<String>) {
+        self.report(Code::E000, span, message);
+    }
+
+    /// A diagnostic at `span`.
+    pub fn report(&mut self, code: Code, span: Span, message: impl Into<String>) {
+        self.diagnostics
+            .push(Diagnostic::new(code, self.file.path(), span, message));
     }
 
     /// Opens a node.
@@ -96,7 +174,9 @@ impl<'a> Parser<'a> {
     /// consumed is not part of the tree.
     #[must_use]
     pub fn finish(self) -> (SyntaxTree, Diagnostics) {
-        (self.builder.finish(), self.lexer.finish())
+        let mut diagnostics = self.lexer.finish();
+        diagnostics.extend(self.diagnostics.iter().cloned());
+        (self.builder.finish(), diagnostics)
     }
 
     fn token(&self, id: TokenId) -> &Token {
@@ -110,7 +190,7 @@ mod tests {
     use crate::lex;
     use crate::token::{Punct, Regex, TokenKind};
     use crate::tree::{Element, NodeKind, TokenRef};
-    use sjs_diag::SourceFile;
+    use sjs_diag::{Diagnostics, SourceFile};
     use sjs_testkit::conformance::discover;
     use sjs_testkit::prng::Rng;
     use sjs_testkit::program::{Options, ProgramGen};
@@ -121,26 +201,43 @@ mod tests {
         SourceFile::new("a.js", text.as_bytes().to_vec()).expect("valid UTF-8")
     }
 
-    /// The tree is the token list under one `Module`, prints back to the source, and
-    /// agrees with `lex` token for token and diagnostic for diagnostic.
-    fn check(f: &SourceFile) {
+    /// The tree prints back to the source and agrees with `lex` token for token; its
+    /// root is a `Module` without a parent whose tokens are every token, `Eof` last.
+    /// Returns the parser's diagnostics for the caller to compare with the lexer's.
+    fn check(f: &SourceFile) -> (Diagnostics, Diagnostics) {
         let (tree, diagnostics) = parse(f);
         let (stream, lexed) = lex(f);
         assert_eq!(tree.print(f), f.text());
         assert_eq!(tree.tokens(), &stream.tokens[..]);
-        assert_eq!(diagnostics, lexed);
         let root = tree.root();
         assert_eq!(root.kind(), NodeKind::Module);
         assert!(root.parent().is_none());
-        assert_eq!(tree.node_count(), 1);
         assert_eq!(root.tokens().len(), stream.tokens.len());
-        assert_eq!(root.children().count(), stream.tokens.len());
         assert_eq!(root.span().byte_end, f.len());
-        for (index, child) in root.children().enumerate() {
-            let token = as_token(child).expect("a module is a list of tokens");
-            assert_eq!(token.parent().id(), root.id());
-            assert_eq!(token.token(), &stream.tokens[index]);
+        let last = root.children().last().expect("Eof");
+        let eof = as_token(last).expect("the last child is the Eof token");
+        assert_eq!(eof.token().kind, TokenKind::Eof);
+        assert_eq!(eof.parent().id(), root.id());
+        for lexed_diagnostic in lexed.iter() {
+            assert!(
+                diagnostics.iter().any(|d| d == lexed_diagnostic),
+                "the parser keeps every lexer diagnostic: {lexed_diagnostic:?}"
+            );
         }
+        (diagnostics, lexed)
+    }
+
+    /// `check`, for text without imports: one node, every child a token, and no
+    /// diagnostic beyond the lexer's.
+    fn check_flat(f: &SourceFile) {
+        let (diagnostics, lexed) = check(f);
+        assert_eq!(diagnostics, lexed);
+        let (tree, _) = parse(f);
+        assert_eq!(tree.node_count(), 1);
+        assert!(tree
+            .root()
+            .children()
+            .all(|child| as_token(child).is_some()));
     }
 
     fn as_token(child: Element<'_>) -> Option<TokenRef<'_>> {
@@ -197,7 +294,7 @@ mod tests {
             "\"\u{FEFF}\"",
             "@ $ \\u",
         ] {
-            check(&file(text));
+            check_flat(&file(text));
         }
     }
 
@@ -212,7 +309,11 @@ mod tests {
         };
         for seed in 0..2000u64 {
             let text = gen.generate(&mut Rng::from_seed(seed)).to_string();
-            check(&file(&text));
+            let (diagnostics, lexed) = check(&file(&text));
+            assert_eq!(
+                diagnostics, lexed,
+                "seed {seed}: a generated program parses clean"
+            );
         }
     }
 
@@ -244,7 +345,7 @@ mod tests {
             max_len: 32,
         };
         check_with(&Config::new(400), &gen, &|text: &String| {
-            check(&file(text));
+            check_flat(&file(text));
             Ok(())
         })
         .expect("every text round-trips");
@@ -301,6 +402,43 @@ mod tests {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(tree.print(&f), "x = /a/v");
         assert_eq!(tree.tokens().len(), 4);
+    }
+
+    #[test]
+    fn a_second_token_of_lookahead_is_dropped_when_the_first_is_lexed_again() {
+        let f = file("/a/v 1");
+        let mut parser = Parser::new(&f);
+        assert_eq!(
+            parser.peek_second().kind,
+            TokenKind::Ident,
+            "`/` `a` as division"
+        );
+        let regex = TokenKind::Regex(Regex {
+            body: "a".into(),
+            flags: "v".into(),
+            groups: Box::default(),
+        });
+        assert_eq!(parser.peek(true).kind, regex);
+        assert_eq!(
+            parser.peek_second().kind,
+            TokenKind::Number(crate::token::Number {
+                value: 1.0,
+                exceeds_safe_integer: false
+            }),
+            "`1` follows the regex"
+        );
+        let regex = parser.peek(false).clone();
+        assert_eq!(parser.text(&regex), "/a/v");
+        assert!(!parser.at_word("x"));
+        assert!(!parser.eat(&TokenKind::Eof));
+        parser.bump(true);
+        parser.bump(false);
+        assert!(parser.eat(&TokenKind::Eof));
+        assert_eq!(
+            parser.peek_second().kind,
+            TokenKind::Eof,
+            "Eof again and again"
+        );
     }
 
     #[test]
