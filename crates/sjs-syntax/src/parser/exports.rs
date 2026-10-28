@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use sjs_diag::{Code, Span};
 
 use super::imports::foreign;
-use super::Parser;
+use super::{bindings, Parser};
 use crate::token::{Keyword, Punct, TokenKind};
 use crate::tree::NodeKind;
 
@@ -43,7 +43,12 @@ pub(super) fn export_decl(parser: &mut Parser<'_>, exported: &mut Exported) {
                 "`export *` re-exports an open set of names: name each export (SPEC.md §8.4)",
             );
         }
-        TokenKind::Keyword(Keyword::Const | Keyword::Let | Keyword::Function | Keyword::Class) => {
+        TokenKind::Keyword(Keyword::Const | Keyword::Let) => {
+            for (name, span) in bindings::declaration(parser) {
+                note_export(parser, exported, name, span);
+            }
+        }
+        TokenKind::Keyword(Keyword::Function | Keyword::Class) => {
             declared_name(parser, 1, exported);
         }
         TokenKind::Ident if parser.at_word("async") => {
@@ -65,9 +70,8 @@ pub(super) fn export_decl(parser: &mut Parser<'_>, exported: &mut Exported) {
     parser.finish_node();
 }
 
-/// The name a declaration starting `offset` tokens ahead binds, when it is a plain
-/// identifier (`function* g` and destructuring patterns are left to the binder), noted
-/// as exported.
+/// The name a function or class declaration starting `offset` tokens ahead binds, when
+/// it is a plain identifier (`function* g` is left to its story), noted as exported.
 fn declared_name(parser: &mut Parser<'_>, offset: usize, exported: &mut Exported) {
     let name = parser.peek_nth(offset).clone();
     if name.kind == TokenKind::Ident {
@@ -221,11 +225,11 @@ mod tests {
     fn exported_declarations_wrap_the_keyword_and_leave_the_declaration_to_its_story() {
         assert_eq!(
             clean("export const a = 1"),
-            "(Module (ExportDecl export) const a = 1 <eof>)"
+            "(Module (ExportDecl export (ConstDecl const a (Initializer = 1))) <eof>)"
         );
         assert_eq!(
             clean("export let a = 1"),
-            "(Module (ExportDecl export) let a = 1 <eof>)"
+            "(Module (ExportDecl export (LetDecl let a (Initializer = 1))) <eof>)"
         );
         assert_eq!(
             clean("export function f() {}"),
@@ -245,8 +249,8 @@ mod tests {
         );
         assert_eq!(
             clean("export const { a, b } = c"),
-            "(Module (ExportDecl export) const { a , b } = c <eof>)",
-            "a pattern's names are the binder's"
+            "(Module (ExportDecl export (ConstDecl const (ObjectPattern { (PatternProperty a) , (PatternProperty b) }) (Initializer = c))) <eof>)",
+            "a pattern's names are tracked too"
         );
     }
 
@@ -333,6 +337,8 @@ mod tests {
             ("export const a = 1\nexport { a }", 2, 10),
             ("export { b as a }\nexport function a() {}", 2, 17),
             ("export class a {}\nexport let a = 1", 2, 12),
+            ("export const { a } = x\nexport { a }", 2, 10),
+            ("export const [b, { c: a }] = x\nexport { a }", 2, 10),
             ("export async function a() {}\nexport { a }", 2, 10),
             ("export { a } from \"./x.js\"\nexport { a }", 2, 10),
         ];
@@ -421,7 +427,7 @@ mod tests {
         assert!(message.contains("top level"), "{message}");
         assert_eq!(
             sexp(text),
-            "(Module function f ( ) { (ExportDecl export) const a = 1 } (ExportDecl export (NamedExports { (ExportSpecifier b) })) <eof>)"
+            "(Module function f ( ) { (ExportDecl export (ConstDecl const a (Initializer = 1))) } (ExportDecl export (NamedExports { (ExportSpecifier b) })) <eof>)"
         );
         assert_eq!(
             diagnostics("const o = { export: 1 }\nconst p = o.export\n`${ {}.x }`\nexport { p }"),

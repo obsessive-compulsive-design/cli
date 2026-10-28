@@ -1052,7 +1052,33 @@ attribute keys, `import {} from "./x.js"` (E000: the grammar requires one specif
 default }` is `E202`; `export {}` is `E000`; an export inside a block is `E000`.
 
 #### US-023 `const`, `let` and binding patterns
-§2, §4.2 · After: US-020 · Size: M · M0
+§2, §4.2 · After: US-020 · Size: M · M0 · **Status: complete** (2026-10-27)
+
+> Delivered in `sjs-syntax`: `parser/bindings.rs` parses `const`/`let` with a name, an
+> object pattern (`a`, `a: pattern`, defaults, `...rest`, nesting) or an array pattern
+> (elements, defaults, `...rest`, nesting) into `ConstDecl`/`LetDecl` with
+> `ObjectPattern`/`PatternProperty`, `ArrayPattern`/`PatternElement`, `RestElement` and
+> `Initializer` nodes, and returns the bound names so `export const { a } = x` is
+> tracked for E000 duplicates. Early errors: `let x` without an initializer is E000
+> with the fix `let x = undefined`; a `const` without one is E000; an elision in an
+> array pattern is E000 (dense arrays, the story's decision); a rest element that is
+> not last or takes a default; a name bound twice in one pattern; `let`, `undefined`,
+> `await`, `yield` as names; `__proto__` as a key; a second declarator after `,`; an
+> empty `= `. `const {} = x` is accepted (E116 later). A declaration starts a
+> statement: at the start, after `;`, `{`, `}` or on a new line, never after `.`/`?.`
+> or inside a `for` head. Fixtures under `tests/conformance/04-bindings/E000/` (six
+> cases plus a conforming file). **Decisions:** until the expression stories land, an
+> initializer or default is an expression extent (`Parser::raw_expression`): it runs
+> to `;`, `}`, a stop token at bracket depth zero, or a line break at depth zero after
+> a token that can end an expression (so a line ending in an operator, `typeof`,
+> `new` or a template substitution continues, SPEC.md §2's "statements end at a
+> newline"); brackets, braces and template substitutions nest. A removed-word or
+> `Error` token in name position is the lexer's report alone and still binds for
+> recovery; `let let` consumes the bad name so the rest of the declaration parses. The
+> corpus generator (US-009) could bind one name twice in a pattern, an early error:
+> it now keeps names unique within a pattern (`fresh` names), and the corpus manifest
+> snapshot was regenerated. Verified: 100% lines and regions, 102 mutants (93 caught,
+> 4 unviable, 5 timeouts, 0 missed).
 
 **Done when**
 - Object and array destructuring with defaults and rest parse; `let x` without an

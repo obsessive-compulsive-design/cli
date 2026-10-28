@@ -982,33 +982,51 @@ impl Generator<'_> {
     }
 
     fn pattern(&mut self, ctx: Ctx) -> Pattern {
+        let mut taken = BTreeSet::new();
+        self.pattern_in(ctx, &mut taken)
+    }
+
+    /// A name no earlier part of the same pattern binds: binding one name twice in a
+    /// pattern is an early error (E000 in the parser).
+    fn fresh(&mut self, taken: &mut BTreeSet<String>) -> String {
+        let base = self.name();
+        let mut name = base.clone();
+        let mut suffix = 0;
+        while taken.contains(&name) {
+            name = format!("{base}{suffix}");
+            suffix += 1;
+        }
+        taken.insert(name.clone());
+        name
+    }
+
+    fn pattern_in(&mut self, ctx: Ctx, taken: &mut BTreeSet<String>) -> Pattern {
         if ctx.depth >= self.options.max_depth || self.chance(2, 3) {
-            return Pattern::Ident(self.name());
+            return Pattern::Ident(self.fresh(taken));
         }
         if self.chance(1, 2) {
             self.note(Production::ObjectPattern);
             let count = 1 + self.rng.index(3);
-            let entries = (0..count)
-                .map(|_| {
+            let mut entries = Vec::new();
+            for _ in 0..count {
+                let (key, target) = if self.chance(1, 3) {
+                    self.note(Production::ObjectPatternNested);
                     let key = self.name();
-                    let target = if self.chance(1, 3) {
-                        self.note(Production::ObjectPatternNested);
-                        Some(Box::new(self.pattern(ctx.deeper())))
-                    } else {
-                        None
-                    };
-                    let default = if self.chance(1, 3) {
-                        self.note(Production::PatternDefault);
-                        Some(self.simple_expr())
-                    } else {
-                        None
-                    };
-                    (key, target, default)
-                })
-                .collect();
+                    (key, Some(Box::new(self.pattern_in(ctx.deeper(), taken))))
+                } else {
+                    (self.fresh(taken), None)
+                };
+                let default = if self.chance(1, 3) {
+                    self.note(Production::PatternDefault);
+                    Some(self.simple_expr())
+                } else {
+                    None
+                };
+                entries.push((key, target, default));
+            }
             let rest = if self.chance(1, 3) {
                 self.note(Production::ObjectPatternRest);
-                Some(self.name())
+                Some(self.fresh(taken))
             } else {
                 None
             };
@@ -1016,21 +1034,20 @@ impl Generator<'_> {
         } else {
             self.note(Production::ArrayPattern);
             let count = 1 + self.rng.index(3);
-            let entries = (0..count)
-                .map(|_| {
-                    let target = self.pattern(ctx.deeper());
-                    let default = if self.chance(1, 3) {
-                        self.note(Production::PatternDefault);
-                        Some(self.simple_expr())
-                    } else {
-                        None
-                    };
-                    (target, default)
-                })
-                .collect();
+            let mut entries = Vec::new();
+            for _ in 0..count {
+                let target = self.pattern_in(ctx.deeper(), taken);
+                let default = if self.chance(1, 3) {
+                    self.note(Production::PatternDefault);
+                    Some(self.simple_expr())
+                } else {
+                    None
+                };
+                entries.push((target, default));
+            }
             let rest = if self.chance(1, 3) {
                 self.note(Production::ArrayPatternRest);
-                Some(self.name())
+                Some(self.fresh(taken))
             } else {
                 None
             };

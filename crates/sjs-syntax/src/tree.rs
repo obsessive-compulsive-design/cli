@@ -56,6 +56,22 @@ pub enum NodeKind {
     NamedExports,
     /// `a` or `a as b` inside `NamedExports`.
     ExportSpecifier,
+    /// `const pattern = expr` (US-023).
+    ConstDecl,
+    /// `let pattern = expr`.
+    LetDecl,
+    /// `= expr`: a declaration's initializer or a pattern's default.
+    Initializer,
+    /// `{ a, b: pattern = default, ...rest }`.
+    ObjectPattern,
+    /// One property of an object pattern: `a`, `a: pattern`, with an optional default.
+    PatternProperty,
+    /// `[ pattern = default, ...rest ]`.
+    ArrayPattern,
+    /// One element of an array pattern with its optional default.
+    PatternElement,
+    /// `...pattern` in a pattern.
+    RestElement,
 }
 
 /// A node's index in the arena; `NodeId(0)` is the root.

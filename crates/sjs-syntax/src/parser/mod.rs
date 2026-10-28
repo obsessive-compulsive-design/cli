@@ -9,13 +9,14 @@
 //! anything, so re-lexing leaves no stale diagnostic. The reverse never happens: once a
 //! regex has been asked for, it stays.
 
+mod bindings;
 mod exports;
 mod imports;
 
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
 
 use crate::lexer::{regex_allowed_after, Lexer};
-use crate::token::{Keyword, Punct, Token, TokenKind};
+use crate::token::{Keyword, Punct, TemplatePart, Token, TokenKind};
 use crate::tree::{NodeId, NodeKind, SyntaxTree, TokenId, TreeBuilder};
 
 /// Parses a whole file into its tree and diagnostics. Never fails.
@@ -76,6 +77,12 @@ fn items(parser: &mut Parser<'_>) {
                 exports::export_decl(parser, &mut exported);
                 previous = TokenKind::Eof;
             }
+            TokenKind::Keyword(Keyword::Const | Keyword::Let)
+                if statement_start(&previous, parser.peek(false).has_newline_before) =>
+            {
+                bindings::declaration(parser);
+                previous = TokenKind::Eof;
+            }
             _ => {
                 match kind {
                     TokenKind::Punct(Punct::LBrace) => depth += 1,
@@ -87,6 +94,41 @@ fn items(parser: &mut Parser<'_>) {
             }
         }
     }
+}
+
+/// Whether an expression may end with `previous`, so that a line break after it ends
+/// the statement: a value, a closing bracket, a postfix operator or `}`; not an
+/// operator, `.`, `,`, `=>` or a keyword that takes an operand.
+fn can_end_expression(previous: &TokenKind) -> bool {
+    match previous {
+        TokenKind::Punct(punct) => matches!(
+            punct,
+            Punct::RParen | Punct::RBracket | Punct::RBrace | Punct::PlusPlus | Punct::MinusMinus
+        ),
+        TokenKind::Keyword(keyword) => !matches!(
+            keyword,
+            Keyword::Typeof
+                | Keyword::New
+                | Keyword::Instanceof
+                | Keyword::In
+                | Keyword::Void
+                | Keyword::Delete
+        ),
+        // A template head or middle never sits at bracket depth zero, so any template
+        // token here is a whole or a tail: a value.
+        _ => true,
+    }
+}
+
+/// Whether a token after `previous` begins a statement: at the start, after `;`, `{` or
+/// `}`, or on a new line. Until the statement grammar lands this is how a `const` or
+/// `let` keyword is told from a property name (`a.const`) or a `for` head.
+fn statement_start(previous: &TokenKind, on_new_line: bool) -> bool {
+    on_new_line
+        || matches!(
+            previous,
+            TokenKind::Eof | TokenKind::Punct(Punct::Semicolon | Punct::LBrace | Punct::RBrace)
+        )
 }
 
 /// Up to two tokens of lookahead over the lexer, feeding a [`TreeBuilder`].
@@ -189,6 +231,61 @@ impl<'a> Parser<'a> {
     /// E000 at `span`.
     pub fn error(&mut self, span: Span, message: impl Into<String>) {
         self.report(Code::E000, span, message);
+    }
+
+    /// E000 at `span` carrying the text as written and the text to write instead
+    /// (SPEC.md §12 replacements that are mechanical).
+    pub fn error_with_fix(
+        &mut self,
+        span: Span,
+        message: impl Into<String>,
+        current: String,
+        replacement: String,
+    ) {
+        let diagnostic = Diagnostic::new(Code::E000, self.file.path(), span, message)
+            .with_fix(current, replacement);
+        self.diagnostics.extend(diagnostic.ok());
+    }
+
+    /// Consumes the extent of an expression until the expression stories land: up to
+    /// a token in `stops` at bracket depth zero, `;`, `}` or the end of the file, or a
+    /// line break at depth zero after a token that can end an expression. `(`, `[`, `{`
+    /// and template substitutions nest. Returns how many tokens were consumed.
+    pub fn raw_expression(&mut self, stops: &[TokenKind]) -> usize {
+        let mut depth: u32 = 0;
+        let mut previous = TokenKind::Punct(Punct::Eq);
+        let mut consumed = 0;
+        loop {
+            let regex_allowed = regex_allowed_after(&previous);
+            let token = self.peek(regex_allowed);
+            let kind = token.kind.clone();
+            let on_new_line = token.has_newline_before;
+            if kind == TokenKind::Eof || (depth == 0 && stops.contains(&kind)) {
+                return consumed;
+            }
+            if depth == 0
+                && (kind == TokenKind::Punct(Punct::Semicolon)
+                    || kind == TokenKind::Punct(Punct::RBrace)
+                    || (on_new_line && can_end_expression(&previous)))
+            {
+                return consumed;
+            }
+            match &kind {
+                TokenKind::Punct(Punct::LParen | Punct::LBracket | Punct::LBrace) => depth += 1,
+                TokenKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace) => {
+                    depth = depth.saturating_sub(1);
+                }
+                TokenKind::Template(template) => match template.part {
+                    TemplatePart::Head => depth += 1,
+                    TemplatePart::Tail => depth = depth.saturating_sub(1),
+                    TemplatePart::Middle | TemplatePart::Whole => {}
+                },
+                _ => {}
+            }
+            self.bump(regex_allowed);
+            consumed += 1;
+            previous = kind;
+        }
     }
 
     /// A diagnostic at `span`.
@@ -325,7 +422,7 @@ mod tests {
     fn a_module_is_a_list_of_tokens_that_prints_back_to_the_source() {
         for text in [
             "",
-            "const a = 1",
+            "a = 1",
             "  // only\n",
             "x = /a/v\n`${a}`",
             "\"\u{FEFF}\"",

@@ -358,7 +358,7 @@ mod tests {
         );
         assert_eq!(
             clean("import { a } from \"./x.js\"\nimport * as b from \"./y.js\"\nconst c = a + b"),
-            "(Module (ImportDecl import (NamedImports { (ImportSpecifier a) }) from \"./x.js\") (ImportDecl import (NamespaceImport * as b) from \"./y.js\") const c = a + b <eof>)",
+            "(Module (ImportDecl import (NamedImports { (ImportSpecifier a) }) from \"./x.js\") (ImportDecl import (NamespaceImport * as b) from \"./y.js\") (ConstDecl const c (Initializer = a + b)) <eof>)",
             "several imports, then the items"
         );
         assert_eq!(
@@ -603,7 +603,7 @@ mod tests {
         );
         assert_eq!(
             sexp(text),
-            "(Module const a = 1 (ImportDecl import (NamedImports { (ImportSpecifier b) }) from \"./b.js\") (ImportDecl import (NamespaceImport * as c) from \"lodash\") <eof>)"
+            "(Module (ConstDecl const a (Initializer = 1)) (ImportDecl import (NamedImports { (ImportSpecifier b) }) from \"./b.js\") (ImportDecl import (NamespaceImport * as c) from \"lodash\") <eof>)"
         );
     }
 
@@ -611,7 +611,7 @@ mod tests {
     fn dynamic_imports_and_property_names_are_not_declarations() {
         assert_eq!(
             clean("const m = import(\"./x.js\")"),
-            "(Module const m = import ( \"./x.js\" ) <eof>)"
+            "(Module (ConstDecl const m (Initializer = import ( \"./x.js\" ))) <eof>)"
         );
         assert_eq!(
             clean("import(\"./x.js\")"),
@@ -633,7 +633,7 @@ mod tests {
     fn a_malformed_import_leaves_the_rest_of_the_line_to_the_items() {
         assert_eq!(
             sexp("import { a } \"./x.js\"\nconst b = 1"),
-            "(Module (ImportDecl import (NamedImports { (ImportSpecifier a) })) \"./x.js\" const b = 1 <eof>)"
+            "(Module (ImportDecl import (NamedImports { (ImportSpecifier a) })) \"./x.js\" (ConstDecl const b (Initializer = 1)) <eof>)"
         );
         assert_eq!(
             sexp("import \"./x.js\"\nimport { a } from \"./y.js\""),
