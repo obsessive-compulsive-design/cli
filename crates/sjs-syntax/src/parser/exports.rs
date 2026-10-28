@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use sjs_diag::{Code, Span};
 
 use super::imports::foreign;
-use super::{bindings, functions, Parser};
+use super::{bindings, classes, functions, Parser};
 use crate::token::{Keyword, Punct, TokenKind};
 use crate::tree::NodeKind;
 
@@ -60,7 +60,9 @@ pub(super) fn export_decl(parser: &mut Parser<'_>, exported: &mut Exported) {
             }
         }
         TokenKind::Keyword(Keyword::Class) => {
-            declared_name(parser, 1, exported);
+            if let Some((name, span)) = classes::class_decl(parser, false) {
+                note_export(parser, exported, name, span);
+            }
         }
         TokenKind::Ident if parser.at_word("async") => {
             if parser.peek_second().kind == TokenKind::Keyword(Keyword::Function) {
@@ -81,16 +83,6 @@ pub(super) fn export_decl(parser: &mut Parser<'_>, exported: &mut Exported) {
         }
     }
     parser.finish_node();
-}
-
-/// The name a class declaration starting `offset` tokens ahead binds, noted as
-/// exported (the class grammar is US-025's).
-fn declared_name(parser: &mut Parser<'_>, offset: usize, exported: &mut Exported) {
-    let name = parser.peek_nth(offset).clone();
-    if name.kind == TokenKind::Ident {
-        let text = parser.text(&name).to_owned();
-        note_export(parser, exported, text, name.span);
-    }
 }
 
 /// `{ a, b as c, }` with an optional `from "…"`.
@@ -250,7 +242,7 @@ mod tests {
         );
         assert_eq!(
             clean("export class C {}"),
-            "(Module (ExportDecl export) class C { } <eof>)"
+            "(Module (ExportDecl export (ClassDecl class C (ClassBody { }))) <eof>)"
         );
         assert_eq!(
             clean("export async function f() {}"),
@@ -325,8 +317,8 @@ mod tests {
     }
 
     #[test]
-    fn an_unnamed_class_export_is_left_to_the_class_story() {
-        assert_eq!(diagnostics("export class {}"), Vec::new());
+    fn an_unnamed_class_export_is_e000_once() {
+        assert_eq!(diagnostics("export class {}").len(), 1);
     }
 
     #[test]

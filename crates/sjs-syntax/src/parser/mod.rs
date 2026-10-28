@@ -10,6 +10,7 @@
 //! regex has been asked for, it stays.
 
 mod bindings;
+mod classes;
 mod exports;
 mod functions;
 mod imports;
@@ -49,9 +50,13 @@ pub(super) enum FnContext {
     Arrow {
         is_async: bool,
     },
-    /// A class body, whose methods the class story (US-025) will parse with their own
-    /// contexts; until then neither `yield` nor `await` is checked inside one.
-    ClassBody,
+    /// A class member: a method, an accessor, a field initializer or a static block.
+    /// `super.x` is permitted inside one; `super()` only in a derived constructor.
+    Method {
+        is_async: bool,
+        is_generator: bool,
+        derived_constructor: bool,
+    },
 }
 
 /// The items of a scope: declarations (`const`, `let`, `function`), export
@@ -70,10 +75,6 @@ pub(super) fn items_in(parser: &mut Parser<'_>, scope: Scope) {
     let mut previous_of = false;
     let mut depth: u32 = 0;
     let mut exported = exports::Exported::new();
-    // A `class` keyword makes the next `{` open a class body (opaque until US-025);
-    // classes nest, so the depths of the open bodies form a stack.
-    let mut class_pending = false;
-    let mut class_bodies: Vec<u32> = Vec::new();
     // For each open `{`, whether it began an object literal (so its `}` ends a value
     // and a `/` after it divides) rather than a block.
     let mut braces: Vec<bool> = Vec::new();
@@ -128,6 +129,16 @@ pub(super) fn items_in(parser: &mut Parser<'_>, scope: Scope) {
                 functions::function(parser, false);
                 previous = TokenKind::Eof;
             }
+            TokenKind::Keyword(Keyword::Class)
+                if statement_start(&previous, on_new_line) && classes::at_class(parser) =>
+            {
+                classes::class_decl(parser, false);
+                previous = TokenKind::Eof;
+            }
+            TokenKind::Keyword(Keyword::Class) if !after_dot && classes::at_class(parser) => {
+                parser.removed_class_expression();
+                previous = TokenKind::Punct(Punct::RParen);
+            }
             _ if !after_dot && parser.at_arrow() => {
                 functions::arrow(parser, &[]);
                 previous = TokenKind::Punct(Punct::RParen);
@@ -142,17 +153,8 @@ pub(super) fn items_in(parser: &mut Parser<'_>, scope: Scope) {
                         depth += 1;
                         // `previous_of`: an operand follows the word before (`yield {}`).
                         braces.push(previous_of || opens_object_literal(&previous, on_new_line));
-                        if class_pending {
-                            class_pending = false;
-                            class_bodies.push(depth);
-                            parser.contexts.push(FnContext::ClassBody);
-                        }
                     }
                     TokenKind::Punct(Punct::RBrace) => {
-                        if class_bodies.last() == Some(&depth) {
-                            class_bodies.pop();
-                            parser.contexts.pop();
-                        }
                         depth = depth.saturating_sub(1);
                         if braces.pop() == Some(true) {
                             previous_of = parser.operand_follows(after_dot, &previous);
@@ -161,7 +163,8 @@ pub(super) fn items_in(parser: &mut Parser<'_>, scope: Scope) {
                             continue;
                         }
                     }
-                    TokenKind::Keyword(Keyword::Class) if !after_dot => class_pending = true,
+                    TokenKind::Keyword(Keyword::Super) if !after_dot => parser.check_super(),
+                    TokenKind::PrivateName(ref name) => parser.note_private_reference(name),
                     TokenKind::Ident if !after_dot => parser.check_yield_await(),
                     _ => {}
                 }
@@ -241,6 +244,8 @@ pub struct Parser<'a> {
     diagnostics: Diagnostics,
     /// The enclosing functions, innermost last; empty at the module's top level.
     contexts: Vec<FnContext>,
+    /// The enclosing classes, innermost last.
+    classes: Vec<classes::ClassScope>,
 }
 
 impl<'a> Parser<'a> {
@@ -255,6 +260,7 @@ impl<'a> Parser<'a> {
             checkpoints: Vec::new(),
             diagnostics: Diagnostics::new(),
             contexts: Vec::new(),
+            classes: Vec::new(),
         }
     }
 
@@ -408,6 +414,12 @@ impl<'a> Parser<'a> {
                 previous = TokenKind::Punct(Punct::RParen);
                 continue;
             }
+            if !after_dot && classes::at_class(self) {
+                self.removed_class_expression();
+                consumed += 1;
+                previous = TokenKind::Punct(Punct::RParen);
+                continue;
+            }
             match &kind {
                 TokenKind::Punct(Punct::LParen | Punct::LBracket | Punct::LBrace) => depth += 1,
                 TokenKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace) => depth -= 1,
@@ -416,6 +428,8 @@ impl<'a> Parser<'a> {
                     TemplatePart::Tail => depth -= 1,
                     TemplatePart::Middle | TemplatePart::Whole => {}
                 },
+                TokenKind::Keyword(Keyword::Super) if !after_dot => self.check_super(),
+                TokenKind::PrivateName(ref name) => self.note_private_reference(name),
                 TokenKind::Ident if !after_dot => self.check_yield_await(),
                 _ => {}
             }
@@ -490,7 +504,10 @@ impl<'a> Parser<'a> {
                         FnContext::Function {
                             is_generator: true,
                             ..
-                        } | FnContext::ClassBody
+                        } | FnContext::Method {
+                            is_generator: true,
+                            ..
+                        }
                     )
                 );
                 if !ok {
@@ -506,7 +523,7 @@ impl<'a> Parser<'a> {
                     None | Some(
                         FnContext::Function { is_async: true, .. }
                             | FnContext::Arrow { is_async: true }
-                            | FnContext::ClassBody
+                            | FnContext::Method { is_async: true, .. }
                     )
                 );
                 if !ok {

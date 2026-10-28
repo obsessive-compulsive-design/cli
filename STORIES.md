@@ -1148,7 +1148,46 @@ arrow inside a generator is `E000`; a `function` declaration as the body of an a
 expression position is `E000`.
 
 #### US-025 Class declarations
-§2, §4.5 · After: US-024 · Size: M · M0
+§2, §4.5 · After: US-024 · Size: M · M0 · **Status: complete** (2026-10-28)
+
+> Delivered in `sjs-syntax`: `parser/classes.rs` parses `class Name [extends Name |
+> ns.Name] { … }` at statement start (and after `export`, which notes the name) into
+> `ClassDecl` with `ClassHeritage` and a `ClassBody` of `ClassField` (`[static] key
+> [= expr]`, with an `Initializer`), `ClassMethod` (`[static] [async] [*] key(params)
+> { … }`), `ClassAccessor` (`get`/`set`), `StaticBlock` and bare `;`. A `MemberKey` is
+> an identifier (keywords and the contextual words included: `static static = 1`,
+> `get() {}`, `set() {}`, `async() {}`, `if() {}`), a private name or a `SymbolKey`
+> holding exactly `[Symbol.iterator | asyncIterator | dispose | asyncDispose]`; any
+> other computed key is E000 and skipped to its `]`, and a `[Symbol.…]` key on a field
+> is E000 (§2 `FieldDecl` takes only names). `static`, `async`, `get` and `set` are
+> modifiers only when a key follows, and `async` only on the same line. `extends` with
+> no name, two dots or an expression is E000 once. The removed class expression
+> (`const A = class {}`, `f(class B {})`) is E000 and parsed as `ClassExpr` for
+> recovery; a `class` keyword that begins no class (`const class = 2`) is left to
+> whoever reported it. ES early errors, each E000 once: a generator, async or accessor
+> `constructor`; two constructors; `#constructor`; a field named `constructor`; a static
+> field or method named `prototype`; a private name declared twice (a getter and setter
+> pair is one declaration); a `#name` used that neither the class nor an enclosing class
+> declares (references are collected from statement-level and expression token runs and
+> checked when the class closes, so forward references work); `super()` outside the
+> constructor of a class with `extends` (arrows see through to the member that holds
+> them); `super.x` or `super[…]` outside a class member; `super?.x`; a bare `super`.
+> Getters take no parameters and setters exactly one, not a rest. Members push
+> `FnContext::Method { is_async, is_generator, derived_constructor }` (replacing the
+> opaque `ClassBody` context of US-024), so `yield` and `await` are checked inside
+> methods, accessors, field initializers and static blocks; `functions::params` now
+> returns the parameter count and rest flag. A malformed member is skipped to its `;`,
+> the end of its line or the closing `}`, so one malformed member is one diagnostic.
+> Fixtures under `tests/conformance/04-classes/E000/` (ten cases plus a conforming
+> file). The corpus generator (US-009) could declare a private name twice and put
+> `await` inside a static block (where ES reserves it): both fixed, manifest snapshot
+> regenerated. **Decisions:** a class body is parsed only when `class` is followed by a
+> name, `extends` or `{`, so the expression grammar (US-027) owns any other `class`
+> token; field initializers and static blocks use `raw_expression`/`block` like every
+> other extent until the statement and expression stories land. Verified: 100% lines and
+> regions, 210 mutants on the diff (182 caught, 10 unviable, 18 timeouts, 0 missed
+> after a targeted rerun of the 53 mutants in the six functions that first had
+> survivors).
 
 **Done when**
 - Fields, `#private` members, methods (`async`, `*`, `async *`), accessors, `static`

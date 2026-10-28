@@ -56,7 +56,7 @@ pub(super) fn function(parser: &mut Parser<'_>, expression: bool) -> Option<(Str
         is_async,
         is_generator,
     });
-    if params(parser) {
+    if params(parser).is_some() {
         body(parser);
     }
     parser.contexts.truncate(mark);
@@ -76,7 +76,7 @@ pub(super) fn arrow(parser: &mut Parser<'_>, stops: &[TokenKind]) {
     let mark = parser.contexts.len();
     parser.contexts.push(FnContext::Arrow { is_async });
     let ok = if parser.peek(false).kind == LPAREN {
-        params(parser)
+        params(parser).is_some()
     } else {
         lone_parameter(parser)
     };
@@ -144,16 +144,19 @@ pub(super) fn arrow_ahead(parser: &mut Parser<'_>, start: usize) -> bool {
     }
 }
 
-/// `( pattern [= default], …, ...rest )`. True when the list closed.
-fn params(parser: &mut Parser<'_>) -> bool {
+/// `( pattern [= default], …, ...rest )`. When the list closed, how many parameters
+/// it holds and whether the last is a rest parameter.
+pub(super) fn params(parser: &mut Parser<'_>) -> Option<(usize, bool)> {
     parser.start_node(NodeKind::Params);
     if !parser.eat(&LPAREN) {
         let span = parser.peek(false).span;
         parser.error(span, "expected `(` to open the parameter list");
         parser.finish_node();
-        return false;
+        return None;
     }
     let mut names: Vec<(String, Span)> = Vec::new();
+    let mut count = 0;
+    let mut has_rest = false;
     loop {
         match parser.peek(false).kind.clone() {
             RPAREN => break,
@@ -164,8 +167,10 @@ fn params(parser: &mut Parser<'_>) -> bool {
                 parser.finish_node();
                 if !ok {
                     parser.finish_node();
-                    return false;
+                    return None;
                 }
+                count += 1;
+                has_rest = true;
                 if parser.peek(false).kind != RPAREN {
                     let span = parser.peek(false).span;
                     let message = if parser.peek(false).kind == TokenKind::Punct(Punct::Eq) {
@@ -175,7 +180,7 @@ fn params(parser: &mut Parser<'_>) -> bool {
                     };
                     parser.error(span, message);
                     parser.finish_node();
-                    return false;
+                    return None;
                 }
                 break;
             }
@@ -188,20 +193,21 @@ fn params(parser: &mut Parser<'_>) -> bool {
                 parser.finish_node();
                 if !ok {
                     parser.finish_node();
-                    return false;
+                    return None;
                 }
+                count += 1;
             }
         }
         if !parser.eat(&COMMA) && parser.peek(false).kind != RPAREN {
             let span = parser.peek(false).span;
             parser.error(span, "expected `,` or `)` in the parameter list");
             parser.finish_node();
-            return false;
+            return None;
         }
     }
     parser.bump(false);
     parser.finish_node();
-    true
+    Some((count, has_rest))
 }
 
 /// One parameter's pattern; a name any earlier parameter bound is E000.
@@ -605,7 +611,7 @@ mod tests {
         assert_eq!(
             diagnostics("o.class\n{\n  yield 1\n}").len(),
             1,
-            "`o.class` is a property name, so the block after it is not a class body"
+            "`o.class` is a property name, not a class"
         );
     }
 
@@ -649,7 +655,7 @@ mod tests {
         assert_eq!(
             diagnostics("function f() {\n  class A {\n    static {\n      class B {\n        m() {}\n      }\n    }\n  }\n}\nawait x\nfunction g() { yield 1 }"),
             vec![(Code::E000, 11, 16, "`yield` is permitted only directly inside a generator function (SPEC.md §4.4)".to_owned())],
-            "nested class bodies open and close as a stack, leaving no context behind"
+            "nested class bodies leave no context behind"
         );
         let found = diagnostics("function f() {\n  export const a = 1\n}");
         assert_eq!(found.len(), 1);

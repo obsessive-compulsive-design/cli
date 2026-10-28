@@ -568,13 +568,6 @@ impl Ctx {
         }
     }
 
-    const fn without(self, flag: u8) -> Self {
-        Self {
-            flags: self.flags & !flag,
-            depth: self.depth,
-        }
-    }
-
     const fn deeper(self) -> Self {
         Self {
             flags: self.flags,
@@ -1073,7 +1066,10 @@ impl Generator<'_> {
         };
         let count = self.rng.index(5);
         let member_ctx = member_ctx(ctx.depth + 1);
-        let mut members: Vec<Member> = (0..count).map(|_| self.member(member_ctx)).collect();
+        let mut taken = BTreeSet::new();
+        let mut members: Vec<Member> = (0..count)
+            .map(|_| self.member(member_ctx, &mut taken))
+            .collect();
         // `x = 1` followed by `[Symbol.iterator]() {}` would parse as an index expression
         // (ASI inside class bodies), so computed-key methods go before every field.
         members.sort_by_key(|member| {
@@ -1108,17 +1104,19 @@ impl Generator<'_> {
         }
     }
 
-    fn member_key(&mut self) -> MemberKey {
+    /// A member key; a private name is declared once per class (E000 otherwise), so
+    /// `taken` holds the ones used so far.
+    fn member_key(&mut self, taken: &mut BTreeSet<String>) -> MemberKey {
         match self.rng.below(5) {
             0 => {
                 self.note(Production::PrivateField);
-                MemberKey::Private(self.name())
+                MemberKey::Private(self.fresh(taken))
             }
             _ => MemberKey::Ident(self.name()),
         }
     }
 
-    fn member(&mut self, ctx: Ctx) -> Member {
+    fn member(&mut self, ctx: Ctx, taken: &mut BTreeSet<String>) -> Member {
         match self.rng.below(7) {
             0 | 1 => {
                 let is_static = self.chance(1, 4);
@@ -1127,7 +1125,7 @@ impl Generator<'_> {
                 } else {
                     Production::Field
                 });
-                let key = self.member_key();
+                let key = self.member_key(taken);
                 let value = if self.chance(1, 2) {
                     self.note(Production::FieldInit);
                     Some(self.expr(ctx.deeper()))
@@ -1166,7 +1164,7 @@ impl Generator<'_> {
                     }
                     1 => {
                         self.note(Production::PrivateMethod);
-                        MemberKey::Private(self.name())
+                        MemberKey::Private(self.fresh(taken))
                     }
                     _ => MemberKey::Ident(self.name()),
                 };
@@ -1187,7 +1185,7 @@ impl Generator<'_> {
                 } else {
                     Production::Getter
                 });
-                Member::Getter(is_static, self.member_key(), self.block(ctx))
+                Member::Getter(is_static, self.member_key(taken), self.block(ctx))
             }
             5 => {
                 let is_static = self.chance(1, 4);
@@ -1197,11 +1195,12 @@ impl Generator<'_> {
                     Production::Setter
                 });
                 let param = Param::Plain(Pattern::Ident(self.name()), None);
-                Member::Setter(is_static, self.member_key(), param, self.block(ctx))
+                Member::Setter(is_static, self.member_key(taken), param, self.block(ctx))
             }
             _ => {
                 self.note(Production::StaticBlock);
-                Member::StaticBlock(self.block(ctx.without(IN_FUNCTION)))
+                // `await` is reserved inside a static block, as in a plain method.
+                Member::StaticBlock(self.block(ctx))
             }
         }
     }
@@ -1896,7 +1895,6 @@ mod tests {
             );
         }
         assert_eq!(member_ctx(1).flags, IN_FUNCTION + IN_CLASS);
-        assert_eq!(member_ctx(1).without(IN_FUNCTION).flags, IN_CLASS);
         assert_eq!(Ctx::default().deeper().depth, 1);
     }
 

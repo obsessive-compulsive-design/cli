@@ -86,6 +86,24 @@ pub enum NodeKind {
     RestParam,
     /// `{ … }` holding declarations and statements.
     Block,
+    /// `class Name [extends …] { … }` (US-025).
+    ClassDecl,
+    /// The removed `class` expression, parsed for recovery after its E000.
+    ClassExpr,
+    /// `extends Name` or `extends ns.Name`.
+    ClassHeritage,
+    /// `{ members }` of a class.
+    ClassBody,
+    /// `[static] key [= expr]`.
+    ClassField,
+    /// `[static] [async] [*] key(params) { … }`.
+    ClassMethod,
+    /// `[static] get key() { … }` or `[static] set key(param) { … }`.
+    ClassAccessor,
+    /// `static { … }`.
+    StaticBlock,
+    /// `[Symbol.iterator]` and the other three permitted computed keys.
+    SymbolKey,
 }
 
 /// A node's index in the arena; `NodeId(0)` is the root.
