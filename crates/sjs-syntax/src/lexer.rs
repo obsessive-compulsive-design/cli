@@ -72,7 +72,16 @@ pub struct Lexer<'a> {
     substitutions: Vec<Substitution>,
 }
 
+/// A lexer state the parser can return to; see [`Lexer::checkpoint`].
+#[derive(Debug, Clone)]
+pub(crate) struct Checkpoint {
+    pos: usize,
+    after_dot: bool,
+    substitutions: Vec<Substitution>,
+}
+
 /// A `${` whose `}` has not been seen yet.
+#[derive(Debug, Clone)]
 struct Substitution {
     /// Byte offset of the `${`.
     opened_at: usize,
@@ -119,12 +128,29 @@ impl<'a> Lexer<'a> {
         self.diagnostics
     }
 
-    /// Moves back to `offset` so the parser can lex a `/` token again as a regex. The
-    /// offset is one the lexer handed out as a trivia or token start, so it is a
-    /// character boundary; only the position moves, since a `/` token changes nothing
-    /// else and reports nothing.
-    pub(crate) fn rewind(&mut self, offset: usize) {
-        self.pos = offset;
+    /// The lexer's state before the next token, so the parser can lex that token again
+    /// as a regex: position, the `after_dot` flag and the open template substitutions.
+    pub(crate) fn checkpoint(&self) -> Checkpoint {
+        Checkpoint {
+            pos: self.pos,
+            after_dot: self.after_dot,
+            substitutions: self.substitutions.clone(),
+        }
+    }
+
+    /// Returns to `checkpoint` (taken before the token starting at `token_start`) so the
+    /// text from there is lexed again. Everything reported at or past `token_start` is
+    /// dropped: that text was lexed as lookahead with `/` as division (a regex body
+    /// read that way can report stray characters) and is lexed again now. Reports
+    /// inside the trivia before the token are kept: a comment lexes the same either
+    /// way, and a diagnostic that ends exactly where the trivia starts belongs to the
+    /// token before.
+    pub(crate) fn restore(&mut self, checkpoint: Checkpoint, token_start: usize) {
+        self.pos = checkpoint.pos;
+        self.after_dot = checkpoint.after_dot;
+        self.substitutions = checkpoint.substitutions;
+        self.diagnostics
+            .retain(|diagnostic| diagnostic.span.byte_start < token_start);
     }
 
     fn peek(&self) -> Option<char> {

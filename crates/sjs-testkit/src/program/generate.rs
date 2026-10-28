@@ -960,23 +960,25 @@ impl Generator<'_> {
         }
     }
 
+    /// A parameter list whose names are unique across every parameter (a name declared
+    /// twice is an early error, E000 in the parser).
     fn params(&mut self, ctx: Ctx) -> Vec<Param> {
         let count = self.rng.index(4);
-        let mut params: Vec<Param> = (0..count)
-            .map(|_| {
-                let pattern = self.pattern(ctx);
-                let default = if self.chance(1, 4) {
-                    self.note(Production::DefaultParam);
-                    Some(self.expr(ctx.deeper()))
-                } else {
-                    None
-                };
-                Param::Plain(pattern, default)
-            })
-            .collect();
+        let mut taken = BTreeSet::new();
+        let mut params: Vec<Param> = Vec::new();
+        for _ in 0..count {
+            let pattern = self.pattern_in(ctx, &mut taken);
+            let default = if self.chance(1, 4) {
+                self.note(Production::DefaultParam);
+                Some(self.expr(ctx.deeper()))
+            } else {
+                None
+            };
+            params.push(Param::Plain(pattern, default));
+        }
         if self.chance(1, 4) {
             self.note(Production::RestParam);
-            params.push(Param::Rest(self.name()));
+            params.push(Param::Rest(self.fresh(&mut taken)));
         }
         params
     }

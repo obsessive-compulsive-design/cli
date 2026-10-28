@@ -72,6 +72,20 @@ pub enum NodeKind {
     PatternElement,
     /// `...pattern` in a pattern.
     RestElement,
+    /// `[async] function [*] name(params) { … }` (US-024).
+    FunctionDecl,
+    /// The removed `function` expression, parsed for recovery after its E000.
+    FunctionExpr,
+    /// `[async] (params) => expr | block`.
+    ArrowFunction,
+    /// `( param, …, ...rest )`.
+    Params,
+    /// One parameter: a pattern with an optional default.
+    Param,
+    /// `...pattern` in a parameter list.
+    RestParam,
+    /// `{ … }` holding declarations and statements.
+    Block,
 }
 
 /// A node's index in the arena; `NodeId(0)` is the root.

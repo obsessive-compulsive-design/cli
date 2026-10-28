@@ -193,6 +193,12 @@ impl Diagnostics {
         self.items.extend(diagnostics);
     }
 
+    /// Keeps only the findings `keep` accepts (a lexer that rewinds drops what it
+    /// reported past the rewind point, since that text is lexed again).
+    pub fn retain(&mut self, keep: impl FnMut(&Diagnostic) -> bool) {
+        self.items.retain(keep);
+    }
+
     /// The findings in reporting order.
     pub fn iter(&self) -> impl Iterator<Item = &Diagnostic> {
         self.items.iter()
@@ -502,5 +508,32 @@ mod tests {
             ]
         );
         assert_eq!(diagnostics.len(), 6);
+    }
+}
+
+#[cfg(test)]
+mod retain_tests {
+    use super::{Diagnostic, Diagnostics};
+    use crate::{Code, Position, Span};
+
+    #[test]
+    fn retain_keeps_what_the_predicate_accepts() {
+        let mut set = Diagnostics::new();
+        for (column, byte) in [(1, 0), (5, 4), (9, 8)] {
+            let span = Span::new(
+                Position::new(1, column),
+                Position::new(1, column + 1),
+                byte,
+                byte + 1,
+            );
+            set.push(Diagnostic::new(Code::E000, "a.js", span, "x"));
+        }
+        set.retain(|d| d.span.byte_start < 4);
+        assert_eq!(set.len(), 1);
+        assert_eq!(set.iter().next().map(|d| d.span.byte_start), Some(0));
+        set.retain(|_| true);
+        assert_eq!(set.len(), 1);
+        set.retain(|_| false);
+        assert!(set.is_empty());
     }
 }

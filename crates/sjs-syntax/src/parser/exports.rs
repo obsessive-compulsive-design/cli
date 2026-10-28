@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use sjs_diag::{Code, Span};
 
 use super::imports::foreign;
-use super::{bindings, Parser};
+use super::{bindings, functions, Parser};
 use crate::token::{Keyword, Punct, TokenKind};
 use crate::tree::NodeKind;
 
@@ -34,6 +34,12 @@ pub(super) fn export_decl(parser: &mut Parser<'_>, exported: &mut Exported) {
                 span,
                 "`export default` is removed: a module has named exports only, so every importer uses the same name (SPEC.md §5.1)",
             );
+            // Recovery: a default-exported function parses as the expression it is in
+            // ES2025, without a second report; anything else is left to the items.
+            parser.bump(false);
+            if functions::at_function(parser) {
+                functions::function(parser, true);
+            }
         }
         TokenKind::Punct(Punct::Star) => {
             let span = parser.peek(false).span;
@@ -48,12 +54,19 @@ pub(super) fn export_decl(parser: &mut Parser<'_>, exported: &mut Exported) {
                 note_export(parser, exported, name, span);
             }
         }
-        TokenKind::Keyword(Keyword::Function | Keyword::Class) => {
+        TokenKind::Keyword(Keyword::Function) => {
+            if let Some((name, span)) = functions::function(parser, false) {
+                note_export(parser, exported, name, span);
+            }
+        }
+        TokenKind::Keyword(Keyword::Class) => {
             declared_name(parser, 1, exported);
         }
         TokenKind::Ident if parser.at_word("async") => {
             if parser.peek_second().kind == TokenKind::Keyword(Keyword::Function) {
-                declared_name(parser, 2, exported);
+                if let Some((name, span)) = functions::function(parser, false) {
+                    note_export(parser, exported, name, span);
+                }
             } else {
                 let span = parser.peek_second().span;
                 parser.error(span, "expected `function` after `async`");
@@ -70,8 +83,8 @@ pub(super) fn export_decl(parser: &mut Parser<'_>, exported: &mut Exported) {
     parser.finish_node();
 }
 
-/// The name a function or class declaration starting `offset` tokens ahead binds, when
-/// it is a plain identifier (`function* g` is left to its story), noted as exported.
+/// The name a class declaration starting `offset` tokens ahead binds, noted as
+/// exported (the class grammar is US-025's).
 fn declared_name(parser: &mut Parser<'_>, offset: usize, exported: &mut Exported) {
     let name = parser.peek_nth(offset).clone();
     if name.kind == TokenKind::Ident {
@@ -233,7 +246,7 @@ mod tests {
         );
         assert_eq!(
             clean("export function f() {}"),
-            "(Module (ExportDecl export) function f ( ) { } <eof>)"
+            "(Module (ExportDecl export (FunctionDecl function f (Params ( )) (Block { }))) <eof>)"
         );
         assert_eq!(
             clean("export class C {}"),
@@ -241,11 +254,11 @@ mod tests {
         );
         assert_eq!(
             clean("export async function f() {}"),
-            "(Module (ExportDecl export) async function f ( ) { } <eof>)"
+            "(Module (ExportDecl export (FunctionDecl async function f (Params ( )) (Block { }))) <eof>)"
         );
         assert_eq!(
             clean("export function* g() {}"),
-            "(Module (ExportDecl export) function * g ( ) { } <eof>)"
+            "(Module (ExportDecl export (FunctionDecl function * g (Params ( )) (Block { }))) <eof>)"
         );
         assert_eq!(
             clean("export const { a, b } = c"),
@@ -302,13 +315,18 @@ mod tests {
         }
         assert_eq!(
             sexp("export default 1"),
-            "(Module (ExportDecl export) default 1 <eof>)",
+            "(Module (ExportDecl export default) 1 <eof>)",
             "the rest of the line is left to the items"
         );
         assert_eq!(
             sexp("export { x as default }"),
             "(Module (ExportDecl export (NamedExports { (ExportSpecifier x as default) })) <eof>)"
         );
+    }
+
+    #[test]
+    fn an_unnamed_class_export_is_left_to_the_class_story() {
+        assert_eq!(diagnostics("export class {}"), Vec::new());
     }
 
     #[test]
@@ -362,9 +380,13 @@ mod tests {
             "the exported names differ"
         );
         assert_eq!(
-            diagnostics("export function* a() {}\nexport { a }"),
-            Vec::new(),
-            "a generator's name is the binder's to track"
+            diagnostics(
+                "export function* a() {}
+export { a }"
+            )
+            .len(),
+            1,
+            "a generator's name is tracked too"
         );
     }
 
@@ -392,7 +414,17 @@ mod tests {
             ),
             ("export 1", 8, "expected a declaration"),
             ("export x = 1", 8, "expected a declaration"),
-            ("export asyncx function f() {}", 8, "expected a declaration"),
+            ("export asyncx = 1", 8, "expected a declaration"),
+            (
+                "export function () {}",
+                17,
+                "a `function` declaration needs a name",
+            ),
+            (
+                "export async function () {}",
+                23,
+                "a `function` declaration needs a name",
+            ),
             ("export", 7, "expected a declaration"),
             ("export async x", 14, "expected `function` after `async`"),
         ];
@@ -427,7 +459,7 @@ mod tests {
         assert!(message.contains("top level"), "{message}");
         assert_eq!(
             sexp(text),
-            "(Module function f ( ) { (ExportDecl export (ConstDecl const a (Initializer = 1))) } (ExportDecl export (NamedExports { (ExportSpecifier b) })) <eof>)"
+            "(Module (FunctionDecl function f (Params ( )) (Block { (ExportDecl export (ConstDecl const a (Initializer = 1))) })) (ExportDecl export (NamedExports { (ExportSpecifier b) })) <eof>)"
         );
         assert_eq!(
             diagnostics("const o = { export: 1 }\nconst p = o.export\n`${ {}.x }`\nexport { p }"),

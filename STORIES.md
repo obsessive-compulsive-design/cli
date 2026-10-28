@@ -1091,7 +1091,47 @@ last; a default referencing an earlier element (`[a, b = a]`, valid); `const {} 
 (accepted syntactically; E116 later); duplicate names within one pattern (`E000`).
 
 #### US-024 Function declarations and arrow functions
-§2, §4.4 · After: US-023 · Size: M · M0
+§2, §4.4 · After: US-023 · Size: M · M0 · **Status: complete** (2026-10-28)
+
+> Delivered in `sjs-syntax`: `parser/functions.rs` parses `[async] function [*]
+> name(params) { … }` at the top level of the module or of a block into `FunctionDecl`
+> with `Params`/`Param`/`RestParam` and a `Block` whose items are parsed as a nested
+> scope, and `[async] (params) => expr | block` wherever an expression extent runs
+> (declaration initializers, defaults, call arguments, statement-level token runs) into
+> `ArrowFunction`; `=> {` is a block and `=> ({})` an object. Parameters are binding
+> patterns with defaults and a trailing rest; a name declared twice across the list is
+> E000. `a => a` and `async a => a` are E000 with the fix `(a)`; `function` in
+> expression position (`const f = function () {}`, `function* () {}`, as a call
+> argument, as an arrow body) is E000 naming "an arrow function or a `function`
+> declaration" and is parsed as `FunctionExpr` for recovery; `async(x)` is a call.
+> `yield` outside a generator (an arrow inside a generator included) and `await` inside
+> a function that is not `async` are E000, tracked by a context stack that functions
+> and arrows push and truncate; a class body is an opaque context until US-025 parses
+> its methods. The driver gained block scopes (`items_in(Scope::Block)` stops before
+> the closing `}`), lexer checkpoints (the lexer's position, dot flag and open template
+> substitutions are restored when a `/` is lexed again as a regex, and reports past the
+> token are dropped), a conditional counter so an arrow's expression body ends at an
+> enclosing `:` but keeps its own `? :`, a `,` as the end of every arrow body (no
+> comma operator), and three regex-context refinements the corpus demanded: a `/`
+> after `await`, `yield` or the `of` of a `for` head starts a regex, a `}` closing an
+> object literal (every `}` inside an expression extent, and a statement-level `{`
+> opened where an operand is expected) ends a value, and nested class bodies are a
+> stack. `Diagnostics::retain` was added to `sjs-diag`. Fixtures under
+> `tests/conformance/04-functions/E000/` (five cases plus a conforming file). The
+> corpus generator (US-009) could declare a parameter name twice: it now keeps parameter
+> names unique, and the corpus manifest snapshot was regenerated; the corpus test now
+> asserts a clean parse rather than agreement with the guessing lexer, whose heuristic
+> cannot know `await /x/v` from a division. **Decisions:** the arrow scan reads ahead
+> as division up to `ARROW_SCAN_LIMIT` tokens, so a regex default holding an unmatched
+> parenthesis could mislead it until the expression grammar lands; `yield`/`await`
+> followed by `(` are taken as method names until the class story; a class body is
+> opaque to the yield and await checks until US-025. **Equivalent mutants (explained):**
+> `Lexer::restore` keeps reports with `byte_start < token_start`, and `<=` is
+> indistinguishable because no report can start exactly at a `/` lexed as division;
+> `arrow` guards the body with `ok && next == "=>"`, and `||` is indistinguishable
+> because a failed parameter list always fails on a token inside the parentheses, never
+> on `=>`. Verified: 100% lines and regions, 190 mutants (170 caught, 7 unviable, 11
+> timeouts, 2 equivalent survivors explained above).
 
 **Done when**
 - `function`, `async function`, `function*`, `async function*` declarations parse only at

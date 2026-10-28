@@ -11,11 +11,12 @@
 
 mod bindings;
 mod exports;
+mod functions;
 mod imports;
 
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
 
-use crate::lexer::{regex_allowed_after, Lexer};
+use crate::lexer::{regex_allowed_after, Checkpoint, Lexer};
 use crate::token::{Keyword, Punct, TemplatePart, Token, TokenKind};
 use crate::tree::{NodeId, NodeKind, SyntaxTree, TokenId, TreeBuilder};
 
@@ -25,30 +26,70 @@ pub fn parse(file: &SourceFile) -> (SyntaxTree, Diagnostics) {
     let mut parser = Parser::new(file);
     parser.start_node(NodeKind::Module);
     imports::import_section(&mut parser);
-    items(&mut parser);
+    items_in(&mut parser, Scope::Module);
     parser.finish_node();
     parser.finish()
 }
 
-/// The module items after the imports: export declarations, and otherwise a list of
-/// tokens until the grammar stories land. An import declaration here is E000 (SPEC.md
-/// §2: imports come first) and an export inside braces is E000 (exports sit at the top
-/// level); both are then parsed anyway so the tree still records them. `import(` is a
-/// dynamic import, an expression, and `a.import`, `a.export`, `{ export: 1 }` or a
-/// method `export() {}` are property names: none of them is a declaration.
-fn items(parser: &mut Parser<'_>) {
+/// Where a list of items sits: the module's top level, or a block (a function body or,
+/// in the statement story, any `{ … }`), which ends at its `}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Scope {
+    Module,
+    Block,
+}
+
+/// The function a token sits in, for `yield` and `await`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FnContext {
+    Function {
+        is_async: bool,
+        is_generator: bool,
+    },
+    Arrow {
+        is_async: bool,
+    },
+    /// A class body, whose methods the class story (US-025) will parse with their own
+    /// contexts; until then neither `yield` nor `await` is checked inside one.
+    ClassBody,
+}
+
+/// The items of a scope: declarations (`const`, `let`, `function`), export
+/// declarations, and otherwise a list of tokens until the grammar stories land. An
+/// import declaration here is E000 (SPEC.md §2: imports come first) and an export
+/// inside a block is E000 (exports sit at the top level); both are then parsed anyway
+/// so the tree still records them. `import(` is a dynamic import, an expression, and
+/// `a.import`, `a.export`, `{ export: 1 }` or a method `export() {}` are property
+/// names: none of them is a declaration. In a block the loop stops before the `}` that
+/// closes it.
+pub(super) fn items_in(parser: &mut Parser<'_>, scope: Scope) {
     let mut previous = TokenKind::Eof;
+    // After `await`, `yield` or the `of` of a `for` head an operand follows, so a `/`
+    // there starts a regex (the expression and loop stories will say so from the
+    // grammar; the token kinds alone call these identifiers).
+    let mut previous_of = false;
     let mut depth: u32 = 0;
     let mut exported = exports::Exported::new();
+    // A `class` keyword makes the next `{` open a class body (opaque until US-025);
+    // classes nest, so the depths of the open bodies form a stack.
+    let mut class_pending = false;
+    let mut class_bodies: Vec<u32> = Vec::new();
+    // For each open `{`, whether it began an object literal (so its `}` ends a value
+    // and a `/` after it divides) rather than a block.
+    let mut braces: Vec<bool> = Vec::new();
     loop {
-        let regex_allowed = regex_allowed_after(&previous);
+        let regex_allowed = previous_of || regex_allowed_after(&previous);
         let kind = parser.peek(regex_allowed).kind.clone();
+        let on_new_line = parser.peek(false).has_newline_before;
         let after_dot = matches!(previous, TokenKind::Punct(Punct::Dot | Punct::QuestionDot));
         match kind {
             TokenKind::Eof => {
-                parser.bump(false);
+                if scope == Scope::Module {
+                    parser.bump(false);
+                }
                 return;
             }
+            TokenKind::Punct(Punct::RBrace) if scope == Scope::Block && depth == 0 => return,
             TokenKind::Keyword(Keyword::Import)
                 if !after_dot && parser.peek_second().kind != TokenKind::Punct(Punct::LParen) =>
             {
@@ -67,7 +108,7 @@ fn items(parser: &mut Parser<'_>) {
                         TokenKind::Punct(Punct::Colon | Punct::LParen)
                     ) =>
             {
-                if depth > 0 {
+                if depth > 0 || scope == Scope::Block {
                     let span = parser.peek(false).span;
                     parser.error(
                         span,
@@ -78,17 +119,53 @@ fn items(parser: &mut Parser<'_>) {
                 previous = TokenKind::Eof;
             }
             TokenKind::Keyword(Keyword::Const | Keyword::Let)
-                if statement_start(&previous, parser.peek(false).has_newline_before) =>
+                if statement_start(&previous, on_new_line) =>
             {
                 bindings::declaration(parser);
                 previous = TokenKind::Eof;
             }
+            _ if statement_start(&previous, on_new_line) && functions::at_function(parser) => {
+                functions::function(parser, false);
+                previous = TokenKind::Eof;
+            }
+            _ if !after_dot && parser.at_arrow() => {
+                functions::arrow(parser, &[]);
+                previous = TokenKind::Punct(Punct::RParen);
+            }
+            _ if !after_dot && functions::at_function(parser) => {
+                parser.removed_function_expression();
+                previous = TokenKind::Punct(Punct::RParen);
+            }
             _ => {
                 match kind {
-                    TokenKind::Punct(Punct::LBrace) => depth += 1,
-                    TokenKind::Punct(Punct::RBrace) => depth = depth.saturating_sub(1),
+                    TokenKind::Punct(Punct::LBrace) => {
+                        depth += 1;
+                        // `previous_of`: an operand follows the word before (`yield {}`).
+                        braces.push(previous_of || opens_object_literal(&previous, on_new_line));
+                        if class_pending {
+                            class_pending = false;
+                            class_bodies.push(depth);
+                            parser.contexts.push(FnContext::ClassBody);
+                        }
+                    }
+                    TokenKind::Punct(Punct::RBrace) => {
+                        if class_bodies.last() == Some(&depth) {
+                            class_bodies.pop();
+                            parser.contexts.pop();
+                        }
+                        depth = depth.saturating_sub(1);
+                        if braces.pop() == Some(true) {
+                            previous_of = parser.operand_follows(after_dot, &previous);
+                            parser.bump(regex_allowed);
+                            previous = TokenKind::Punct(Punct::RParen);
+                            continue;
+                        }
+                    }
+                    TokenKind::Keyword(Keyword::Class) if !after_dot => class_pending = true,
+                    TokenKind::Ident if !after_dot => parser.check_yield_await(),
                     _ => {}
                 }
+                previous_of = parser.operand_follows(after_dot, &previous);
                 parser.bump(regex_allowed);
                 previous = kind;
             }
@@ -120,6 +197,28 @@ fn can_end_expression(previous: &TokenKind) -> bool {
     }
 }
 
+/// Whether `previous` can end the binding of a `for (… of …)` head: only there is a
+/// value juxtaposed to the word `of`, so an `of` after one is the keyword and the `/`
+/// after that starts a regex; `of / 2` with `=` before `of` is a division.
+fn pattern_end(previous: &TokenKind) -> bool {
+    matches!(
+        previous,
+        TokenKind::Ident | TokenKind::Punct(Punct::RBracket | Punct::RBrace)
+    )
+}
+
+/// Whether a `{` after `previous` opens an object literal rather than a block: where an
+/// operand is expected (after an operator, `=`, `(`, `,`, `:`, `return`, `throw`, …)
+/// and not at the start of a statement.
+fn opens_object_literal(previous: &TokenKind, on_new_line: bool) -> bool {
+    !statement_start(previous, on_new_line)
+        && (!can_end_expression(previous)
+            || matches!(
+                previous,
+                TokenKind::Keyword(Keyword::Return | Keyword::Throw | Keyword::Case)
+            ))
+}
+
 /// Whether a token after `previous` begins a statement: at the start, after `;`, `{` or
 /// `}`, or on a new line. Until the statement grammar lands this is how a `const` or
 /// `let` keyword is told from a property name (`a.const`) or a `for` head.
@@ -137,7 +236,11 @@ pub struct Parser<'a> {
     lexer: Lexer<'a>,
     builder: TreeBuilder,
     lookahead: Vec<Token>,
+    /// The lexer's state before each lookahead token, so a `/` can be lexed again.
+    checkpoints: Vec<Checkpoint>,
     diagnostics: Diagnostics,
+    /// The enclosing functions, innermost last; empty at the module's top level.
+    contexts: Vec<FnContext>,
 }
 
 impl<'a> Parser<'a> {
@@ -149,7 +252,9 @@ impl<'a> Parser<'a> {
             lexer: Lexer::new(file),
             builder: TreeBuilder::new(),
             lookahead: Vec::new(),
+            checkpoints: Vec::new(),
             diagnostics: Diagnostics::new(),
+            contexts: Vec::new(),
         }
     }
 
@@ -163,13 +268,12 @@ impl<'a> Parser<'a> {
                 TokenKind::Punct(Punct::Slash | Punct::SlashEq)
             )
         {
-            let token = &self.lookahead[0];
-            let start = token
-                .leading
-                .first()
-                .map_or(token.span.byte_start, |trivia| trivia.span.byte_start);
-            self.lexer.rewind(start);
+            let token_start = self.lookahead[0].span.byte_start;
+            let checkpoint = self.checkpoints[0].clone();
+            self.lexer.restore(checkpoint, token_start);
             self.lookahead.clear();
+            self.checkpoints.clear();
+            self.checkpoints.push(self.lexer.checkpoint());
             let regex = self.lexer.next_token(true);
             self.lookahead.push(regex);
         }
@@ -194,12 +298,14 @@ impl<'a> Parser<'a> {
         self.peek(regex_allowed);
         // `peek` filled the lookahead, so the front exists.
         let token = self.lookahead.remove(0);
+        self.checkpoints.remove(0);
         let id = self.builder.token(token);
         self.token(id)
     }
 
     fn fill(&mut self, count: usize) {
         while self.lookahead.len() < count {
+            self.checkpoints.push(self.lexer.checkpoint());
             let token = self.lexer.next_token(false);
             self.lookahead.push(token);
         }
@@ -248,43 +354,169 @@ impl<'a> Parser<'a> {
     }
 
     /// Consumes the extent of an expression until the expression stories land: up to
-    /// a token in `stops` at bracket depth zero, `;`, `}` or the end of the file, or a
-    /// line break at depth zero after a token that can end an expression. `(`, `[`, `{`
-    /// and template substitutions nest. Returns how many tokens were consumed.
+    /// a token in `stops` at bracket depth zero, `;`, an unmatched closer or the end of
+    /// the file, or a line break at depth zero after a token that can end an
+    /// expression. `(`, `[`, `{` and template substitutions nest. Arrow functions and
+    /// the removed `function` expression are parsed where they start (US-024), and
+    /// `yield`/`await` are checked against the enclosing function. Returns how many
+    /// tokens were consumed.
     pub fn raw_expression(&mut self, stops: &[TokenKind]) -> usize {
         let mut depth: u32 = 0;
+        // `?` opens a conditional and `:` closes it; a `:` with none open belongs to an
+        // enclosing conditional and ends this expression.
+        let mut conditionals: u32 = 0;
         let mut previous = TokenKind::Punct(Punct::Eq);
+        let mut previous_of = false;
         let mut consumed = 0;
         loop {
-            let regex_allowed = regex_allowed_after(&previous);
+            let regex_allowed = previous_of || regex_allowed_after(&previous);
             let token = self.peek(regex_allowed);
             let kind = token.kind.clone();
             let on_new_line = token.has_newline_before;
             if kind == TokenKind::Eof || (depth == 0 && stops.contains(&kind)) {
                 return consumed;
             }
+            if depth == 0 && kind == TokenKind::Punct(Punct::Colon) {
+                if conditionals == 0 {
+                    return consumed;
+                }
+                conditionals -= 1;
+            }
+            if depth == 0 && kind == TokenKind::Punct(Punct::Question) {
+                conditionals += 1;
+            }
             if depth == 0
-                && (kind == TokenKind::Punct(Punct::Semicolon)
-                    || kind == TokenKind::Punct(Punct::RBrace)
-                    || (on_new_line && can_end_expression(&previous)))
+                && (matches!(
+                    kind,
+                    TokenKind::Punct(
+                        Punct::Semicolon | Punct::RBrace | Punct::RParen | Punct::RBracket
+                    )
+                ) || (on_new_line && can_end_expression(&previous)))
             {
                 return consumed;
             }
+            let after_dot = matches!(previous, TokenKind::Punct(Punct::Dot | Punct::QuestionDot));
+            if !after_dot && self.at_arrow() {
+                functions::arrow(self, stops);
+                consumed += 1;
+                previous = TokenKind::Punct(Punct::RParen);
+                continue;
+            }
+            if !after_dot && functions::at_function(self) {
+                self.removed_function_expression();
+                consumed += 1;
+                previous = TokenKind::Punct(Punct::RParen);
+                continue;
+            }
             match &kind {
                 TokenKind::Punct(Punct::LParen | Punct::LBracket | Punct::LBrace) => depth += 1,
-                TokenKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace) => {
-                    depth = depth.saturating_sub(1);
-                }
+                TokenKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace) => depth -= 1,
                 TokenKind::Template(template) => match template.part {
                     TemplatePart::Head => depth += 1,
-                    TemplatePart::Tail => depth = depth.saturating_sub(1),
+                    TemplatePart::Tail => depth -= 1,
                     TemplatePart::Middle | TemplatePart::Whole => {}
                 },
+                TokenKind::Ident if !after_dot => self.check_yield_await(),
                 _ => {}
             }
+            previous_of = self.operand_follows(after_dot, &previous);
             self.bump(regex_allowed);
             consumed += 1;
-            previous = kind;
+            // Every `}` consumed here closes an object literal: a value, after which a
+            // `/` divides (blocks belong to arrows and functions, parsed apart).
+            previous = if kind == TokenKind::Punct(Punct::RBrace) {
+                TokenKind::Punct(Punct::RParen)
+            } else {
+                kind
+            };
+        }
+    }
+
+    /// The removed `function` expression at the next token: E000, then parsed for
+    /// recovery.
+    fn removed_function_expression(&mut self) {
+        let span = self.peek(false).span;
+        self.error(
+            span,
+            "a `function` expression is removed: write an arrow function or a `function` declaration (SPEC.md §4.4)",
+        );
+        functions::function(self, true);
+    }
+
+    /// True when an arrow function starts at the next token: `(…) =>`, `async (…) =>`,
+    /// `a =>` or `async a =>`.
+    pub(super) fn at_arrow(&mut self) -> bool {
+        match self.peek(false).kind.clone() {
+            TokenKind::Punct(Punct::LParen) => functions::arrow_ahead(self, 0),
+            TokenKind::Ident if self.at_word("async") => match self.peek_second().kind {
+                TokenKind::Punct(Punct::LParen) => functions::arrow_ahead(self, 1),
+                TokenKind::Ident => self.peek_nth(2).kind == TokenKind::Punct(Punct::Arrow),
+                _ => self.peek_second().kind == TokenKind::Punct(Punct::Arrow),
+            },
+            TokenKind::Ident => self.peek_second().kind == TokenKind::Punct(Punct::Arrow),
+            _ => false,
+        }
+    }
+
+    /// True when the next token is a word an operand follows, so a `/` after it starts a
+    /// regex: `await`, `yield`, or the `of` of a `for` head (an `of` juxtaposed to a
+    /// binding; `of / 2` after `=` is a division). Not after `.`, where any word is a
+    /// property name.
+    fn operand_follows(&mut self, after_dot: bool, previous: &TokenKind) -> bool {
+        !after_dot
+            && (self.at_word("await")
+                || self.at_word("yield")
+                || (self.at_word("of") && pattern_end(previous)))
+    }
+
+    /// E000 for `yield` outside a generator or `await` inside a function that is not
+    /// `async`, when the next token is that word used as a value: not a property key
+    /// (`yield:`) and not a method name (`yield() {}`, which until the class story is
+    /// told apart by the `(` alone).
+    fn check_yield_await(&mut self) {
+        if matches!(
+            self.peek_second().kind,
+            TokenKind::Punct(Punct::Colon | Punct::LParen)
+        ) {
+            return;
+        }
+        let span = self.peek(false).span;
+        let text = self.file.slice(&span).unwrap_or("");
+        match text {
+            "yield" => {
+                let ok = matches!(
+                    self.contexts.last(),
+                    Some(
+                        FnContext::Function {
+                            is_generator: true,
+                            ..
+                        } | FnContext::ClassBody
+                    )
+                );
+                if !ok {
+                    self.error(
+                        span,
+                        "`yield` is permitted only directly inside a generator function (SPEC.md §4.4)",
+                    );
+                }
+            }
+            "await" => {
+                let ok = matches!(
+                    self.contexts.last(),
+                    None | Some(
+                        FnContext::Function { is_async: true, .. }
+                            | FnContext::Arrow { is_async: true }
+                            | FnContext::ClassBody
+                    )
+                );
+                if !ok {
+                    self.error(
+                        span,
+                        "`await` is permitted only inside an `async` function or at the top level of a module (SPEC.md §5.1)",
+                    );
+                }
+            }
+            _ => {}
         }
     }
 
@@ -320,6 +552,7 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::functions::{self, ARROW_SCAN_LIMIT};
     use super::{parse, Parser};
     use crate::lex;
     use crate::token::{Punct, Regex, TokenKind};
@@ -342,7 +575,18 @@ mod tests {
         let (tree, diagnostics) = parse(f);
         let (stream, lexed) = lex(f);
         assert_eq!(tree.print(f), f.text());
-        assert_eq!(tree.tokens(), &stream.tokens[..]);
+        // The first token that differs, if any, with the source around it; index 0
+        // and an empty snippet otherwise, so the assertion below passes.
+        let index = (0..tree.tokens().len().max(stream.tokens.len()))
+            .find(|&i| tree.tokens().get(i) != stream.tokens.get(i))
+            .unwrap_or(0);
+        let at = tree.tokens().get(index).map_or(0, |t| t.span.byte_start);
+        let snippet = &f.text()[at.saturating_sub(60)..(at + 60).min(f.len())];
+        assert_eq!(
+            tree.tokens().get(index),
+            stream.tokens.get(index),
+            "token {index} differs near {snippet:?}"
+        );
         let root = tree.root();
         assert_eq!(root.kind(), NodeKind::Module);
         assert!(root.parent().is_none());
@@ -443,10 +687,14 @@ mod tests {
         };
         for seed in 0..2000u64 {
             let text = gen.generate(&mut Rng::from_seed(seed)).to_string();
-            let (diagnostics, lexed) = check(&file(&text));
+            let f = file(&text);
+            let (tree, diagnostics) = parse(&f);
+            assert_eq!(tree.print(&f), text, "seed {seed}");
+            assert_eq!(tree.root().kind(), NodeKind::Module);
             assert_eq!(
-                diagnostics, lexed,
-                "seed {seed}: a generated program parses clean"
+                diagnostics.len(),
+                0,
+                "seed {seed}: a generated program parses clean: {diagnostics:?}"
             );
         }
     }
@@ -572,6 +820,27 @@ mod tests {
             parser.peek_second().kind,
             TokenKind::Eof,
             "Eof again and again"
+        );
+    }
+
+    #[test]
+    fn the_arrow_scan_stops_at_the_end_of_the_file_and_at_its_limit() {
+        let f = file("(a");
+        let mut parser = Parser::new(&f);
+        assert!(!functions::arrow_ahead(&mut parser, 0));
+        assert_eq!(
+            parser.lookahead.len(),
+            3,
+            "`(`, `a`, Eof: the scan stopped at Eof"
+        );
+        let text = format!("({}", "b ".repeat(ARROW_SCAN_LIMIT));
+        let f = file(&text);
+        let mut parser = Parser::new(&f);
+        assert!(!functions::arrow_ahead(&mut parser, 0));
+        assert_eq!(
+            parser.lookahead.len(),
+            ARROW_SCAN_LIMIT + 1,
+            "the scan read up to the limit and gave up"
         );
     }
 

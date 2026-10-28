@@ -77,7 +77,7 @@ pub(super) fn declaration(parser: &mut Parser<'_>) -> Vec<(String, Span)> {
 
 /// A binding pattern: a name, `{ … }` or `[ … ]`. False when nothing bindable is
 /// there (reported).
-fn pattern(parser: &mut Parser<'_>, names: &mut Vec<(String, Span)>) -> bool {
+pub(super) fn pattern(parser: &mut Parser<'_>, names: &mut Vec<(String, Span)>) -> bool {
     match parser.peek(false).kind.clone() {
         TokenKind::Ident => binding_name(parser, names),
         TokenKind::Punct(Punct::LBrace) => object_pattern(parser, names),
@@ -270,7 +270,7 @@ fn rest_element(
 
 /// An optional `= default`, whose expression runs to the next `,` or `close` at
 /// bracket depth zero.
-fn default_value(parser: &mut Parser<'_>, close: TokenKind) {
+pub(super) fn default_value(parser: &mut Parser<'_>, close: TokenKind) {
     if parser.peek(false).kind != EQ {
         return;
     }
