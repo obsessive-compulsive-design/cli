@@ -275,7 +275,7 @@ fn check(parser: &mut Parser<'_>, form: Form, path: &str, span: Span, attributes
 
 /// Why `path` is not a path into the project (E201), if it is not.
 #[allow(clippy::case_sensitive_file_extension_comparisons)]
-fn foreign(path: &str) -> Option<String> {
+pub(super) fn foreign(path: &str) -> Option<String> {
     if !path.starts_with("./") && !path.starts_with("../") {
         return Some(format!(
             "`{path}` is not a relative path: imports name a file in the project as `./…` or `../…` (SPEC.md §5.1)"

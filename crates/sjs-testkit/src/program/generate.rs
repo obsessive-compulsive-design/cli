@@ -594,6 +594,9 @@ struct Generator<'a> {
     rng: &'a mut Rng,
     options: Options,
     used: BTreeSet<Production>,
+    /// Names the program has exported: a name is exported once (an ES2025 early error
+    /// otherwise, E000 in the parser).
+    exported: BTreeSet<String>,
 }
 
 impl ProgramGen {
@@ -603,6 +606,7 @@ impl ProgramGen {
             rng,
             options: self.options,
             used: BTreeSet::new(),
+            exported: BTreeSet::new(),
         };
         let program = g.program();
         (program, g.used)
@@ -873,15 +877,42 @@ impl Generator<'_> {
             .collect()
     }
 
+    /// `name [as alias]` with the exported name made unique in the program: a name
+    /// exported before gets a fresh alias.
+    fn unique_export(&mut self, name: String, alias: Option<&str>) -> (String, Option<String>) {
+        let base = alias.unwrap_or(&name);
+        let mut exported = base.to_owned();
+        let mut suffix = 0;
+        while self.exported.contains(&exported) {
+            exported = format!("{base}{suffix}");
+            suffix += 1;
+        }
+        self.exported.insert(exported.clone());
+        let alias = (exported != name).then_some(exported);
+        (name, alias)
+    }
+
     fn item(&mut self, ctx: Ctx) -> Item {
         match self.rng.below(10) {
             0 | 1 => {
+                let decl = self.decl(ctx);
+                let names = decl.bound_names();
+                if names.iter().any(|name| self.exported.contains(name)) {
+                    // Already exported under one of these names: keep the declaration
+                    // private so the program stays valid.
+                    return Item::Decl(decl);
+                }
+                self.exported.extend(names);
                 self.note(Production::ExportDecl);
-                Item::Export(self.decl(ctx))
+                Item::Export(decl)
             }
             2 => {
                 self.note(Production::ExportList);
-                let names = self.aliases(Production::ExportAlias);
+                let names = self
+                    .aliases(Production::ExportAlias)
+                    .into_iter()
+                    .map(|(name, alias)| self.unique_export(name, alias.as_deref()))
+                    .collect();
                 let from = if self.chance(1, 2) {
                     self.note(Production::ExportFrom);
                     Some(self.module_path())
@@ -1857,6 +1888,7 @@ mod tests {
             rng: &mut rng,
             options: Options::default(),
             used: BTreeSet::new(),
+            exported: BTreeSet::new(),
         };
         for _ in 0..50 {
             let pair = g.logical_pair();

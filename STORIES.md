@@ -1016,7 +1016,31 @@ attribute keys, `import {} from "./x.js"` (E000: the grammar requires one specif
 `import { k } from "./c.json" with { type: "json" }` (E000: JSON has no named exports).
 
 #### US-022 Export declarations
-§2, §5.1, §8.4 · After: US-021 · Size: S · M0
+§2, §5.1, §8.4 · After: US-021 · Size: S · M0 · **Status: complete** (2026-10-27)
+
+> Delivered in `sjs-syntax`: `parser/exports.rs` parses `export` before `const`,
+> `let`, `function`, `async function` and `class` (the `ExportDecl` node holds the
+> keyword and the declaration's tokens follow it until their own grammar stories),
+> `export { a, b as c }` (trailing comma permitted) and `export { a } from "./x.js"`
+> into `ExportDecl` / `NamedExports` / `ExportSpecifier`. Every `export default` form
+> and `export { x as default }` are `E202`; `export * from` and `export * as ns from`
+> are `E161`; a name exported twice (by list, by rename or by a declaration whose
+> plain name is visible) is `E000` at the repeat, naming the first; `export {}` is
+> `E000`; an `export` inside braces is `E000` and still parsed; a re-export path is
+> checked like an import path (E201, and E000 for a `.json` module). `export let` is
+> accepted. The driver tracks brace depth and exported names, gained `peek_nth`, and
+> treats `a.export`, `{ export: 1 }` and a method `export()` as property names.
+> Fixtures: `05-modules/E202/` (four forms), `08-structure/E161/` (two), and E000
+> cases for a repeated name, an empty list and an export in a block, plus a conforming
+> file with every permitted form. The corpus generator (US-009) could export one name
+> twice, which this rule rejects: it now keeps exported names unique (a repeated
+> declaration stays private, a repeated list entry gets a fresh alias; `Decl::
+> bound_names` and `Pattern::names` added), and the corpus manifest snapshot was
+> regenerated. **Decisions:** the names of destructuring patterns and generators are
+> left to the binder, which sees real declaration nodes; a declaration's own duplicate
+> binding inside a pattern (which the generator can still produce) is the pattern
+> story's early error. Verified: 100% lines and regions, 61 mutants (53 caught, 5
+> unviable, 3 timeouts, 0 missed).
 
 **Done when**
 - `export const/let/function/class`, `export { a, b as c }` and `export { a } from

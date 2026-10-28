@@ -1163,3 +1163,108 @@ fn a_failing_property_shrinks_to_a_one_item_program() {
     assert_eq!(minimal.items.len(), 1, "{minimal}");
     assert!(failure.minimal.contains("While"), "{}", failure.minimal);
 }
+
+#[test]
+fn bound_names_cover_every_declaration_and_pattern_shape() {
+    use crate::program::tree::{Decl, Expr, Literal, Pattern};
+    let n = |s: &str| s.to_owned();
+    assert_eq!(
+        Decl::Function {
+            is_async: false,
+            is_generator: true,
+            name: n("f"),
+            params: Vec::new(),
+            body: Vec::new(),
+        }
+        .bound_names(),
+        ["f"]
+    );
+    assert_eq!(
+        Decl::Class {
+            name: n("C"),
+            extends: None,
+            members: Vec::new(),
+        }
+        .bound_names(),
+        ["C"]
+    );
+    assert_eq!(
+        Decl::Let(
+            Pattern::Ident(n("a")),
+            Expr::Literal(Literal::Number(n("1")))
+        )
+        .bound_names(),
+        ["a"]
+    );
+    let nested = Pattern::Object(
+        vec![
+            (n("a"), None, None),
+            (
+                n("b"),
+                Some(Box::new(Pattern::Array(
+                    vec![
+                        (Pattern::Ident(n("c")), None),
+                        (
+                            Pattern::Ident(n("d")),
+                            Some(Expr::Literal(Literal::Number(n("2")))),
+                        ),
+                    ],
+                    Some(n("e")),
+                ))),
+                None,
+            ),
+        ],
+        Some(n("f")),
+    );
+    assert_eq!(
+        Decl::Const(nested, Expr::Literal(Literal::Number(n("1")))).bound_names(),
+        ["a", "c", "d", "e", "f"]
+    );
+}
+
+/// A name is exported once per program (an ES2025 early error otherwise), whether by
+/// an exported declaration or an export list, aliases included.
+#[test]
+fn generated_programs_never_export_a_name_twice() {
+    use crate::program::tree::Item;
+    let options = Options::default();
+    let mut renamed = 0;
+    let mut kept_private = 0;
+    for seed in 0..600u64 {
+        let program = generate(seed, options).0;
+        let mut seen = BTreeSet::new();
+        for item in &program.items {
+            let names: Vec<String> = match item {
+                Item::Export(decl) => decl.bound_names(),
+                Item::ExportList(names, _) => names
+                    .iter()
+                    .map(|(name, alias)| {
+                        if alias.is_some() {
+                            renamed += 1;
+                        }
+                        alias.clone().unwrap_or_else(|| name.clone())
+                    })
+                    .collect(),
+                Item::Decl(decl) if seen.iter().any(|s| decl.bound_names().contains(s)) => {
+                    kept_private += 1;
+                    Vec::new()
+                }
+                Item::Decl(_) | Item::Import(_) | Item::Stmt(_) => Vec::new(),
+            };
+            // A pattern that binds one name twice is its own early error, left to the
+            // pattern story; here each item counts each name once.
+            let names: BTreeSet<String> = names.into_iter().collect();
+            for name in names {
+                assert!(
+                    seen.insert(name.clone()),
+                    "seed {seed}: `{name}` exported twice\n{program}"
+                );
+            }
+        }
+    }
+    assert!(renamed > 0, "some export list got a fresh alias");
+    assert!(
+        kept_private > 0,
+        "some declaration stayed private because its name was already exported"
+    );
+}

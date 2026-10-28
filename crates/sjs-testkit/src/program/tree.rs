@@ -65,6 +65,44 @@ pub enum Decl {
     },
 }
 
+impl Decl {
+    /// The names the declaration binds, in source order: a function's or class's name,
+    /// or every name of a `const`/`let` pattern.
+    #[must_use]
+    pub fn bound_names(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        match self {
+            Decl::Const(pattern, _) | Decl::Let(pattern, _) => pattern.names(&mut out),
+            Decl::Function { name, .. } | Decl::Class { name, .. } => out.push(name.clone()),
+        }
+        out
+    }
+}
+
+impl Pattern {
+    /// Appends every name the pattern binds, in source order.
+    pub fn names(&self, out: &mut Vec<String>) {
+        match self {
+            Pattern::Ident(name) => out.push(name.clone()),
+            Pattern::Object(entries, rest) => {
+                for (key, target, _) in entries {
+                    match target {
+                        Some(target) => target.names(out),
+                        None => out.push(key.clone()),
+                    }
+                }
+                out.extend(rest.clone());
+            }
+            Pattern::Array(elements, rest) => {
+                for (element, _) in elements {
+                    element.names(out);
+                }
+                out.extend(rest.clone());
+            }
+        }
+    }
+}
+
 /// A class member.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Member {

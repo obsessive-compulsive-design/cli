@@ -1,6 +1,7 @@
 //! The parser driver (SPEC.md §11.1): owns the lexer, pulls tokens with the
 //! regex-allowed hint (US-015) and builds the [`SyntaxTree`]. A module is its import
-//! declarations (US-021, `imports.rs`) followed by its items, which stay a list of
+//! declarations (US-021, `imports.rs`) followed by its items, among which export
+//! declarations (US-022, `exports.rs`) are recognised; everything else stays a list of
 //! tokens until the grammar stories add their productions.
 //!
 //! A `/` is lexed as a division until the grammar asks for an expression there; then
@@ -8,6 +9,7 @@
 //! anything, so re-lexing leaves no stale diagnostic. The reverse never happens: once a
 //! regex has been asked for, it stays.
 
+mod exports;
 mod imports;
 
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
@@ -27,34 +29,63 @@ pub fn parse(file: &SourceFile) -> (SyntaxTree, Diagnostics) {
     parser.finish()
 }
 
-/// The module items after the imports: a list of tokens until the grammar stories land,
-/// in which an import declaration is E000 (SPEC.md §2: imports come first) and is then
-/// parsed anyway so the tree still records it. `import(` is a dynamic import, an
-/// expression, and `a.import` a property name: neither is a declaration.
+/// The module items after the imports: export declarations, and otherwise a list of
+/// tokens until the grammar stories land. An import declaration here is E000 (SPEC.md
+/// §2: imports come first) and an export inside braces is E000 (exports sit at the top
+/// level); both are then parsed anyway so the tree still records them. `import(` is a
+/// dynamic import, an expression, and `a.import`, `a.export`, `{ export: 1 }` or a
+/// method `export() {}` are property names: none of them is a declaration.
 fn items(parser: &mut Parser<'_>) {
     let mut previous = TokenKind::Eof;
+    let mut depth: u32 = 0;
+    let mut exported = exports::Exported::new();
     loop {
         let regex_allowed = regex_allowed_after(&previous);
         let kind = parser.peek(regex_allowed).kind.clone();
-        if kind == TokenKind::Eof {
-            parser.bump(false);
-            return;
+        let after_dot = matches!(previous, TokenKind::Punct(Punct::Dot | Punct::QuestionDot));
+        match kind {
+            TokenKind::Eof => {
+                parser.bump(false);
+                return;
+            }
+            TokenKind::Keyword(Keyword::Import)
+                if !after_dot && parser.peek_second().kind != TokenKind::Punct(Punct::LParen) =>
+            {
+                let span = parser.peek(false).span;
+                parser.error(
+                    span,
+                    "an import must precede every other module item (SPEC.md §2 `Module`)",
+                );
+                imports::import_decl(parser);
+                previous = TokenKind::Eof;
+            }
+            TokenKind::Keyword(Keyword::Export)
+                if !after_dot
+                    && !matches!(
+                        parser.peek_second().kind,
+                        TokenKind::Punct(Punct::Colon | Punct::LParen)
+                    ) =>
+            {
+                if depth > 0 {
+                    let span = parser.peek(false).span;
+                    parser.error(
+                        span,
+                        "an `export` belongs at the top level of the module, not inside a block (SPEC.md §2 `Module`)",
+                    );
+                }
+                exports::export_decl(parser, &mut exported);
+                previous = TokenKind::Eof;
+            }
+            _ => {
+                match kind {
+                    TokenKind::Punct(Punct::LBrace) => depth += 1,
+                    TokenKind::Punct(Punct::RBrace) => depth = depth.saturating_sub(1),
+                    _ => {}
+                }
+                parser.bump(regex_allowed);
+                previous = kind;
+            }
         }
-        if kind == TokenKind::Keyword(Keyword::Import)
-            && !matches!(previous, TokenKind::Punct(Punct::Dot | Punct::QuestionDot))
-            && parser.peek_second().kind != TokenKind::Punct(Punct::LParen)
-        {
-            let span = parser.peek(false).span;
-            parser.error(
-                span,
-                "an import must precede every other module item (SPEC.md §2 `Module`)",
-            );
-            imports::import_decl(parser);
-            previous = TokenKind::Eof;
-            continue;
-        }
-        parser.bump(regex_allowed);
-        previous = kind;
     }
 }
 
@@ -106,8 +137,14 @@ impl<'a> Parser<'a> {
     /// The token after the next one, always lexed as division: it only ever decides
     /// between forms, never starts an expression.
     pub fn peek_second(&mut self) -> &Token {
-        self.fill(2);
-        &self.lookahead[1]
+        self.peek_nth(1)
+    }
+
+    /// The token `offset` places after the next one (`peek_nth(0)` is the next token),
+    /// lexed as division like [`Parser::peek_second`].
+    pub fn peek_nth(&mut self, offset: usize) -> &Token {
+        self.fill(offset + 1);
+        &self.lookahead[offset]
     }
 
     /// Consumes the next token into the innermost open node and returns it.

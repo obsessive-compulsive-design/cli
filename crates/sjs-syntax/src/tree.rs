@@ -49,6 +49,13 @@ pub enum NodeKind {
     DefaultImport,
     /// `with { type: "json" }`.
     ImportAttributes,
+    /// `export …` (US-022): the keyword and, for a list form, the list and its `from`
+    /// path; an exported declaration follows the node until its own grammar story.
+    ExportDecl,
+    /// `{ a, b as c }` of an export.
+    NamedExports,
+    /// `a` or `a as b` inside `NamedExports`.
+    ExportSpecifier,
 }
 
 /// A node's index in the arena; `NodeId(0)` is the root.
