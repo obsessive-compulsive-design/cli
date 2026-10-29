@@ -28,7 +28,7 @@ pub(super) fn export_decl(parser: &mut Parser<'_>, exported: &mut Exported) {
     match parser.peek(false).kind.clone() {
         LBRACE => {
             named_exports(parser, exported);
-            parser.terminate();
+            parser.terminate(false);
         }
         TokenKind::Keyword(Keyword::Default) => {
             let span = parser.peek(false).span;

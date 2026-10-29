@@ -601,7 +601,7 @@ mod tests {
             "const a = await x",
             "async function f() { await x }",
             "const f = async () => await x",
-            "function* g() { yield 1\n  const a = yield\n  yield* h() }",
+            "function* g() { yield 1\n  yield* h()\n  const a = yield }",
             "async function* g() { yield await x }",
             "function* g() { const f = async () => await 1 }",
             "const o = { yield: 1, await: 2 }\nconst p = o.yield + o.await",

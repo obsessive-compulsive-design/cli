@@ -21,7 +21,7 @@ mod statements;
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
 
 use crate::lexer::{Checkpoint, Lexer};
-use crate::token::{Keyword, Punct, Token, TokenKind};
+use crate::token::{Keyword, Punct, TemplatePart, Token, TokenKind};
 use crate::tree::{Marker, NodeId, NodeKind, SyntaxTree, TokenId, TreeBuilder};
 
 /// Parses a whole file into its tree and diagnostics. Never fails.
@@ -157,6 +157,108 @@ fn dispatch_item(parser: &mut Parser<'_>, scope: Scope, exported: &mut exports::
     }
 }
 
+/// Whether a token of this kind ends a value: a name, a literal, `this`, `super`, a
+/// closing `)` or `]`, or a postfix `++`/`--`. Not a keyword, an operator, a `;` or a
+/// `}` (an object literal's is the exception, made where it closes).
+fn ends_value(kind: &TokenKind) -> bool {
+    match kind {
+        TokenKind::Ident
+        | TokenKind::Number(_)
+        | TokenKind::String(_)
+        | TokenKind::BigInt(_)
+        | TokenKind::Bool(_)
+        | TokenKind::Null
+        | TokenKind::Regex(_)
+        | TokenKind::PrivateName(_)
+        | TokenKind::Keyword(Keyword::This | Keyword::Super) => true,
+        TokenKind::Template(template) => {
+            matches!(template.part, TemplatePart::Whole | TemplatePart::Tail)
+        }
+        TokenKind::Punct(punct) => matches!(
+            punct,
+            Punct::RParen | Punct::RBracket | Punct::PlusPlus | Punct::MinusMinus
+        ),
+        _ => false,
+    }
+}
+
+/// The E001 message for a token that starts a line after a value, if it is a hazard:
+/// `(`, `[` and a template continue the value as a call, an index or a tag, `+`, `-`,
+/// `/` and their compound assignments as an operator (ES2025 joins the lines, and a
+/// `;` between them is style that S002 removes); `++` and `--` never join, but read
+/// as if they did.
+fn line_start_message(kind: &TokenKind) -> Option<&'static str> {
+    let message = match kind {
+        TokenKind::Punct(Punct::LParen) => {
+            "a line starting with `(` continues the expression on the line before it as a call, with or without a `;` between them (ES2025 ASI; semicolons are style): restructure so the line stands alone (SPEC.md §2)"
+        }
+        TokenKind::Punct(Punct::LBracket) => {
+            "a line starting with `[` continues the expression on the line before it as an index, with or without a `;` between them (ES2025 ASI; semicolons are style): restructure so the line stands alone (SPEC.md §2)"
+        }
+        // Only a whole template or a head can start a line: a middle or tail follows
+        // its substitution's expression, which no statement ends inside.
+        TokenKind::Template(_) => {
+            "a line starting with a template continues the expression on the line before it as a tagged template, with or without a `;` between them (ES2025 ASI; semicolons are style): restructure so the line stands alone (SPEC.md §2)"
+        }
+        TokenKind::Punct(Punct::Plus | Punct::PlusEq) => {
+            "a line starting with `+` continues the expression on the line before it as an operator, with or without a `;` between them (ES2025 ASI; semicolons are style): restructure so the line stands alone (SPEC.md §2)"
+        }
+        TokenKind::Punct(Punct::Minus | Punct::MinusEq) => {
+            "a line starting with `-` continues the expression on the line before it as an operator, with or without a `;` between them (ES2025 ASI; semicolons are style): restructure so the line stands alone (SPEC.md §2)"
+        }
+        TokenKind::Punct(Punct::Slash | Punct::SlashEq) => {
+            "a line starting with `/` continues the expression on the line before it as a division, with or without a `;` between them (ES2025 ASI; semicolons are style): restructure so the line stands alone (SPEC.md §2)"
+        }
+        TokenKind::Punct(Punct::PlusPlus | Punct::MinusMinus) => {
+            "a line starting with `++` or `--` reads as the end of the expression before it, which ES2025 ends at the line break: write the update on its own line as `x += 1` (SPEC.md §2)"
+        }
+        _ => return None,
+    };
+    Some(message)
+}
+
+/// Whether a token of this kind begins an operand, so a line break between `return`,
+/// `throw` or `yield` and it is E001 (US-031): a value, a prefix operator, `(`, `[`,
+/// `{`, `new`, `this`, `super`, `import(`; not a keyword that begins a statement.
+pub(super) fn begins_operand(kind: &TokenKind) -> bool {
+    match kind {
+        TokenKind::Keyword(keyword) => matches!(
+            keyword,
+            Keyword::This
+                | Keyword::Super
+                | Keyword::New
+                | Keyword::Typeof
+                | Keyword::Void
+                | Keyword::Delete
+                | Keyword::Import
+        ),
+        TokenKind::Punct(punct) => matches!(
+            punct,
+            Punct::LParen
+                | Punct::LBracket
+                | Punct::LBrace
+                | Punct::Bang
+                | Punct::Minus
+                | Punct::Plus
+                | Punct::Tilde
+                | Punct::PlusPlus
+                | Punct::MinusMinus
+        ),
+        TokenKind::Template(template) => {
+            matches!(template.part, TemplatePart::Whole | TemplatePart::Head)
+        }
+        TokenKind::Ident
+        | TokenKind::Number(_)
+        | TokenKind::String(_)
+        | TokenKind::BigInt(_)
+        | TokenKind::Bool(_)
+        | TokenKind::Null
+        | TokenKind::Regex(_)
+        | TokenKind::PrivateName(_) => true,
+        _ => false,
+    }
+}
+
 /// Up to two tokens of lookahead over the lexer, feeding a [`TreeBuilder`].
 pub struct Parser<'a> {
     file: &'a SourceFile,
@@ -189,6 +291,10 @@ pub struct Parser<'a> {
     statement_update: Option<expressions::Update>,
     /// Shorthand defaults (`{ a = 1 }`) not yet settled as a pattern's or an error.
     covers: Vec<Span>,
+    /// Whether the last token consumed ends a value that ES would continue on the next
+    /// line (US-031): by its kind, except that the `}` of an object literal does and a
+    /// `yield` without an operand does not, which the expression grammar says.
+    pub(super) last_ends_value: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -212,6 +318,7 @@ impl<'a> Parser<'a> {
             statement_start: None,
             statement_update: None,
             covers: Vec::new(),
+            last_ends_value: false,
         }
     }
 
@@ -257,6 +364,7 @@ impl<'a> Parser<'a> {
         let token = self.lookahead.remove(0);
         self.checkpoints.remove(0);
         self.last = Some(token.span);
+        self.last_ends_value = ends_value(&token.kind);
         let id = self.builder.token(token);
         self.token(id)
     }
@@ -530,17 +638,33 @@ impl<'a> Parser<'a> {
         self.builder.start_node_at(marker, kind)
     }
 
-    /// The end of a simple statement: a `;`, or before the next token a line break, a
-    /// `}` or the end of the file (where ASI would end it). Anything else on the line
-    /// is E000, unless the statement has already reported something, or it is a
-    /// character the lexer reported, which is skipped with the rest of its line.
-    pub(super) fn terminate(&mut self) {
-        if self.eat(&TokenKind::Punct(Punct::Semicolon)) {
+    /// The end of a simple statement: a `;` (S002), or before the next token a line
+    /// break, a `}` or the end of the file (where ASI would end it). Anything else on
+    /// the line is E000, unless the statement has already reported something, or it is
+    /// a character the lexer reported, which is skipped with the rest of its line.
+    ///
+    /// `expression` says the statement ends with an expression. After one, a line
+    /// starting with `(`, `[`, a template, `+`, `-`, `/` (or their compounds) or
+    /// `++`/`--` is E001 (US-031): without a `;` ES joins the lines, and with one the
+    /// `;` is style (S002) whose removal would. The expression grammar reports the
+    /// joins it makes; here only what did not join arrives: a `++`/`--` line start,
+    /// or any hazard after a `;`.
+    pub(super) fn terminate(&mut self, expression: bool) {
+        let ends_expression = expression && self.last_ends_value;
+        if self.semicolon() {
+            if ends_expression {
+                self.line_start_hazard();
+            }
             return;
         }
         let next = self.peek(false).clone();
-        if next.has_newline_before
-            || matches!(next.kind, TokenKind::Punct(Punct::RBrace) | TokenKind::Eof)
+        if next.has_newline_before {
+            if ends_expression {
+                self.line_start_hazard();
+            }
+            return;
+        }
+        if matches!(next.kind, TokenKind::Punct(Punct::RBrace) | TokenKind::Eof)
             || self.diagnostics.len() > self.item_mark
         {
             return;
@@ -553,6 +677,43 @@ impl<'a> Parser<'a> {
             next.span,
             "expected `;` or a line break after the statement",
         );
+    }
+
+    /// A `;` at the next token, consumed and reported as S002: the canonical style has
+    /// none (SPEC.md §9.2). False when there is none.
+    pub(super) fn semicolon(&mut self) -> bool {
+        let next = self.peek(false).clone();
+        if next.kind != TokenKind::Punct(Punct::Semicolon) {
+            return false;
+        }
+        self.report_with_fix(
+            Code::S002,
+            next.span,
+            "a semicolon: the canonical style omits them, and E001 keeps the file unambiguous without them (SPEC.md §9.2)",
+            ";".to_owned(),
+            String::new(),
+        );
+        self.bump(false);
+        true
+    }
+
+    /// E001 at the next token when it starts a line with a hazard: a token that would
+    /// continue the expression on the line before it, or `++`/`--`, which a reader may
+    /// take to.
+    fn line_start_hazard(&mut self) {
+        let next = self.peek(false).clone();
+        self.join_hazard(&next);
+    }
+
+    /// E001 at `token` when it is a hazard on a new line: one the expression grammar is
+    /// about to join to the line before it, or one left at a statement's end (US-031).
+    pub(super) fn join_hazard(&mut self, token: &Token) {
+        if !token.has_newline_before {
+            return;
+        }
+        if let Some(message) = line_start_message(&token.kind) {
+            self.report(Code::E001, token.span, message);
+        }
     }
 
     /// Consumes tokens, brackets balanced, up to (not including) `stop` at depth zero,

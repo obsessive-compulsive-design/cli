@@ -92,7 +92,7 @@ pub(super) fn import_decl(parser: &mut Parser<'_>) {
     let attributes = (parser.peek(false).kind == TokenKind::Keyword(Keyword::With))
         .then(|| import_attributes(parser));
     check(parser, form, &path, path_span, attributes);
-    parser.terminate();
+    parser.terminate(false);
     parser.finish_node();
 }
 

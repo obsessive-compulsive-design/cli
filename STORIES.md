@@ -1481,7 +1481,47 @@ async: 1 }`, `{ get: 1 }`; a trailing comma after a spread; `{}` and `[]`; `{
 with a test documenting why.
 
 #### US-031 ASI hazards and semicolons
-§2, §9.2, S002 · After: US-029 · Size: M · M0
+§2, §9.2, S002 · After: US-029 · Size: M · M0 · **Status: complete** (2026-10-29)
+
+> Delivered in `sjs-syntax`: every `;` the grammar consumes as a terminator is S002 with
+> the fix `;` → `` (`Parser::semicolon`, used by `terminate`, class bodies and fields;
+> the bare `;` statement keeps its own wording; the `;` of a classic `for` header is
+> grammar, not style). E001 `ambiguous-line-start` is reported in two places that
+> together cover every hazard, each once: the expression grammar reports a `(`, `[`,
+> template, `+`, `-`, `/`, `+=`, `-=` or `/=` on a new line at the moment it joins the
+> line to the one before (`Parser::join_hazard`, from the chain, binary and assignment
+> parsers), so `x\n/re/v.test(y)` is E001 as a division, and a statement's end reports
+> what did not join (`terminate(expression)`): a hazard after a `;` (which S002 would
+> remove, so the `;` exempts nothing) and a `++`/`--` line start, which ES never joins
+> but a reader may. Whether the line before ends a value comes from the last token's
+> kind (`Parser::last_ends_value`: a name, literal, `this`, `super`, `)`, `]`, postfix
+> `++`/`--`, a whole or tail template), with the `}` of an object literal counted in by
+> the literal and a `yield` without an operand counted out; a keyword, a block or class
+> `}`, an arrow's block body, an import or export list and a `for` header end nothing.
+> A line break between `return` or `yield` and a token that begins an operand (a value,
+> `(`, `[`, `{`, a template, a prefix operator, `new`, `this`, `import(`; not a keyword
+> that begins a statement) is E001 at that token, `return 1\n+ 2` by the join rule
+> instead, once; `throw` with a line break before its operand (a syntax error in ES2025)
+> is E001 and the operand parsed; `break`/`continue` followed on the next line by a name
+> is E001 (the decision's label hazard). The first line is never E001; a comment-only
+> line between is looked past (comments are trivia). Fixtures under
+> `tests/conformance/02-lexical/E001/` (thirteen cases: every hazard token, the `;`
+> case declaring its S002, return/throw/yield/break, the postfix split with its S012,
+> after a comment, and a conforming file with every non-hazard line start) and
+> `02-lexical/S002/semicolons.js`; a class fixture's bare `;` member was removed. The
+> corpus generator (US-009) wrote bare `return`/`break`/`continue`/`yield` statements
+> with statements after them (the line after beginning an operand: E001), and bare
+> `yield` as a value: a bare one now ends its block, a `yield` with a value is the only
+> form in value position, and the manifest snapshot was regenerated. **Decisions:** a
+> bare `return` or `yield` followed by a line beginning an operand is E001 even where
+> no operand was meant (`yield\nf()`), since the layout relies on the restricted
+> production; `a++;\n(c)` is E001 although `a++` and `(c)` never join, because the
+> canonical `a += 1` would; `async\n(x) => x` is E001 at the `(` (ES reads `async(x)`),
+> and the stray `=>` is not reported again. Verified: 100% lines and regions, 74
+> mutants on the diff (39 caught, 12 unviable, 13 timeouts, 10 missed: the `;` and
+> `++` paths had fixtures but no unit test), then the 11 mutants of `ends_value`,
+> `line_start_message` and `line_start_hazard` rerun after tests for every hazard token
+> with and without a `;` and every value-ending token kind: 11 caught, 0 missed.
 
 As a programmer I want every place where ASI would change the meaning of a no-semicolon
 file reported as E001, and every semicolon reported as S002, so the file parses the same

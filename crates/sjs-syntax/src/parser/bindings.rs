@@ -71,7 +71,7 @@ pub(super) fn declaration(parser: &mut Parser<'_>) -> Vec<(String, Span)> {
             parser.error(span, "a `const` declaration needs an initializer");
         }
     }
-    parser.terminate();
+    parser.terminate(true);
     parser.finish_node();
     names
 }
@@ -327,15 +327,29 @@ mod tests {
             clean("let a = 1"),
             "(Module (LetDecl let a (Initializer = 1)) <eof>)"
         );
+        let text = "const a = 1\nlet b = a + 2;\nconst c = f(\n  a,\n  b\n)";
         assert_eq!(
-            clean("const a = 1\nlet b = a + 2;\nconst c = f(\n  a,\n  b\n)"),
+            sexp(text),
             "(Module (ConstDecl const a (Initializer = 1)) (LetDecl let b (Initializer = (BinaryExpr a + 2)) ;) (ConstDecl const c (Initializer = (CallExpr f ( a , b )))) <eof>)",
             "a newline or `;` ends the initializer; brackets keep it open"
         );
         assert_eq!(
-            clean("const a = 1 +\n  2\nconst b = a\n(c)"),
+            diagnostics(text).iter().map(|d| d.0).collect::<Vec<_>>(),
+            [Code::S002]
+        );
+        let text = "const a = 1 +\n  2\nconst b = a\n(c)";
+        assert_eq!(
+            sexp(text),
             "(Module (ConstDecl const a (Initializer = (BinaryExpr 1 + 2))) (ConstDecl const b (Initializer = (CallExpr a ( c )))) <eof>)",
-            "a line ending in an operator continues, and so does one starting with `(`, as ES parses it (US-031 reports that hazard)"
+            "a line ending in an operator continues, and so does one starting with `(`, as ES parses it"
+        );
+        assert_eq!(
+            diagnostics(text)
+                .iter()
+                .map(|d| (d.0, d.1, d.2))
+                .collect::<Vec<_>>(),
+            [(Code::E001, 4, 1)],
+            "and the `(` line is the hazard US-031 reports"
         );
         assert_eq!(
             clean("{ const a = 1 }"),
@@ -603,8 +617,16 @@ mod tests {
             "nor after `(`, where it is no expression either"
         );
         assert_eq!(
-            clean("const a = 1; const b = 2"),
+            sexp("const a = 1; const b = 2"),
             "(Module (ConstDecl const a (Initializer = 1) ;) (ConstDecl const b (Initializer = 2)) <eof>)"
+        );
+        assert_eq!(
+            diagnostics("const a = 1; const b = 2")
+                .iter()
+                .map(|d| d.0)
+                .collect::<Vec<_>>(),
+            [Code::S002],
+            "the `;` is style (US-031)"
         );
         assert_eq!(
             clean("if (x) {\n  let y = 1\n}"),

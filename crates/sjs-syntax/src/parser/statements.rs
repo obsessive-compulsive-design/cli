@@ -23,7 +23,9 @@
 
 use sjs_diag::{Code, Span};
 
-use super::{bindings, exports, expressions, functions, FnContext, Jump, Parser, Scope};
+use super::{
+    begins_operand, bindings, exports, expressions, functions, FnContext, Jump, Parser, Scope,
+};
 use crate::token::{Keyword, Punct, TokenKind};
 use crate::tree::NodeKind;
 
@@ -81,19 +83,27 @@ fn dispatch(parser: &mut Parser<'_>) {
         TokenKind::Keyword(Keyword::Throw) => {
             parser.start_node(NodeKind::ThrowStmt);
             parser.bump(false);
-            if matches!(parser.peek(true).kind, SEMICOLON | RBRACE | TokenKind::Eof) {
+            let next = parser.peek(true).clone();
+            if matches!(next.kind, SEMICOLON | RBRACE | TokenKind::Eof) {
                 parser.error(token.span, "expected an expression after `throw`");
             } else {
+                if next.has_newline_before {
+                    parser.report(
+                        Code::E001,
+                        next.span,
+                        "a line break between `throw` and its operand is a syntax error in ES2025: put them on one line (SPEC.md §2)",
+                    );
+                }
                 expressions::expression(parser);
             }
-            parser.terminate();
+            parser.terminate(true);
             parser.finish_node();
         }
         TokenKind::Keyword(Keyword::Debugger) => {
             // The lexer has reported the removed word.
             parser.start_node(NodeKind::DebuggerStmt);
             parser.bump(false);
-            parser.terminate();
+            parser.terminate(false);
             parser.finish_node();
         }
         TokenKind::Keyword(Keyword::Switch) => switch_stmt(parser),
@@ -122,7 +132,7 @@ fn empty(parser: &mut Parser<'_>) {
     parser.report_with_fix(
         Code::S002,
         span,
-        "an empty statement is a semicolon: the canonical style omits them (SPEC.md §8.5)",
+        "an empty statement is a semicolon: the canonical style omits them (SPEC.md §9.2)",
         ";".to_owned(),
         String::new(),
     );
@@ -226,7 +236,7 @@ fn do_while(parser: &mut Parser<'_>) {
     if parser.eat(&TokenKind::Keyword(Keyword::While)) {
         condition(parser, "while");
     }
-    parser.terminate();
+    parser.terminate(false);
     parser.finish_node();
 }
 
@@ -257,11 +267,20 @@ fn return_stmt(parser: &mut Parser<'_>) {
             "`return` is permitted only inside a function: not at the top level of a module, in a static block or in a field initializer",
         );
     }
-    let next = parser.peek(true);
-    if !next.has_newline_before && !matches!(next.kind, SEMICOLON | RBRACE | TokenKind::Eof) {
+    let next = parser.peek(true).clone();
+    if next.has_newline_before {
+        // ES ends the `return` at the line break: a value on the next line is E001.
+        if begins_operand(&next.kind) {
+            parser.report(
+                Code::E001,
+                next.span,
+                "a line break between `return` and its value ends the `return` before the value (ES2025 ASI): put them on one line (SPEC.md §2)",
+            );
+        }
+    } else if !matches!(next.kind, SEMICOLON | RBRACE | TokenKind::Eof) {
         expressions::expression(parser);
     }
-    parser.terminate();
+    parser.terminate(true);
     parser.finish_node();
 }
 
@@ -283,6 +302,12 @@ fn jump(parser: &mut Parser<'_>) {
         );
         parser.error(next.span, message);
         parser.bump(false);
+    } else if next.kind == TokenKind::Ident {
+        // On the next line, the name is a statement of its own, but reads as a label.
+        let message = format!(
+            "a name on the line after `{word}` reads as its label but is a separate statement (ES2025 ASI): restructure (SPEC.md §2)"
+        );
+        parser.report(Code::E001, next.span, message);
     } else if is_break && !parser.can_break() {
         parser.error(
             keyword.span,
@@ -294,7 +319,7 @@ fn jump(parser: &mut Parser<'_>) {
             "`continue` is permitted only inside a loop of the same function",
         );
     }
-    parser.terminate();
+    parser.terminate(false);
     parser.finish_node();
 }
 
@@ -741,7 +766,7 @@ pub(super) fn var_decl(parser: &mut Parser<'_>) {
         expressions::assignment(parser);
         parser.finish_node();
     }
-    parser.terminate();
+    parser.terminate(true);
     parser.finish_node();
 }
 
@@ -820,8 +845,8 @@ mod tests {
             "(Module (ForStmt for ( (LetDecl let i (Initializer = 0)) ; (BinaryExpr i < n) ; (ForUpdate i += 2) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = n)) ; (BinaryExpr i > 0) ; (ForUpdate i -= 1) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = 0)) ; (BinaryExpr i < n) ; (ForUpdate i ++) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = 0)) ; (BinaryExpr i < n) ; (ForUpdate i --) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = 0)) ; (BinaryExpr i < n) ; (ForUpdate ++ i) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = 0)) ; (BinaryExpr i < n) ; (ForUpdate -- i) ) (Block { })) <eof>)"
         );
         assert_eq!(
-            clean("function f(a) {\n  if (a) {\n    return\n  }\n  throw new Error(\"x\")\n  return a;\n}\nf(1);\n/a/v.test(\"a\")"),
-            "(Module (FunctionDecl function f (Params ( (Param a) )) (Block { (IfStmt if ( a ) (Block { (ReturnStmt return) })) (ThrowStmt throw (NewExpr new Error ( \"x\" ))) (ReturnStmt return a ;) })) (ExprStmt (CallExpr f ( 1 )) ;) (ExprStmt (CallExpr (MemberExpr /a/v . test) ( \"a\" ))) <eof>)",
+            clean("/a/v.test(\"a\")\nfunction f(a) {\n  if (a) {\n    return\n  }\n  throw new Error(\"x\")\n  return a\n}\nf(1)"),
+            "(Module (ExprStmt (CallExpr (MemberExpr /a/v . test) ( \"a\" ))) (FunctionDecl function f (Params ( (Param a) )) (Block { (IfStmt if ( a ) (Block { (ReturnStmt return) })) (ThrowStmt throw (NewExpr new Error ( \"x\" ))) (ReturnStmt return a) })) (ExprStmt (CallExpr f ( 1 ))) <eof>)",
             "a statement may start with a regex"
         );
         assert_eq!(
@@ -829,9 +854,9 @@ mod tests {
             "(Module (SwitchStmt switch ( x ) { (CaseClause (CaseLabel case 1 :) (CaseLabel case 2 :) (Block { (BreakStmt break) })) (CaseClause (CaseLabel default :) (Block { (ExprStmt (CallExpr f ( ))) })) }) (TryStmt try (Block { }) (CatchClause catch ( e ) (Block { })) (FinallyClause finally (Block { }))) (TryStmt try (Block { }) (CatchClause catch (Block { }))) <eof>)"
         );
         assert_eq!(
-            clean("function f() {\n  return\n  1\n}"),
+            sexp("function f() {\n  return\n  1\n}"),
             "(Module (FunctionDecl function f (Params ( )) (Block { (ReturnStmt return) (ExprStmt 1) })) <eof>)",
-            "a value on the next line is not returned"
+            "a value on the next line is not returned (and is E001, US-031)"
         );
     }
 
@@ -844,16 +869,29 @@ mod tests {
             "a `;` ending a statement belongs to it; after a block it stands alone"
         );
         assert_eq!(
-            clean("f()\n;"),
+            sexp("f()\n;"),
             "(Module (ExprStmt (CallExpr f ( )) ;) <eof>)",
             "a `;` on the next line still ends the expression statement"
         );
+        assert_eq!(
+            diagnostics("f()\n;")
+                .iter()
+                .map(|d| (d.0, d.1, d.2))
+                .collect::<Vec<_>>(),
+            [(Code::S002, 2, 1)]
+        );
         let found = diagnostics(text);
-        assert_eq!(found.len(), 1, "{found:?}");
-        assert_eq!((found[0].0, found[0].1, found[0].2), (Code::S002, 2, 1));
+        assert_eq!(
+            found.iter().map(|d| (d.0, d.1, d.2)).collect::<Vec<_>>(),
+            [(Code::S002, 2, 1), (Code::S002, 3, 12)],
+            "the bare `;` and the one ending the declaration"
+        );
         assert_eq!(
             fixes(text),
-            vec![(Some(";".to_owned()), Some(String::new()))]
+            vec![
+                (Some(";".to_owned()), Some(String::new())),
+                (Some(";".to_owned()), Some(String::new()))
+            ]
         );
     }
 
@@ -1045,12 +1083,12 @@ mod tests {
                 "`for…of` over `Object.keys`",
             ),
             ("do {\n} while (x)", 1, 1, "write a `while` loop"),
-            ("do {} while (x);", 1, 1, "write a `while` loop"),
+            ("do {} while (x)\nf()", 1, 1, "write a `while` loop"),
             ("a: while (x) {}", 1, 1, "labels are removed"),
             ("with (o) {}", 1, 1, "there is no dynamic scope"),
             ("debugger", 1, 1, "`debugger` is removed"),
             ("var x = 1", 1, 1, "use `const` or `let`"),
-            ("var [a, b] = c;", 1, 1, "use `const` or `let`"),
+            ("var [a, b] = c", 1, 1, "use `const` or `let`"),
             ("var x", 1, 1, "use `const` or `let`"),
             (
                 "while (x) {\n  break a\n}",
@@ -1571,6 +1609,152 @@ mod tests {
             "(Module (TryStmt try (Block { }) (CatchClause catch ( (ObjectPattern { (PatternProperty a) }) ) (Block { }))) <eof>)",
             "parsed anyway"
         );
+    }
+
+    #[test]
+    fn a_line_break_before_a_return_throw_or_yield_operand_is_e001() {
+        for (text, line, column) in [
+            ("function f() {\n  return\n  1\n}", 3, 3),
+            ("function f() {\n  return\n  `a`\n}", 3, 3),
+            ("function f() {\n  return\n  (1)\n}", 3, 3),
+            ("function f() {\n  return\n  [1]\n}", 3, 3),
+            // A block after the `return`, as ES reads it (`{ a: 1 }` would hold a label).
+            ("function f() {\n  return\n  {}\n}", 3, 3),
+            ("function f() {\n  return\n  -1\n}", 3, 3),
+            ("function f() {\n  return\n  !a\n}", 3, 3),
+            ("function f() {\n  return\n  new A()\n}", 3, 3),
+            ("function f() {\n  return\n  this\n}", 3, 3),
+            ("function f() {\n  return\n  typeof a\n}", 3, 3),
+            ("function f() {\n  return\n  import(\"./a.js\")\n}", 3, 3),
+            ("function f() {\n  return\n  /a/v\n}", 3, 3),
+            ("function f() {\n  throw\n  new Error(\"x\")\n}", 3, 3),
+            ("function* g() {\n  yield\n  1\n}", 3, 3),
+            ("function* g() {\n  yield\n  `a`\n}", 3, 3),
+            ("function* g() {\n  const a = yield\n  f()\n}", 3, 3),
+            ("while (x) {\n  break\n  outer\n}", 3, 3),
+            ("while (x) {\n  continue\n  outer\n}", 3, 3),
+            ("function f() {\n  return\n  +1\n}", 3, 3),
+            // With a value, the `+` line joins it: the line-start rule, reported once.
+            ("function f() {\n  return 1\n  + 2\n}", 3, 3),
+        ] {
+            let found = diagnostics(text);
+            assert_eq!(found.len(), 1, "{text}: {found:?}");
+            let message = &found[0].3;
+            assert_eq!(
+                (found[0].0, found[0].1, found[0].2),
+                (Code::E001, line, column),
+                "{text}: {message}"
+            );
+        }
+        for text in [
+            "function f() {\n  return\n}",
+            "function f() {\n  return\n  const a = 1\n  return a\n}",
+            "function f() {\n  return\n  function g() {}\n}",
+            "function f() {\n  return\n  class A {}\n}",
+            "function f() {\n  return\n  if (x) {}\n}",
+            "function* g() {\n  yield\n}",
+            "function* g() {\n  yield\n  const a = 1\n}",
+            // Inside a substitution the template's own tail follows the `yield`.
+            "function* g() {\n  const s = `${yield\n  }`\n}",
+            "while (x) {\n  break\n  if (x) {}\n}",
+            "while (x) {\n  break\n}",
+        ] {
+            assert_eq!(diagnostics(text), Vec::new(), "{text}");
+        }
+        let found = diagnostics("function* g() {\n  yield\n");
+        assert_eq!(found.len(), 1, "only the unclosed body: {found:?}");
+        assert!(found[0].3.contains("expected `}`"), "{found:?}");
+        assert_eq!(
+            diagnostics("function f() { return }"),
+            Vec::new(),
+            "a `}}` on the same line ends a bare `return`"
+        );
+        assert_eq!(
+            diagnostics("function f() {\n  return;\n}")
+                .iter()
+                .map(|d| d.0)
+                .collect::<Vec<_>>(),
+            [Code::S002],
+            "and so does a `;`, which is style"
+        );
+    }
+
+    #[test]
+    fn every_hazard_line_start_is_e001_with_or_without_a_semicolon() {
+        for (text, kind) in [
+            ("a\n(b)", "as a call"),
+            ("a\n[0]", "as an index"),
+            ("String.raw\n`x`", "as a tagged template"),
+            ("a\n+ b", "`+`"),
+            ("a\n- b", "`-`"),
+            ("a\n/ b", "`/`"),
+            ("a\n+= 1", "`+`"),
+            ("a\n-= 1", "`-`"),
+            ("a\n/= 2", "`/`"),
+            ("a\n++b", "`++` or `--`"),
+            ("a\n--b", "`++` or `--`"),
+            ("x\n/re/v.test(y)", "`/`"),
+        ] {
+            for separator in ["", ";"] {
+                let text = text.replacen('\n', &format!("{separator}\n"), 1);
+                let found = diagnostics(&text);
+                let hazards: Vec<_> = found.iter().filter(|d| d.0 == Code::E001).collect();
+                assert_eq!(hazards.len(), 1, "{text:?}: {found:?}");
+                assert_eq!((hazards[0].1, hazards[0].2), (2, 1), "{text:?}");
+                let message = &hazards[0].3;
+                assert!(message.contains(kind), "{text:?}: {message}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_line_start_hazard_needs_a_value_on_the_line_before() {
+        // Every token kind that ends a value, then a `;` and a `(` line: E001.
+        for text in [
+            "a;\n(c)",
+            "1;\n(c)",
+            "\"s\";\n(c)",
+            "1n;\n(c)",
+            "true;\n(c)",
+            "null;\n(c)",
+            "/r/v;\n(c)",
+            "`t`;\n(c)",
+            "`${a}`;\n(c)",
+            "this;\n(c)",
+            "f();\n(c)",
+            "a[0];\n(c)",
+            "i++;\n(c)",
+            "x = { a: 1 };\n(c)",
+            "class A {\n  #x\n  m() {\n    this.#x;\n(c)\n  }\n}",
+            "class A extends B {\n  constructor() {\n    super();\n(c)\n  }\n}",
+        ] {
+            let found = diagnostics(text);
+            let hazards = found.iter().filter(|d| d.0 == Code::E001).count();
+            assert_eq!(hazards, 1, "{text:?}: {found:?}");
+        }
+        // Nothing to join: a keyword, a block or class `}`, an arrow body, a bare
+        // `yield`, an import or export list, or no line break at all.
+        for text in [
+            "function f() {\n  return;\n  (c)\n}",
+            "while (x) {\n  break;\n  (c)\n}",
+            "{ a };\n(c)",
+            "class A {};\n(c)",
+            "const f = () => {};\n(c)",
+            "function* g() {\n  const a = yield;\n  (c)\n}",
+            "import { a } from \"./a.js\";\n(c)",
+            "export { a };\n(c)",
+            "a; (c)",
+            "a;\nb",
+            "a;\n{}",
+            "a;\nconst c = 1",
+            "a;\n!b",
+        ] {
+            let found = diagnostics(text);
+            assert!(
+                found.iter().all(|d| d.0 == Code::S002),
+                "only the `;` is reported: {text:?}: {found:?}"
+            );
+        }
     }
 
     #[test]

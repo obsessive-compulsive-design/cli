@@ -181,7 +181,7 @@ fn body(parser: &mut Parser<'_>) {
                 return;
             }
             SEMICOLON => {
-                parser.bump(false);
+                parser.semicolon();
             }
             _ => member(parser, &mut constructors),
         }
@@ -428,7 +428,7 @@ fn field(parser: &mut Parser<'_>, is_static: bool, key: &Key) {
         }
         parser.finish_node();
     }
-    if !parser.eat(&SEMICOLON) {
+    if !parser.semicolon() {
         let next = parser.peek(false).clone();
         if next.kind != RBRACE && !next.has_newline_before {
             parser.error(next.span, "expected `;` or a newline after a field");
@@ -644,8 +644,8 @@ mod tests {
             "(Module (ClassDecl class A (ClassHeritage extends B) (ClassBody { })) (ClassDecl class C (ClassHeritage extends ns . D) (ClassBody { })) <eof>)"
         );
         assert_eq!(
-            clean("class A {\n  x\n  y = 1\n  #z = 2;\n  static s = 3\n  static #t\n}"),
-            "(Module (ClassDecl class A (ClassBody { (ClassField x) (ClassField y (Initializer = 1)) (ClassField #z (Initializer = 2) ;) (ClassField static s (Initializer = 3)) (ClassField static #t) })) <eof>)"
+            clean("class A {\n  x\n  y = 1\n  #z = 2\n  static s = 3\n  static #t\n}"),
+            "(Module (ClassDecl class A (ClassBody { (ClassField x) (ClassField y (Initializer = 1)) (ClassField #z (Initializer = 2)) (ClassField static s (Initializer = 3)) (ClassField static #t) })) <eof>)"
         );
         assert_eq!(
             clean("class A {\n  m() {}\n  async n(a) { await a }\n  *g() { yield 1 }\n  async *h() { yield await 1 }\n  static s() {}\n  static async *t() {}\n  #p() {}\n  static #q() {}\n}"),
@@ -681,15 +681,25 @@ mod tests {
     #[test]
     fn contextual_words_are_members_when_nothing_follows_them() {
         assert_eq!(
-            clean("class A {\n  static static = 1\n  static\n  get() {}\n  set() {}\n  async() {}\n  get = 2\n  static get = 3\n  static async = 4\n  constructor() {}\n  ;\n  ;\n}"),
+            sexp("class A {\n  static static = 1\n  static\n  get() {}\n  set() {}\n  async() {}\n  get = 2\n  static get = 3\n  static async = 4\n  constructor() {}\n  ;\n  ;\n}"),
             "(Module (ClassDecl class A (ClassBody { (ClassField static static (Initializer = 1)) (ClassMethod static get (Params ( )) (Block { })) (ClassMethod set (Params ( )) (Block { })) (ClassMethod async (Params ( )) (Block { })) (ClassField get (Initializer = 2)) (ClassField static get (Initializer = 3)) (ClassField static async (Initializer = 4)) (ClassMethod constructor (Params ( )) (Block { })) ; ; })) <eof>)"
         );
         assert_eq!(
-            clean("class A { ; }"),
+            sexp("class A { ; }"),
             "(Module (ClassDecl class A (ClassBody { ; })) <eof>)"
         );
+        let text =
+            "class A {\n  async\n  m() {}\n  static\n  n() {}\n  get\n  x() {}\n  x = 1; y = 2\n}";
         assert_eq!(
-            clean("class A {\n  async\n  m() {}\n  static\n  n() {}\n  get\n  x() {}\n  x = 1; y = 2\n}"),
+            diagnostics(text)
+                .iter()
+                .map(|d| (d.0, d.1, d.2))
+                .collect::<Vec<_>>(),
+            [(Code::S002, 8, 8)],
+            "the `;` between the fields is style"
+        );
+        assert_eq!(
+            sexp(text),
             "(Module (ClassDecl class A (ClassBody { (ClassField async) (ClassMethod m (Params ( )) (Block { })) (ClassMethod static n (Params ( )) (Block { })) (ClassAccessor get x (Params ( )) (Block { })) (ClassField x (Initializer = 1) ;) (ClassField y (Initializer = 2)) })) <eof>)",
             "`async` ends at a newline; `static` and `get` do not"
         );
@@ -1044,7 +1054,7 @@ mod tests {
             ),
         ]);
         for text in [
-            "class A extends B {\n  constructor() { super(); const f = () => super.x }\n  static m() { return super.x }\n  get g() { return super[\"y\"] }\n  x = super.z\n  static { super.w }\n  #p() { return super.q }\n}",
+            "class A extends B {\n  constructor() { super()\n    const f = () => super.x }\n  static m() { return super.x }\n  get g() { return super[\"y\"] }\n  x = super.z\n  static { super.w }\n  #p() { return super.q }\n}",
             "class A extends B {\n  constructor() {\n    const g = () => { super() }\n  }\n}",
         ] {
             assert_eq!(diagnostics(text), Vec::new(), "{text}");
@@ -1089,7 +1099,19 @@ mod tests {
         let text = "class  A  extends  ns.B {\n  static  #x = 1 ;\n  async  *m ( a ) { // c\n    yield await a\n  }\n  get [Symbol.iterator] () {}\n}\n";
         let f = file(text);
         let (tree, found) = parse(&f);
-        assert!(found.is_empty(), "{found:?}");
+        assert!(
+            found.iter().all(|d| d.code == Code::S002),
+            "only the `;` is reported: {found:?}"
+        );
         assert_eq!(tree.print(&f), text);
+    }
+
+    #[test]
+    fn every_semicolon_in_a_class_body_is_s002() {
+        let found = diagnostics("class A {\n  x = 1;\n  ;\n  m() {}\n  ;\n}");
+        assert_eq!(
+            found.iter().map(|d| (d.0, d.1, d.2)).collect::<Vec<_>>(),
+            [(Code::S002, 2, 8), (Code::S002, 3, 3), (Code::S002, 5, 3)]
+        );
     }
 }

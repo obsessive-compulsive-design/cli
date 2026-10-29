@@ -26,10 +26,10 @@ const u = new Map().size + new Map().size
 const w = await import("./w.js")
 const y = o.delete(1)
 function* gen() {
-  yield
   yield 1
   yield* gen()
   const v = yield a
+  yield
 }
 async function run() {
   await run()

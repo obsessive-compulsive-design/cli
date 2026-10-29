@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 
 use sjs_diag::{Code, Span};
 
-use super::{classes, functions, imports, FnContext, Parser};
+use super::{begins_operand, classes, functions, imports, FnContext, Parser};
 use crate::token::{Keyword, Punct, TemplatePart, Token, TokenKind};
 use crate::tree::{Child, Marker, NodeId, NodeKind};
 
@@ -201,6 +201,12 @@ fn assign_inner(p: &mut Parser<'_>) -> Expr {
         return target;
     };
     check_target(p, target, kind, &op, covers);
+    if matches!(
+        op.kind,
+        TokenKind::Punct(Punct::PlusEq | Punct::MinusEq | Punct::SlashEq)
+    ) {
+        p.join_hazard(&op);
+    }
     p.start_node_at(marker, NodeKind::AssignExpr);
     p.bump(false);
     if assignment(p).is_missing() {
@@ -366,6 +372,12 @@ fn binary(p: &mut Parser<'_>, min: u8) -> Expr {
             ),
             _ => {}
         }
+        if matches!(
+            op.kind,
+            TokenKind::Punct(Punct::Plus | Punct::Minus | Punct::Slash)
+        ) {
+            p.join_hazard(&op);
+        }
         p.start_node_at(marker, NodeKind::BinaryExpr);
         p.bump(false);
         let next = if op.kind == STAR_STAR {
@@ -522,6 +534,7 @@ fn chain(p: &mut Parser<'_>, calls: bool) -> Expr {
             }
             LBRACKET => {
                 raw_tag = false;
+                p.join_hazard(&token);
                 p.start_node_at(marker, NodeKind::IndexExpr);
                 p.bump(false);
                 index(p);
@@ -558,6 +571,7 @@ fn chain(p: &mut Parser<'_>, calls: bool) -> Expr {
             }
             LPAREN if calls => {
                 raw_tag = false;
+                p.join_hazard(&token);
                 p.start_node_at(marker, NodeKind::CallExpr);
                 arguments(p);
             }
@@ -576,6 +590,7 @@ fn chain(p: &mut Parser<'_>, calls: bool) -> Expr {
                     );
                 }
                 raw_tag = false;
+                p.join_hazard(&token);
                 p.start_node_at(marker, NodeKind::TaggedTemplate);
                 template(p);
             }
@@ -818,14 +833,27 @@ fn yield_expr(p: &mut Parser<'_>) -> Expr {
         next.kind,
         RPAREN | RBRACKET | RBRACE | COMMA | SEMICOLON | COLON | TokenKind::Eof
     );
-    if (delegate || (!next.has_newline_before && !ends)) && assignment(p).is_missing() {
-        let span = p.peek(false).span;
-        let message = if delegate {
-            "expected an expression after `yield*`"
-        } else {
-            "expected an expression after `yield`"
-        };
-        p.error(span, message);
+    if delegate || (!next.has_newline_before && !ends) {
+        if assignment(p).is_missing() {
+            let span = p.peek(false).span;
+            let message = if delegate {
+                "expected an expression after `yield*`"
+            } else {
+                "expected an expression after `yield`"
+            };
+            p.error(span, message);
+        }
+    } else {
+        // No operand: ES ends the `yield` at the line break, so an operand on the next
+        // line is E001, and nothing continues this `yield` either.
+        if next.has_newline_before && begins_operand(&next.kind) {
+            p.report(
+                Code::E001,
+                next.span,
+                "a line break between `yield` and its operand ends the `yield` before the operand (ES2025 ASI): put them on one line (SPEC.md §2)",
+            );
+        }
+        p.last_ends_value = false;
     }
     p.finish_node();
     p.expr(Shape::Other, start)
@@ -921,6 +949,8 @@ fn object(p: &mut Parser<'_>) -> Expr {
         let token = p.peek(false).clone();
         if token.kind == RBRACE {
             p.bump(false);
+            // The literal is a value: a `(` on the next line would call it.
+            p.last_ends_value = true;
             break;
         }
         let complete = if token.kind == ELLIPSIS {
@@ -1412,7 +1442,7 @@ pub(super) fn expression_statement(p: &mut Parser<'_>) {
         }
     }
     (p.statement_start, p.statement_update) = outer;
-    p.terminate();
+    p.terminate(true);
     p.finish_node();
 }
 
@@ -1910,7 +1940,7 @@ mod tests {
             ("++i", "++i", "i += 1"),
             ("--i", "--i", "i -= 1"),
             ("a.b++", "a.b++", "a.b += 1"),
-            ("a[0]--;", "a[0]--", "a[0] -= 1"),
+            ("a[0]--", "a[0]--", "a[0] -= 1"),
         ] {
             assert_eq!(
                 fixes(text),
@@ -1922,6 +1952,18 @@ mod tests {
                 "{text}"
             );
         }
+        assert_eq!(
+            fixes("i++;"),
+            vec![
+                (
+                    Code::S012,
+                    Some("i++".to_owned()),
+                    Some("i += 1".to_owned())
+                ),
+                (Code::S002, Some(";".to_owned()), Some(String::new())),
+            ],
+            "and the `;` after it is style"
+        );
         assert_eq!(
             sexp("i++\n--j"),
             "(Module (ExprStmt (UpdateExpr i ++)) (ExprStmt (UpdateExpr -- j)) <eof>)"
@@ -2114,8 +2156,8 @@ mod tests {
     #[test]
     fn yield_and_await_follow_their_function() {
         assert_eq!(
-            clean("function* g() {\n  yield\n  yield 1\n  yield* h()\n  const a = yield b\n  f(yield, yield c)\n}"),
-            "(Module (FunctionDecl function * g (Params ( )) (Block { (ExprStmt (YieldExpr yield)) (ExprStmt (YieldExpr yield 1)) (ExprStmt (YieldExpr yield * (CallExpr h ( )))) (ConstDecl const a (Initializer = (YieldExpr yield b))) (ExprStmt (CallExpr f ( (YieldExpr yield) , (YieldExpr yield c) ))) })) <eof>)"
+            clean("function* g() {\n  yield 1\n  yield* h()\n  const a = yield b\n  f(yield, yield c)\n  yield\n}"),
+            "(Module (FunctionDecl function * g (Params ( )) (Block { (ExprStmt (YieldExpr yield 1)) (ExprStmt (YieldExpr yield * (CallExpr h ( )))) (ConstDecl const a (Initializer = (YieldExpr yield b))) (ExprStmt (CallExpr f ( (YieldExpr yield) , (YieldExpr yield c) ))) (ExprStmt (YieldExpr yield)) })) <eof>)"
         );
         assert_eq!(
             clean("async function f() {\n  await g()\n}\nawait h()"),
@@ -2493,7 +2535,8 @@ mod tests {
         for (text, line, column) in [
             ("f(a) => b", 1, 6),
             ("x y => z", 1, 3),
-            ("async\n(x) => x", 2, 5),
+            // After a line break `async` is a name, which the `(x)` line calls (E001).
+            ("async\n(x) => x", 2, 1),
         ] {
             let found = diagnostics(text);
             assert_eq!(found.len(), 1, "{text}: {found:?}");
@@ -2523,11 +2566,13 @@ mod tests {
         ] {
             assert_eq!(value(text), expected, "{text}");
         }
-        assert_eq!(
-            diagnostics("[(a?.b).c] = d\n(a?.b).c = 1"),
-            Vec::new(),
-            "parentheses end the group, so the member after them is assignable"
-        );
+        for text in ["[(a?.b).c] = d", "(a?.b).c = 1"] {
+            assert_eq!(
+                diagnostics(text),
+                Vec::new(),
+                "parentheses end the group, so the member after them is assignable: {text}"
+            );
+        }
         check_one(&[
             ("a?.b.c = 1", Code::E000, 1, 1, "the left side of `=`"),
             ("(a?.b.c) = 1", Code::E000, 1, 1, "the left side of `=`"),

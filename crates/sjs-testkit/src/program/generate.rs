@@ -1220,7 +1220,25 @@ impl Generator<'_> {
             return Vec::new();
         }
         let count = self.rng.index(4);
-        (0..count).map(|_| self.stmt(ctx)).collect()
+        let mut body = Vec::new();
+        for _ in 0..count {
+            let stmt = self.stmt(ctx);
+            // A bare `return`, `break`, `continue` or `yield` ends at its line break, so
+            // a line after it that begins an operand would be E001 (and dead code):
+            // nothing follows one in its block.
+            let terminal = matches!(
+                stmt,
+                Stmt::Return(None)
+                    | Stmt::Break
+                    | Stmt::Continue
+                    | Stmt::Expr(Expr::Yield(None, _))
+            );
+            body.push(stmt);
+            if terminal {
+                break;
+            }
+        }
+        body
     }
 
     fn stmt(&mut self, ctx: Ctx) -> Stmt {
@@ -1452,7 +1470,7 @@ impl Generator<'_> {
                 });
                 Expr::Unary("await", Box::new(self.chain(ctx)))
             }
-            3 if ctx.has(IS_GENERATOR) => self.yield_expr(ctx),
+            3 if ctx.has(IS_GENERATOR) => self.yield_expr(ctx, true),
             _ => {
                 self.note(Production::New);
                 Expr::New(self.type_name(), self.args(deep))
@@ -1460,9 +1478,11 @@ impl Generator<'_> {
         }
     }
 
-    fn yield_expr(&mut self, ctx: Ctx) -> Expr {
-        match self.rng.below(3) {
-            0 => {
+    /// A `yield`; bare only where `bare` says, as a whole statement, since a bare
+    /// `yield` ends at its line break and a value after it would be E001.
+    fn yield_expr(&mut self, ctx: Ctx, bare: bool) -> Expr {
+        match self.rng.below(if bare { 3 } else { 2 }) {
+            0 if bare => {
                 self.note(Production::Yield);
                 Expr::Yield(None, false)
             }
@@ -1660,7 +1680,7 @@ impl Generator<'_> {
                     Box::new(Expr::Ident("null".to_owned())),
                 )
             }
-            _ if ctx.has(IS_GENERATOR) => self.yield_expr(ctx),
+            _ if ctx.has(IS_GENERATOR) => self.yield_expr(ctx, false),
             _ => self.simple_expr(),
         }
     }

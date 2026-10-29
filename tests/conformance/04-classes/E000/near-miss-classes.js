@@ -34,5 +34,4 @@ class A extends ns.B {
     A.count = 1
   }
   #p() {}
-  ;
 }
