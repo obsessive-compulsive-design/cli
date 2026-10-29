@@ -491,11 +491,33 @@ impl<'a> Parser<'a> {
     /// A diagnostic at `span`. Past the nesting bound nothing more is reported: the
     /// file is hostile, and its skipped remainder would only cascade.
     pub fn report(&mut self, code: Code, span: Span, message: impl Into<String>) {
+        let diagnostic = Diagnostic::new(code, self.file.path(), span, message);
+        self.push(diagnostic);
+    }
+
+    /// A diagnostic at `span` that notes a `related` location.
+    pub(super) fn report_related(
+        &mut self,
+        code: Code,
+        span: Span,
+        message: impl Into<String>,
+        related: Span,
+        note: &str,
+    ) {
+        let diagnostic = Diagnostic::new(code, self.file.path(), span, message).with_related(
+            self.file.path(),
+            related,
+            note,
+        );
+        self.push(diagnostic);
+    }
+
+    /// Keeps a diagnostic, unless the nesting bound has tripped.
+    fn push(&mut self, diagnostic: Diagnostic) {
         if self.too_deep {
             return;
         }
-        self.diagnostics
-            .push(Diagnostic::new(code, self.file.path(), span, message));
+        self.diagnostics.push(diagnostic);
     }
 
     /// The place before the next child of the innermost open node.

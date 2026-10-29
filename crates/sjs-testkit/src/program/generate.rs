@@ -1768,7 +1768,8 @@ impl Generator<'_> {
                     self.note(Production::ObjectShorthand);
                     Property::Shorthand(name)
                 }
-                1 if keys.insert(format!("\"{name}\"")) => {
+                // `"a"` and `a` spell the same key (E134 if repeated).
+                1 if keys.insert(name.clone()) => {
                     self.note(Production::ObjectStringKey);
                     Property::StringKey(name, self.expr(ctx))
                 }

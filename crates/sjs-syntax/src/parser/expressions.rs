@@ -9,8 +9,10 @@
 //! `new ns.A(…)` name a class and always take an argument list; `import("./x.js")`
 //! takes one string literal path under the static import's rules; `String.raw` is the
 //! one template tag; a keyword after `.` is a property name; `new.target` and
-//! `import.meta` are removed. Array and object literals parse for their structure
-//! only: their rules are US-030's.
+//! `import.meta` are removed. Array and object literals (US-030) take trailing
+//! commas; an array hole, a method, accessor or `__proto__: …` on an object literal
+//! are E000 naming dense arrays, classes and prototype manipulation; a non-computed
+//! key spelled twice (`1`, `1.0` and `"1"` alike) is E134 at the repeat.
 //!
 //! Removed operators are E000 naming the replacement and parsed for recovery: `==` and
 //! `!=` (fix: `===`, `!==`), `||=`, `&&=` and the comma operator; `in`, `void` and
@@ -21,6 +23,8 @@
 //! name, a property or an array or object pattern (the literal is reinterpreted); of a
 //! compound assignment, a name or a property; a parenthesised name or property is
 //! accepted and is S005.
+
+use std::collections::BTreeMap;
 
 use sjs_diag::{Code, Span};
 
@@ -858,7 +862,8 @@ fn paren(p: &mut Parser<'_>) -> Expr {
     p.expr(shape, open)
 }
 
-/// `[ element, ...spread, ]`. A hole (`[a, , b]`) is left for US-030 to report.
+/// `[ element, ...spread, ]` with a trailing comma. A hole (`[a, , b]`, `[,]`) is
+/// E000: arrays are dense.
 fn array(p: &mut Parser<'_>) -> Expr {
     let node = p.start_node(NodeKind::ArrayLit);
     let open = p.bump(false).span;
@@ -870,6 +875,11 @@ fn array(p: &mut Parser<'_>) -> Expr {
                 break;
             }
             COMMA => {
+                // Nothing since the `[` or the previous `,`.
+                p.error(
+                    token.span,
+                    "an array hole is removed: arrays are dense, so write every element (SPEC.md §12)",
+                );
                 p.bump(false);
                 continue;
             }
@@ -896,11 +906,17 @@ fn array(p: &mut Parser<'_>) -> Expr {
     p.expr(Shape::Array(node), open)
 }
 
-/// `{ key: value, shorthand, ...spread, }`. Methods, accessors and the other
-/// object-literal rules are US-030's.
+/// The non-computed keys an object literal has spelled since its start or its last
+/// spread, each with where it first did: a repeat is E134. Later keys win, and a spread
+/// may bring any key, so a key repeated after one is deliberate.
+type Keys = BTreeMap<String, Span>;
+
+/// `{ key: value, shorthand, ...spread, }` with a trailing comma. Methods, accessors
+/// and `__proto__: …` are removed (E000, parsed), and a key spelled twice is E134.
 fn object(p: &mut Parser<'_>) -> Expr {
     let node = p.start_node(NodeKind::ObjectLit);
     let open = p.bump(false).span;
+    let mut keys = Keys::new();
     loop {
         let token = p.peek(false).clone();
         if token.kind == RBRACE {
@@ -908,11 +924,12 @@ fn object(p: &mut Parser<'_>) -> Expr {
             break;
         }
         let complete = if token.kind == ELLIPSIS {
+            keys.clear();
             spread(p, true);
             true
         } else {
             p.start_node(NodeKind::Property);
-            let complete = property(p, &token);
+            let complete = property(p, &mut keys);
             p.finish_node();
             complete
         };
@@ -931,67 +948,247 @@ fn object(p: &mut Parser<'_>) -> Expr {
     p.expr(Shape::Object(node), open)
 }
 
-/// One property at its first token. False when it is malformed (reported).
-fn property(p: &mut Parser<'_>, token: &Token) -> bool {
-    match token.kind {
-        TokenKind::Ident => {
-            p.bump(false);
-            if p.peek(false).kind == EQ {
-                // `{ a = 1 }`: a pattern's default, settled by the enclosing literal.
-                p.bump(false);
-                if assignment(p).is_missing() {
-                    let span = p.peek(false).span;
-                    p.error(span, "expected an expression after `=`");
-                    return false;
-                }
-                let span = p.span_from(token.span);
-                p.covers.push(span);
-                return true;
-            }
-            if p.peek(false).kind != COLON {
-                return true;
-            }
+/// `get`, `set`, `async`, `async *` or `*` before a key: the removed method forms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Modifier {
+    Get,
+    Set,
+    Async { generator: bool },
+    Generator,
+}
+
+/// A method modifier at the next token, consumed. A word is one only when a key
+/// follows it (`{ get: 1 }` and `{ get }` name a property `get`), `async` only with
+/// the key on the same line, and `*` only when a key follows it.
+fn modifier(p: &mut Parser<'_>) -> Option<Modifier> {
+    let token = p.peek(false).clone();
+    let kind = match token.kind {
+        STAR => Modifier::Generator,
+        TokenKind::Ident => match p.text(&token) {
+            "get" => Modifier::Get,
+            "set" => Modifier::Set,
+            "async" => Modifier::Async { generator: false },
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let next = p.peek_second().clone();
+    let is_async = matches!(kind, Modifier::Async { .. });
+    let follows = key_start(&next.kind) || (is_async && next.kind == STAR);
+    if !follows || (is_async && next.has_newline_before) {
+        return None;
+    }
+    p.bump(false);
+    if is_async && p.eat(&STAR) {
+        return Some(Modifier::Async { generator: true });
+    }
+    Some(kind)
+}
+
+/// Whether `kind` can begin a property key.
+fn key_start(kind: &TokenKind) -> bool {
+    matches!(
+        *kind,
+        TokenKind::Ident
+            | TokenKind::Keyword(_)
+            | TokenKind::String(_)
+            | TokenKind::Number(_)
+            | TokenKind::BigInt(_)
+            | TokenKind::Bool(_)
+            | TokenKind::Null
+            | LBRACKET
+    )
+}
+
+/// A property's key as parsed.
+struct Key {
+    /// What it spells, as ES compares keys (`1`, `1.0`, `0x1` and `"1"` alike); `None`
+    /// for a computed key, whose repeats are the checker's (US-085).
+    text: Option<String>,
+    span: Span,
+    /// A plain identifier: the one form that stands alone (`{ a }`) or takes a
+    /// pattern's default (`{ a = 1 }`).
+    name: bool,
+}
+
+/// The key at the next token. `None` when nothing there is one (reported).
+fn property_key(p: &mut Parser<'_>) -> Option<Key> {
+    let token = p.peek(false).clone();
+    let (text, name) = match token.kind.clone() {
+        TokenKind::Ident => (p.text(&token).to_owned(), true),
+        TokenKind::Keyword(_) | TokenKind::Bool(_) | TokenKind::Null => {
+            (p.text(&token).to_owned(), false)
         }
-        TokenKind::Keyword(_)
-        | TokenKind::String(_)
-        | TokenKind::Number(_)
-        | TokenKind::BigInt(_)
-        | TokenKind::Bool(_)
-        | TokenKind::Null => {
-            p.bump(false);
-        }
+        TokenKind::String(text) => (text.to_string(), false),
+        TokenKind::Number(number) => (number_key(number.value), false),
+        TokenKind::BigInt(digits) => (digits.to_string(), false),
         LBRACKET => {
             p.bump(false);
             if assignment(p).is_missing() {
                 let span = p.peek(false).span;
                 p.error(span, "expected an expression in `[ … ]`");
-                return false;
+                return None;
             }
             if !p.eat(&RBRACKET) {
                 let span = p.peek(false).span;
                 p.error(span, "expected `]` after the computed key");
-                return false;
+                return None;
             }
+            return Some(Key {
+                text: None,
+                span: p.span_from(token.span),
+                name: false,
+            });
         }
         _ => {
             p.error(
                 token.span,
                 "expected a property: a name, a string, a number, `[key]` or `...spread`",
             );
-            return false;
+            return None;
+        }
+    };
+    p.bump(false);
+    Some(Key {
+        text: Some(text),
+        span: token.span,
+        name,
+    })
+}
+
+/// The property key a number literal spells, as ES2025's `ToString` writes it, so a
+/// key repeated in another spelling (`1`, `1.0`, `0x1`, `1e0`) is still a repeat.
+fn number_key(value: f64) -> String {
+    if value.is_infinite() {
+        return "Infinity".to_owned();
+    }
+    if value == 0.0 {
+        return "0".to_owned();
+    }
+    if (1e-6..1e21).contains(&value.abs()) {
+        return format!("{value}");
+    }
+    // `d.ddde±x`: Rust writes the exponent without `+`.
+    let text = format!("{value:e}");
+    match text.split_once('e') {
+        Some((mantissa, exponent)) if !exponent.starts_with('-') => {
+            format!("{mantissa}e+{exponent}")
+        }
+        _ => text,
+    }
+}
+
+/// One property at its first token: `key: value`, a shorthand name, a shorthand with
+/// a pattern's default (settled by the enclosing literal), or a removed method or
+/// accessor (E000, parsed for recovery). False when it is malformed (reported).
+fn property(p: &mut Parser<'_>, keys: &mut Keys) -> bool {
+    let modifier = modifier(p);
+    let Some(key) = property_key(p) else {
+        return false;
+    };
+    if modifier.is_some() || p.peek(false).kind == LPAREN {
+        return method(p, modifier, &key);
+    }
+    let next = p.peek(false).clone();
+    match next.kind {
+        COLON => {
+            p.bump(false);
+            if key.text.as_deref() == Some("__proto__") {
+                p.error(
+                    key.span,
+                    "`__proto__: …` is removed: there is no prototype manipulation, so a class says what an object is (SPEC.md §12)",
+                );
+            } else {
+                note_key(p, keys, &key);
+            }
+            if element(p).is_missing() {
+                let span = p.peek(false).span;
+                p.error(span, "expected an expression after `:`");
+                return false;
+            }
+            true
+        }
+        EQ if key.name => {
+            // `{ a = 1 }`: a pattern's default, settled by the enclosing literal.
+            note_key(p, keys, &key);
+            p.bump(false);
+            if assignment(p).is_missing() {
+                let span = p.peek(false).span;
+                p.error(span, "expected an expression after `=`");
+                return false;
+            }
+            let span = p.span_from(key.span);
+            p.covers.push(span);
+            true
+        }
+        _ if key.name => {
+            note_key(p, keys, &key);
+            true
+        }
+        _ => {
+            p.error(next.span, "expected `:` after the property key");
+            false
         }
     }
-    if !p.eat(&COLON) {
+}
+
+/// Records a key. Spelled twice since the literal's start or its last spread, it is
+/// E134 at the repeat, noting the first.
+fn note_key(p: &mut Parser<'_>, keys: &mut Keys, key: &Key) {
+    let Some(text) = &key.text else {
+        return;
+    };
+    match keys.get(text) {
+        Some(first) => {
+            let message = format!(
+                "the key `{text}` is spelled twice: the later value wins, so the first is dead (SPEC.md §4.6)"
+            );
+            p.report_related(Code::E134, key.span, message, *first, "first spelled here");
+        }
+        None => {
+            keys.insert(text.clone(), key.span);
+        }
+    }
+}
+
+/// A method or accessor after its key: removed (E000 naming classes), parsed for
+/// recovery as a function. With a modifier but no `(`, the property is malformed.
+fn method(p: &mut Parser<'_>, modifier: Option<Modifier>, key: &Key) -> bool {
+    if p.peek(false).kind != LPAREN {
         let span = p.peek(false).span;
-        p.error(span, "expected `:` after the property key");
+        p.error(span, "expected `(` after the method name");
         return false;
     }
-    if element(p).is_missing() {
-        let span = p.peek(false).span;
-        p.error(span, "expected an expression after `:`");
-        return false;
+    let what = match modifier {
+        Some(Modifier::Get | Modifier::Set) => "an accessor",
+        _ => "a method",
+    };
+    let message = format!(
+        "{what} on an object literal is removed: write a class, whose shape is fixed (SPEC.md §12)"
+    );
+    p.error(key.span, message);
+    let (is_async, is_generator) = match modifier {
+        Some(Modifier::Async { generator }) => (true, generator),
+        Some(Modifier::Generator) => (false, true),
+        _ => (false, false),
+    };
+    let mark = p.contexts.len();
+    p.contexts.push(FnContext::Function {
+        is_async,
+        is_generator,
+    });
+    let mut ok = functions::params(p).is_some();
+    if ok {
+        if p.peek(false).kind == LBRACE {
+            functions::block(p);
+        } else {
+            let span = p.peek(false).span;
+            p.error(span, "expected `{` to open the method body");
+            ok = false;
+        }
     }
-    true
+    p.contexts.truncate(mark);
+    ok
 }
 
 /// A template with substitutions, at its head: `` `a${x}b${y}c` ``.
@@ -1434,6 +1631,7 @@ impl Parser<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::number_key;
     use crate::parser::parse;
     use sjs_diag::{Code, Diagnostic, SourceFile};
 
@@ -1992,7 +2190,7 @@ mod tests {
             ("f(...a, b,)", "(CallExpr f ( (SpreadElement ... a) , b , ))"),
             ("import(\"./a.js\")", "(ImportCall import ( \"./a.js\" ))"),
             ("`a${`b${c}`}`", "(TemplateLit `a${ (TemplateLit `b${ c }`) }`)"),
-            ("[1, , ...a,]", "(ArrayLit [ 1 , , (SpreadElement ... a) , ])"),
+            ("[1, ...a,]", "(ArrayLit [ 1 , (SpreadElement ... a) , ])"),
             ("[]", "(ArrayLit [ ])"),
             ("{}", "(ObjectLit { })"),
             ("{ a, b: 1, \"c\": 2, 3: 4, [d]: 5, if: 6, ...e, }", "(ObjectLit { (Property a) , (Property b : 1) , (Property \"c\" : 2) , (Property 3 : 4) , (Property [ d ] : 5) , (Property if : 6) , (SpreadElement ... e) , })"),
@@ -2128,6 +2326,20 @@ mod tests {
                 "expected `:` after the property key",
             ),
             (
+                "x = { \"a\" = 1 }",
+                Code::E000,
+                1,
+                11,
+                "expected `:` after the property key",
+            ),
+            (
+                "x = { 1 = 1 }",
+                Code::E000,
+                1,
+                9,
+                "expected `:` after the property key",
+            ),
+            (
                 "x = { a: }",
                 Code::E000,
                 1,
@@ -2148,6 +2360,12 @@ mod tests {
                 10,
                 "expected `]` after the computed key",
             ),
+        ]);
+    }
+
+    #[test]
+    fn malformed_templates_new_and_import_are_e000_once() {
+        check_one(&[
             (
                 "x = `${}`",
                 Code::E000,
@@ -2707,6 +2925,396 @@ mod tests {
                 "`super.x` is permitted only inside a class member",
             ),
         ]);
+    }
+
+    #[test]
+    fn object_and_array_literals_take_every_permitted_form() {
+        for (text, expected) in [
+            (
+                "{ a, b: 1, \"c-d\": 2, [k]: 3, ...o }",
+                "(ObjectLit { (Property a) , (Property b : 1) , (Property \"c-d\" : 2) , (Property [ k ] : 3) , (SpreadElement ... o) })",
+            ),
+            ("{ ...o, }", "(ObjectLit { (SpreadElement ... o) , })"),
+            ("[1, ...xs]", "(ArrayLit [ 1 , (SpreadElement ... xs) ])"),
+            ("[...xs,]", "(ArrayLit [ (SpreadElement ... xs) , ])"),
+            ("{}", "(ObjectLit { })"),
+            ("[]", "(ArrayLit [ ])"),
+            (
+                "{ async: 1, get: 2, set: 3 }",
+                "(ObjectLit { (Property async : 1) , (Property get : 2) , (Property set : 3) })",
+            ),
+            ("{ async, get, set }", "(ObjectLit { (Property async) , (Property get) , (Property set) })"),
+            // ES sets no prototype from a computed key, whatever it spells: `["__proto__"]`
+            // defines an ordinary property, and so it is accepted.
+            ("{ [\"__proto__\"]: p }", "(ObjectLit { (Property [ \"__proto__\" ] : p) })"),
+            ("{ __proto__ }", "(ObjectLit { (Property __proto__) })"),
+            (
+                "{ 1: 1, 2n: 2, true: 3, null: 4, if: 5, \"s\": 6, [1]: 7 }",
+                "(ObjectLit { (Property 1 : 1) , (Property 2n : 2) , (Property true : 3) , (Property null : 4) , (Property if : 5) , (Property \"s\" : 6) , (Property [ 1 ] : 7) })",
+            ),
+        ] {
+            assert_eq!(value(text), expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn methods_accessors_and_proto_on_object_literals_are_e000_naming_the_replacement() {
+        check_one(&[
+            (
+                "x = { a() {} }",
+                Code::E000,
+                1,
+                7,
+                "a method on an object literal is removed: write a class",
+            ),
+            (
+                "x = { get a() {} }",
+                Code::E000,
+                1,
+                11,
+                "an accessor on an object literal is removed: write a class",
+            ),
+            (
+                "x = { set a(v) {} }",
+                Code::E000,
+                1,
+                11,
+                "an accessor on an object literal",
+            ),
+            (
+                "x = { async a() {} }",
+                Code::E000,
+                1,
+                13,
+                "a method on an object literal",
+            ),
+            (
+                "x = { *g() {} }",
+                Code::E000,
+                1,
+                8,
+                "a method on an object literal",
+            ),
+            (
+                "x = { async *g() {} }",
+                Code::E000,
+                1,
+                14,
+                "a method on an object literal",
+            ),
+            (
+                "x = { [k]() {} }",
+                Code::E000,
+                1,
+                7,
+                "a method on an object literal",
+            ),
+            (
+                "x = { \"a\"() {} }",
+                Code::E000,
+                1,
+                7,
+                "a method on an object literal",
+            ),
+            (
+                "x = { 1() {} }",
+                Code::E000,
+                1,
+                7,
+                "a method on an object literal",
+            ),
+            (
+                "x = { async a() { await b } }",
+                Code::E000,
+                1,
+                13,
+                "a method on an object literal",
+            ),
+            (
+                "x = { *g() { yield 1 } }",
+                Code::E000,
+                1,
+                8,
+                "a method on an object literal",
+            ),
+            (
+                "x = { async *g() { yield await 1 } }",
+                Code::E000,
+                1,
+                14,
+                "a method on an object literal",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn proto_keys_and_malformed_methods_on_object_literals_are_e000() {
+        check_one(&[
+            (
+                "x = { __proto__: p }",
+                Code::E000,
+                1,
+                7,
+                "`__proto__: …` is removed: there is no prototype manipulation",
+            ),
+            (
+                "x = { \"__proto__\": p }",
+                Code::E000,
+                1,
+                7,
+                "`__proto__: …` is removed",
+            ),
+            (
+                "x = { \"__pro\\x74o__\": p }",
+                Code::E000,
+                1,
+                7,
+                "`__proto__: …` is removed",
+            ),
+            (
+                "x = { get a: 1 }",
+                Code::E000,
+                1,
+                12,
+                "expected `(` after the method name",
+            ),
+            (
+                "x = { async\n a() {} }",
+                Code::E000,
+                2,
+                2,
+                "expected `,` or `}` in the object",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn a_malformed_object_method_reports_both_faults() {
+        for (text, second) in [
+            ("x = { a() { await b } }", "`await` is permitted only"),
+            ("x = { a() { yield 1 } }", "`yield` is permitted only"),
+            ("x = { a() 1 }", "expected `{` to open the method body"),
+            ("x = { a(1) {} }", "expected a binding name"),
+        ] {
+            let found = diagnostics(text);
+            assert_eq!(found.len(), 2, "{text}: {found:?}");
+            assert!(found[1].3.contains(second), "{text}: {found:?}");
+        }
+        assert_eq!(
+            sexp("x = { get a() { return 1 }, b: 2 }"),
+            "(Module (ExprStmt (AssignExpr x = (ObjectLit { (Property get a (Params ( )) (Block { (ReturnStmt return 1) })) , (Property b : 2) }))) <eof>)",
+            "parsed for recovery"
+        );
+    }
+
+    #[test]
+    fn a_key_spelled_twice_is_e134_at_the_repeat() {
+        check_one(&[
+            (
+                "x = { a: 1, a: 2 }",
+                Code::E134,
+                1,
+                13,
+                "the key `a` is spelled twice",
+            ),
+            (
+                "x = { a, a }",
+                Code::E134,
+                1,
+                10,
+                "the key `a` is spelled twice",
+            ),
+            (
+                "x = { a: 1, a }",
+                Code::E134,
+                1,
+                13,
+                "the key `a` is spelled twice",
+            ),
+            (
+                "[{ a = 1, a }] = c",
+                Code::E134,
+                1,
+                11,
+                "the key `a` is spelled twice",
+            ),
+            (
+                "x = { 1: \"a\", \"1\": \"b\" }",
+                Code::E134,
+                1,
+                15,
+                "the key `1` is spelled twice",
+            ),
+            (
+                "x = { 1.0: 1, 1: 2 }",
+                Code::E134,
+                1,
+                15,
+                "the key `1` is spelled twice",
+            ),
+            (
+                "x = { 0x10: 1, 16: 2 }",
+                Code::E134,
+                1,
+                16,
+                "the key `16` is spelled twice",
+            ),
+            (
+                "x = { 1n: 1, 1: 2 }",
+                Code::E134,
+                1,
+                14,
+                "the key `1` is spelled twice",
+            ),
+            (
+                "x = { \"if\": 1, if: 2 }",
+                Code::E134,
+                1,
+                16,
+                "the key `if` is spelled twice",
+            ),
+            (
+                "x = { true: 1, \"true\": 2 }",
+                Code::E134,
+                1,
+                16,
+                "the key `true`",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn a_key_spelled_in_another_form_is_still_e134() {
+        check_one(&[
+            (
+                "x = { \"\\x61\": 1, a: 2 }",
+                Code::E134,
+                1,
+                18,
+                "the key `a` is spelled twice",
+            ),
+            (
+                "x = { ...o, a: 1, a: 2 }",
+                Code::E134,
+                1,
+                19,
+                "the key `a` is spelled twice",
+            ),
+            (
+                "x = { 1e21: 1, \"1e+21\": 2 }",
+                Code::E134,
+                1,
+                16,
+                "the key `1e+21`",
+            ),
+            (
+                "x = { 1e-7: 1, \"1e-7\": 2 }",
+                Code::E134,
+                1,
+                16,
+                "the key `1e-7`",
+            ),
+            (
+                "x = { 1e999: 1, Infinity: 2 }",
+                Code::E134,
+                1,
+                17,
+                "the key `Infinity`",
+            ),
+            (
+                "x = { .5: 1, \"0.5\": 2 }",
+                Code::E134,
+                1,
+                14,
+                "the key `0.5`",
+            ),
+            ("x = { 0: 1, 0.0: 2 }", Code::E134, 1, 13, "the key `0`"),
+            (
+                "x = { 1e20: 1, \"100000000000000000000\": 2 }",
+                Code::E134,
+                1,
+                16,
+                "the key `100000000000000000000`",
+            ),
+            (
+                "x = { 0.000001: 1, \"0.000001\": 2 }",
+                Code::E134,
+                1,
+                20,
+                "the key `0.000001`",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn a_key_repeated_after_a_spread_or_a_computed_key_is_not_e134() {
+        for text in [
+            "x = { a: 1, ...o, a: 2 }",
+            "x = { a: 1, [\"a\"]: 2 }",
+            "x = { [k]: 1, [k]: 2 }",
+            "x = { 1e21: 1, \"1000000000000000000000\": 2 }",
+            "x = { 0.0000001: 1, \"0.0000001\": 2 }",
+            "x = { a: 1, b: { a: 2 } }",
+            "x = [{ a: 1 }, { a: 2 }]",
+            "x = { a: 1, A: 2 }",
+        ] {
+            assert_eq!(diagnostics(text), Vec::new(), "{text}");
+        }
+        let found = parse(&file("x = { a: 1, a: 2 }")).1;
+        let first = found.iter().next().expect("one diagnostic");
+        assert_eq!(first.related.len(), 1);
+        assert_eq!(
+            (
+                first.related[0].span.start.column,
+                first.related[0].note.as_str()
+            ),
+            (7, "first spelled here"),
+            "the first spelling is noted"
+        );
+    }
+
+    #[test]
+    fn number_keys_spell_as_es_writes_them() {
+        for (value, text) in [
+            (1.0, "1"),
+            (0.0, "0"),
+            (-0.0, "0"),
+            (1.5, "1.5"),
+            (1e20, "100000000000000000000"),
+            (1e21, "1e+21"),
+            (1e-6, "0.000001"),
+            (1e-7, "1e-7"),
+            (1.5e-7, "1.5e-7"),
+            (1e300, "1e+300"),
+            (f64::INFINITY, "Infinity"),
+            (123_456_789_012_345_680_000.0, "123456789012345680000"),
+            // 2⁶⁰: the shortest digits that round back to it, as ES writes them.
+            (1_152_921_504_606_846_976.0, "1152921504606847000"),
+        ] {
+            assert_eq!(number_key(value), text, "{value}");
+        }
+    }
+
+    #[test]
+    fn an_array_hole_is_e000_at_its_comma() {
+        check_one(&[
+            (
+                "x = [1, , 2]",
+                Code::E000,
+                1,
+                9,
+                "an array hole is removed: arrays are dense",
+            ),
+            ("x = [,]", Code::E000, 1, 6, "an array hole is removed"),
+            ("x = [, 1]", Code::E000, 1, 6, "an array hole is removed"),
+            ("[a, , b] = c", Code::E000, 1, 5, "an array hole is removed"),
+        ]);
+        assert_eq!(diagnostics("x = [, , 1]").len(), 2, "one per hole");
+        assert_eq!(
+            sexp("x = [1, , 2]"),
+            "(Module (ExprStmt (AssignExpr x = (ArrayLit [ 1 , , 2 ]))) <eof>)",
+            "parsed for recovery"
+        );
     }
 
     #[test]

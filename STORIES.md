@@ -1433,7 +1433,38 @@ right-assoc; `x ?? (y || z)`.
 `E000`.
 
 #### US-030 Object and array literals
-§2, §4.6 · After: US-028 · Size: S · M0
+§2, §4.6 · After: US-028 · Size: S · M0 · **Status: complete** (2026-10-29)
+
+> Delivered in `sjs-syntax` (`parser/expressions.rs`): `{ a, b: 1, "c-d": 2, [k]: 3,
+> ...o, }` and `[1, ...xs,]` parse with trailing commas into `ObjectLit`/`Property`/
+> `SpreadElement` and `ArrayLit`. A method (`a() {}`, `async a() {}`, `*g() {}`, `async
+> *g() {}`, `[k]() {}`, `"a"() {}`), an accessor (`get a() {}`, `set a(v) {}`) and
+> `__proto__: …` (as a name or a string, `"__pro\x74o__"` included) are E000 naming
+> classes and prototype manipulation, the methods parsed for recovery as functions
+> (their `yield`/`await` checked by their own `async`/`*`); `[1, , 2]` and `[,]` are
+> E000 at each hole, naming dense arrays. `get`, `set`, `async` and `*` are modifiers
+> only when a key follows them (`async` on the same line), so `{ async: 1 }`, `{ get }`
+> and `{ get: 1 }` are properties. A non-computed key spelled twice since the literal's
+> start or its last spread is E134 at the repeat, with the first spelling as a related
+> location: keys compare as ES compares them, so `1`, `1.0`, `0x10`→`16`, `1n`, `"1"`,
+> `if`/`"if"`, `true`/`"true"` and `"\x61"`/`a` collide, number keys spelled by an
+> ES2025 `ToString` (`number_key`: `1e21` → `1e+21`, `1e-7`, `.5` → `0.5`, `1e999` →
+> `Infinity`); `{ a: 1, ...o, a: 2 }` is not E134 (the spread may bring `a`, so the
+> later value is deliberate), nor are computed keys (`{ a: 1, ["a"]: 2 }`: US-085's,
+> once the key's literal type is known). `{ ["__proto__"]: p }` is accepted, as ES sets
+> no prototype from a computed key, and so is the shorthand `{ __proto__ }`. `Parser`
+> gained `report_related`. Fixtures under `tests/conformance/04-objects/` (two E134,
+> six E000, a conforming file with the spread, `{ async: 1, get: 2, set: 3 }`, `{
+> ["__proto__"]: p }`, `{}`, `[]` and a trailing comma after a spread). The corpus
+> generator (US-009) could spell a string key that repeats a bare name (`{ a, "a": 1 }`):
+> its keys are now one set, and the manifest snapshot was regenerated. **Decisions:** a
+> modifier with no `(` after the key (`{ get a: 1 }`) is "expected `(` after the method
+> name", once; a hole in a literal that becomes a pattern (`[a, , b] = c`) is reported
+> by the literal, once; a key's repeat is reported however it is written, including
+> across number spellings, since ES makes them one property. Verified: 100% lines and
+> regions, 57 mutants on the diff (51 caught, 5 unviable, 1 missed), then the 14
+> mutants of `property` rerun after a test for a non-name key before `=`: 14 caught, 0
+> missed.
 
 **Done when**
 - `{ a, b: 1, "c-d": 2, [k]: 3, ...o }` and `[1, ...xs]` parse with trailing commas.
