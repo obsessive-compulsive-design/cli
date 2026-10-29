@@ -333,7 +333,7 @@ impl<'a> Parser<'a> {
             )
         {
             let token_start = self.lookahead[0].span.byte_start;
-            let checkpoint = self.checkpoints[0].clone();
+            let checkpoint = self.checkpoints[0];
             self.lexer.restore(checkpoint, token_start);
             self.lookahead.clear();
             self.checkpoints.clear();

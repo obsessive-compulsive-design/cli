@@ -1543,7 +1543,40 @@ comment; `x\n/re/v.test(y)` is E001; the first line is never E001; `return\n+1` 
 by both rules and reported once.
 
 #### US-032 Parser error recovery and fuzzing
-§0.2 · After: US-031 · Size: M · M0
+§0.2 · After: US-031 · Size: M · M0 · **Status: complete** (2026-10-29)
+
+> Delivered: `crates/sjs-syntax/tests/fuzz_parse.rs` with `fuzz_parse` on
+> `sjs_testkit::fuzz` (a dictionary of every keyword, operator and marker the grammar
+> treats specially; the target checks that any bytes parse without a panic into a
+> `Module` whose tree prints back to the file, ends in one `Eof`, covers every byte
+> with contiguous tokens on character boundaries, and whose diagnostics all point inside
+> the file), regressions replayed from `tests/fuzz-regressions/parse/` (none yet: two
+> 600 s runs found nothing); a thousand corpus programs each with one token deleted
+> (chosen per seed) parsed without a panic and printed back; nesting a hundred thousand
+> deep in twelve shapes (`(`, `[`, object braces, blocks, unclosed `(`, calls, unary
+> `-`, arrows, `**`, `new`, `if`, template substitutions), each E000 at the bound once,
+> printed back, and bounded to 30 s (linear parsing takes a few seconds at that depth);
+> the five-error fixture `tests/conformance/04-statements/E000/five-errors.js` (a
+> missing binding name, `if` without parentheses, `==`, an array hole and `new` without
+> arguments: five diagnostics, one per line, and the file prints back); and the edges:
+> an unclosed `{` at the end of the file, a `)` with no opener and a file of only `}`
+> are one report each (per brace), and an error inside a template substitution recovers
+> at the substitution's end so the next is still found. The CI fuzz job's comment names
+> the new target (its command already runs every `fuzz_*` test). The deep-template shape
+> found a real problem, fixed here: the lexer's checkpoint (taken by the parser before
+> every lookahead token, so a `/` can be lexed again as a regex) cloned the stack of
+> open template substitutions, so lexing inside nested templates was quadratic in their
+> depth (84 s at a hundred thousand). The stack is now persistent: every substitution,
+> and every change to one's brace depth, is a new arena entry naming its parent, entries
+> are never changed, the innermost open one is an index, and a checkpoint is that index,
+> exact however many tokens are undone (the earlier clone was exact too, at the cost
+> found). **Decisions:** the nesting bound stays at 200 levels (`MAX_NESTING`); a
+> hundred thousand of anything trips it once and the rest of the block is skipped, as
+> US-026 and US-028 set up, so the test is of the bound's reach into every recursive
+> shape, not of a new mechanism; the deleted-token test keeps the token's trivia, since
+> deleting a token's text is the mutation the story names. Verified: 100% lines and
+> regions, 16 mutants on the diff (10 caught, 6 unviable, 0 missed), `fuzz_parse` 600 s
+> clean twice (before and after the lexer change).
 
 **Done when**
 - A fixture with five independent errors reports exactly five; error nodes still

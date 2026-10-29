@@ -67,26 +67,34 @@ pub struct Lexer<'a> {
     /// True when the previous token's text ends with `.`: the next word is a property
     /// name, where a removed word is ordinary (`Map.delete`, SPEC.md §12).
     after_dot: bool,
-    /// The open template substitutions, innermost last: a `}` closes the innermost one
-    /// only when no `{` inside it is still open.
+    /// Every template substitution opened, and every change to one's brace depth, as an
+    /// entry naming its parent: the open substitutions form a chain from `open`. An
+    /// entry is never changed once pushed, so a checkpoint is one index and returning
+    /// to it is one assignment, however many tokens are undone or how deep the
+    /// templates nest (US-032: the parser checkpoints before every token).
     substitutions: Vec<Substitution>,
+    /// The innermost open substitution, in `substitutions`; a `}` closes it only when
+    /// no `{` inside it is still open.
+    open: Option<usize>,
 }
 
 /// A lexer state the parser can return to; see [`Lexer::checkpoint`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Checkpoint {
     pos: usize,
     after_dot: bool,
-    substitutions: Vec<Substitution>,
+    open: Option<usize>,
 }
 
-/// A `${` whose `}` has not been seen yet.
+/// A `${` whose `}` has not been seen yet, at one brace depth.
 #[derive(Debug, Clone)]
 struct Substitution {
     /// Byte offset of the `${`.
     opened_at: usize,
     /// `{` seen inside it and not yet closed.
     depth: u32,
+    /// The substitution enclosing this one.
+    parent: Option<usize>,
 }
 
 /// ES2025 `WhiteSpace`: TAB, VT, FF, ZWNBSP and every `Zs` character.
@@ -119,6 +127,7 @@ impl<'a> Lexer<'a> {
             diagnostics: Diagnostics::new(),
             after_dot: false,
             substitutions: Vec::new(),
+            open: None,
         }
     }
 
@@ -134,7 +143,7 @@ impl<'a> Lexer<'a> {
         Checkpoint {
             pos: self.pos,
             after_dot: self.after_dot,
-            substitutions: self.substitutions.clone(),
+            open: self.open,
         }
     }
 
@@ -148,7 +157,7 @@ impl<'a> Lexer<'a> {
     pub(crate) fn restore(&mut self, checkpoint: Checkpoint, token_start: usize) {
         self.pos = checkpoint.pos;
         self.after_dot = checkpoint.after_dot;
-        self.substitutions = checkpoint.substitutions;
+        self.open = checkpoint.open;
         self.diagnostics
             .retain(|diagnostic| diagnostic.span.byte_start < token_start);
     }
@@ -194,8 +203,8 @@ impl<'a> Lexer<'a> {
             None => self.eof(start),
             Some('`') => self.template(TemplateEnd::Backtick),
             Some('{') => {
-                if let Some(open) = self.substitutions.last_mut() {
-                    open.depth += 1;
+                if let Some(open) = self.open {
+                    self.reopen(open, 1);
                 }
                 TokenKind::Punct(Punct::LBrace)
             }
@@ -344,10 +353,13 @@ impl<'a> Lexer<'a> {
 
     /// The end of the file: every `${` still open is E000 here.
     fn eof(&mut self, start: usize) -> TokenKind {
-        for open in std::mem::take(&mut self.substitutions) {
+        let mut open = self.open.take();
+        while let Some(index) = open {
+            let entry = &self.substitutions[index];
+            open = entry.parent;
             let at = self
                 .file
-                .position(open.opened_at)
+                .position(entry.opened_at)
                 .unwrap_or(Position::new(1, 1));
             self.report(
                 Code::E000,
@@ -362,15 +374,29 @@ impl<'a> Lexer<'a> {
         TokenKind::Eof
     }
 
+    /// Replaces the innermost open substitution `open` by a copy whose brace depth
+    /// differs by `delta`, so the entry a checkpoint may still name stays as it was.
+    fn reopen(&mut self, open: usize, delta: i64) {
+        let entry = &self.substitutions[open];
+        let depth = u32::try_from(i64::from(entry.depth) + delta).unwrap_or(0);
+        let reopened = Substitution {
+            opened_at: entry.opened_at,
+            depth,
+            parent: entry.parent,
+        };
+        self.substitutions.push(reopened);
+        self.open = Some(self.substitutions.len() - 1);
+    }
+
     /// `}`: closes the innermost substitution when no `{` inside it is open, resuming the
     /// template; otherwise it is a brace.
     fn close_brace(&mut self) -> TokenKind {
-        if let Some(open) = self.substitutions.last_mut() {
-            if open.depth == 0 {
-                self.substitutions.pop();
+        if let Some(open) = self.open {
+            if self.substitutions[open].depth == 0 {
+                self.open = self.substitutions[open].parent;
                 return self.template(TemplateEnd::Substitution);
             }
-            open.depth -= 1;
+            self.reopen(open, -1);
         }
         TokenKind::Punct(Punct::RBrace)
     }
@@ -406,7 +432,9 @@ impl<'a> Lexer<'a> {
             self.substitutions.push(Substitution {
                 opened_at: piece.end - 2,
                 depth: 0,
+                parent: self.open,
             });
+            self.open = Some(self.substitutions.len() - 1);
         }
         if malformed {
             return TokenKind::Error;
