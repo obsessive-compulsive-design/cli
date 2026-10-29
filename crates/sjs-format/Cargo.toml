@@ -6,5 +6,8 @@ license.workspace = true
 publish.workspace = true
 description = "Canonical layout and S-code diffs."
 
+[dev-dependencies]
+sjs-testkit = { path = "../sjs-testkit" }
+
 [lints]
 workspace = true

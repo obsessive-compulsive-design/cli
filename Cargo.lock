@@ -30,6 +30,9 @@ version = "0.1.0"
 [[package]]
 name = "sjs-format"
 version = "0.1.0"
+dependencies = [
+ "sjs-testkit",
+]
 
 [[package]]
 name = "sjs-infer"

@@ -1634,7 +1634,46 @@ inside a template substitution recovers at the template end.
 ### Epic 3 · Formatter
 
 #### US-040 Pretty-printer core
-§9, §9.1 · After: US-020 · Size: M · M0
+§9, §9.1 · After: US-020 · Size: M · M0 · **Status: complete** (2026-10-29)
+
+> Delivered in `sjs-format` (replacing the US-002 placeholder): `doc.rs` holds the
+> document IR, `Doc::{Text, Line, SoftLine, HardLine, Group, Indent, IfBreak}` with
+> constructors, and the layout, `print(&[Doc])` at `WIDTH` (100) with `INDENT` (2) and
+> `layout(&[Doc], width)` for any width. The algorithm is Wadler's prettier as Prettier
+> runs it, iterative: a stack of commands, each a document in a mode (flat or broken)
+> at an indentation level; a group is laid out flat when its content, flat, fits in
+> what remains of the line together with what follows the group up to the line's next
+> break, and broken otherwise, so groups break outermost first and a flat group keeps
+> every group inside it flat; `Line` is a space when flat and a break when broken,
+> `SoftLine` nothing or a break, `HardLine` a break always (no group holding one is
+> flat); `IfBreak` chooses its content by the enclosing group's mode, in the layout and
+> in the fit measurement alike; `Indent` adds a level to the breaks inside it. Width
+> counts Unicode scalar values (`str::chars`), as diagnostics count columns (§13.1). A
+> `Text` may hold its own line breaks (a template literal's): the fit measurement ends
+> at its first, the column continues after its last, and nothing in it is reflowed. A
+> break trims the spaces before it and so does the end, so no line ends in whitespace
+> and a blank line is empty. A token wider than the line fails every fit it is in, so
+> the groups around it break and it sits on its own line where breaks surround it;
+> after a break the width is whole again, so nothing after is forced. Unit tests cover
+> each node, width 100 fitting and 101 breaking (in scalar values, with multibyte text),
+> nested groups where only the inner breaks and where both do, indentation inside a
+> broken group whose parent's own text stays on one line (`x = [` … `]`), the empty
+> document, the if-break trailing comma, the rest of the line counting toward a fit and
+> a break ending the count, the column after a flat space and after an indented break,
+> and texts with their own breaks. `tests/prop_layout.rs` generates documents of tokens
+> separated by breaks in groups and indents nested four deep, one token in twenty wider
+> than the line, and checks that no line exceeds the width unless it holds a single
+> token, and that none ends in whitespace. `sjs-testkit` is a dev-dependency (the product
+> differ of US-048 stays apart from it). **Decisions:** `Text` is not checked for line
+> breaks; it handles them, since template literals are never reflowed (§9.3); the fit
+> look-ahead stops at the first break of the content to come, as Prettier's does, so a
+> group is judged by its own line only; trailing spaces are trimmed by the layout rather
+> than forbidden in texts, so a rule may write `x = ` before a break without care.
+> Verified: 100% lines and regions, 50 mutants on the diff (43 caught, 4 unviable, 3
+> missed: the width accounting of a flat space, of the column after an indented break,
+> and of an if-break in a broken context), then the 29 mutants of `layout` and `fits`
+> rerun after a test for each: 29 caught, 0 missed; the property test clean at 4 096
+> cases.
 
 As the formatter I want a document IR (text, line, group, indent, if-break) and a layout
 algorithm with a hard 100-column width and 2-space indent, so every later rule is a
