@@ -2,8 +2,8 @@
 //! regex-allowed hint (US-015) and builds the [`SyntaxTree`]. A module is its import
 //! declarations (US-021, `imports.rs`) followed by its items: export declarations
 //! (US-022, `exports.rs`), `const`/`let` (US-023), functions (US-024), classes (US-025)
-//! and statements (US-026, `statements.rs`). Expressions stay token extents until the
-//! expression stories add their productions.
+//! and statements (US-026, `statements.rs`), whose expressions are parsed by
+//! precedence climbing (US-028, `expressions.rs`).
 //!
 //! A `/` is lexed as a division until the grammar asks for an expression there; then
 //! the lookahead is lexed again as a regex literal. Division lexing never reports
@@ -13,15 +13,16 @@
 mod bindings;
 mod classes;
 mod exports;
+mod expressions;
 mod functions;
 mod imports;
 mod statements;
 
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
 
-use crate::lexer::{regex_allowed_after, Checkpoint, Lexer};
-use crate::token::{Keyword, Punct, TemplatePart, Token, TokenKind};
-use crate::tree::{NodeId, NodeKind, SyntaxTree, TokenId, TreeBuilder};
+use crate::lexer::{Checkpoint, Lexer};
+use crate::token::{Keyword, Punct, Token, TokenKind};
+use crate::tree::{Marker, NodeId, NodeKind, SyntaxTree, TokenId, TreeBuilder};
 
 /// Parses a whole file into its tree and diagnostics. Never fails.
 #[must_use]
@@ -112,8 +113,10 @@ pub(super) fn items_in(parser: &mut Parser<'_>, scope: Scope) {
 /// that line is then skipped, so one fault is one diagnostic.
 pub(super) fn item(parser: &mut Parser<'_>, scope: Scope, exported: &mut exports::Exported) {
     let reported = parser.diagnostics.len();
+    let outer = std::mem::replace(&mut parser.item_mark, reported);
     dispatch_item(parser, scope, exported);
     parser.recover(reported, scope);
+    parser.item_mark = outer;
 }
 
 fn dispatch_item(parser: &mut Parser<'_>, scope: Scope, exported: &mut exports::Exported) {
@@ -154,40 +157,6 @@ fn dispatch_item(parser: &mut Parser<'_>, scope: Scope, exported: &mut exports::
     }
 }
 
-/// Whether an expression may end with `previous`, so that a line break after it ends
-/// the statement: a value, a closing bracket, a postfix operator or `}`; not an
-/// operator, `.`, `,`, `=>` or a keyword that takes an operand.
-fn can_end_expression(previous: &TokenKind) -> bool {
-    match previous {
-        TokenKind::Punct(punct) => matches!(
-            punct,
-            Punct::RParen | Punct::RBracket | Punct::RBrace | Punct::PlusPlus | Punct::MinusMinus
-        ),
-        TokenKind::Keyword(keyword) => !matches!(
-            keyword,
-            Keyword::Typeof
-                | Keyword::New
-                | Keyword::Instanceof
-                | Keyword::In
-                | Keyword::Void
-                | Keyword::Delete
-        ),
-        // A template head or middle never sits at bracket depth zero, so any template
-        // token here is a whole or a tail: a value.
-        _ => true,
-    }
-}
-
-/// Whether `previous` can end the binding of a `for (… of …)` head: only there is a
-/// value juxtaposed to the word `of`, so an `of` after one is the keyword and the `/`
-/// after that starts a regex; `of / 2` with `=` before `of` is a division.
-fn pattern_end(previous: &TokenKind) -> bool {
-    matches!(
-        previous,
-        TokenKind::Ident | TokenKind::Punct(Punct::RBracket | Punct::RBrace)
-    )
-}
-
 /// Up to two tokens of lookahead over the lexer, feeding a [`TreeBuilder`].
 pub struct Parser<'a> {
     file: &'a SourceFile,
@@ -210,6 +179,16 @@ pub struct Parser<'a> {
     too_deep: bool,
     /// The span of the last token consumed.
     last: Option<Span>,
+    /// The diagnostics count when the current item began: a statement that has
+    /// reported something does not also report a missing `;` or line break.
+    item_mark: usize,
+    /// The index of the current expression statement's first token, so an update that
+    /// turns out to be the whole statement is S012 rather than E000.
+    statement_start: Option<usize>,
+    /// The update found at `statement_start`, judged when the statement ends.
+    statement_update: Option<expressions::Update>,
+    /// Shorthand defaults (`{ a = 1 }`) not yet settled as a pattern's or an error.
+    covers: Vec<Span>,
 }
 
 impl<'a> Parser<'a> {
@@ -229,6 +208,10 @@ impl<'a> Parser<'a> {
             nesting: 0,
             too_deep: false,
             last: None,
+            item_mark: 0,
+            statement_start: None,
+            statement_update: None,
+            covers: Vec::new(),
         }
     }
 
@@ -336,6 +319,9 @@ impl<'a> Parser<'a> {
         current: String,
         replacement: String,
     ) {
+        if self.too_deep {
+            return;
+        }
         let diagnostic =
             Diagnostic::new(code, self.file.path(), span, message).with_fix(current, replacement);
         self.diagnostics.extend(diagnostic.ok());
@@ -356,14 +342,14 @@ impl<'a> Parser<'a> {
             return true;
         }
         if !self.too_deep {
-            self.too_deep = true;
             let span = self.peek(false).span;
             self.error(
                 span,
                 format!(
-                    "statements nest deeper than {MAX_NESTING} levels: the rest of this block is skipped"
+                    "statements and expressions nest deeper than {MAX_NESTING} levels: the rest of this block is skipped"
                 ),
             );
+            self.too_deep = true;
         }
         false
     }
@@ -473,96 +459,9 @@ impl<'a> Parser<'a> {
         )
     }
 
-    /// Consumes the extent of an expression until the expression stories land: up to
-    /// a token in `stops` at bracket depth zero, `;`, an unmatched closer or the end of
-    /// the file, or a line break at depth zero after a token that can end an
-    /// expression. `(`, `[`, `{` and template substitutions nest. Arrow functions and
-    /// the removed `function` expression are parsed where they start (US-024), and
-    /// `yield`/`await` are checked against the enclosing function. Returns how many
-    /// tokens were consumed.
-    pub fn raw_expression(&mut self, stops: &[TokenKind]) -> usize {
-        let mut depth: u32 = 0;
-        // `?` opens a conditional and `:` closes it; a `:` with none open belongs to an
-        // enclosing conditional and ends this expression.
-        let mut conditionals: u32 = 0;
-        let mut previous = TokenKind::Punct(Punct::Eq);
-        let mut previous_of = false;
-        let mut consumed = 0;
-        loop {
-            let regex_allowed = previous_of || regex_allowed_after(&previous);
-            let token = self.peek(regex_allowed);
-            let kind = token.kind.clone();
-            let on_new_line = token.has_newline_before;
-            if kind == TokenKind::Eof || (depth == 0 && stops.contains(&kind)) {
-                return consumed;
-            }
-            if depth == 0 && kind == TokenKind::Punct(Punct::Colon) {
-                if conditionals == 0 {
-                    return consumed;
-                }
-                conditionals -= 1;
-            }
-            if depth == 0 && kind == TokenKind::Punct(Punct::Question) {
-                conditionals += 1;
-            }
-            if depth == 0
-                && (matches!(
-                    kind,
-                    TokenKind::Punct(
-                        Punct::Semicolon | Punct::RBrace | Punct::RParen | Punct::RBracket
-                    )
-                ) || (on_new_line && can_end_expression(&previous)))
-            {
-                return consumed;
-            }
-            let after_dot = matches!(previous, TokenKind::Punct(Punct::Dot | Punct::QuestionDot));
-            if !after_dot && self.at_arrow() {
-                functions::arrow(self, stops);
-                consumed += 1;
-                previous = TokenKind::Punct(Punct::RParen);
-                continue;
-            }
-            if !after_dot && functions::at_function(self) {
-                self.removed_function_expression();
-                consumed += 1;
-                previous = TokenKind::Punct(Punct::RParen);
-                continue;
-            }
-            if !after_dot && classes::at_class(self) {
-                self.removed_class_expression();
-                consumed += 1;
-                previous = TokenKind::Punct(Punct::RParen);
-                continue;
-            }
-            match &kind {
-                TokenKind::Punct(Punct::LParen | Punct::LBracket | Punct::LBrace) => depth += 1,
-                TokenKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace) => depth -= 1,
-                TokenKind::Template(template) => match template.part {
-                    TemplatePart::Head => depth += 1,
-                    TemplatePart::Tail => depth -= 1,
-                    TemplatePart::Middle | TemplatePart::Whole => {}
-                },
-                TokenKind::Keyword(Keyword::Super) if !after_dot => self.check_super(),
-                TokenKind::PrivateName(ref name) => self.note_private_reference(name),
-                TokenKind::Ident if !after_dot => self.check_yield_await(),
-                _ => {}
-            }
-            previous_of = self.operand_follows(after_dot, &previous);
-            self.bump(regex_allowed);
-            consumed += 1;
-            // Every `}` consumed here closes an object literal: a value, after which a
-            // `/` divides (blocks belong to arrows and functions, parsed apart).
-            previous = if kind == TokenKind::Punct(Punct::RBrace) {
-                TokenKind::Punct(Punct::RParen)
-            } else {
-                kind
-            };
-        }
-    }
-
     /// The removed `function` expression at the next token: E000, then parsed for
     /// recovery.
-    fn removed_function_expression(&mut self) {
+    pub(super) fn removed_function_expression(&mut self) {
         let span = self.peek(false).span;
         self.error(
             span,
@@ -576,75 +475,85 @@ impl<'a> Parser<'a> {
     pub(super) fn at_arrow(&mut self) -> bool {
         match self.peek(false).kind.clone() {
             TokenKind::Punct(Punct::LParen) => functions::arrow_ahead(self, 0),
-            TokenKind::Ident if self.at_word("async") => match self.peek_second().kind {
-                TokenKind::Punct(Punct::LParen) => functions::arrow_ahead(self, 1),
-                TokenKind::Ident => self.peek_nth(2).kind == TokenKind::Punct(Punct::Arrow),
-                _ => self.peek_second().kind == TokenKind::Punct(Punct::Arrow),
-            },
+            // `async` [no line break] `(`: after a line break `async` is a name.
+            TokenKind::Ident if self.at_word("async") && !self.peek_second().has_newline_before => {
+                match self.peek_second().kind {
+                    TokenKind::Punct(Punct::LParen) => functions::arrow_ahead(self, 1),
+                    TokenKind::Ident => self.peek_nth(2).kind == TokenKind::Punct(Punct::Arrow),
+                    _ => self.peek_second().kind == TokenKind::Punct(Punct::Arrow),
+                }
+            }
             TokenKind::Ident => self.peek_second().kind == TokenKind::Punct(Punct::Arrow),
             _ => false,
         }
     }
 
-    /// True when the next token is a word an operand follows, so a `/` after it starts a
-    /// regex: `await`, `yield`, or the `of` of a `for` head (an `of` juxtaposed to a
-    /// binding; `of / 2` after `=` is a division). Not after `.`, where any word is a
-    /// property name.
-    fn operand_follows(&mut self, after_dot: bool, previous: &TokenKind) -> bool {
-        !after_dot
-            && (self.at_word("await")
-                || self.at_word("yield")
-                || (self.at_word("of") && pattern_end(previous)))
-    }
-
-    /// E000 for `yield` outside a generator or `await` inside a function that is not
-    /// `async`, when the next token is that word used as a value: not a property key
-    /// (`yield:`) and not a method name (`yield() {}`, which until the class story is
-    /// told apart by the `(` alone).
-    fn check_yield_await(&mut self) {
-        if matches!(
-            self.peek_second().kind,
-            TokenKind::Punct(Punct::Colon | Punct::LParen)
-        ) {
+    /// A diagnostic at `span`. Past the nesting bound nothing more is reported: the
+    /// file is hostile, and its skipped remainder would only cascade.
+    pub fn report(&mut self, code: Code, span: Span, message: impl Into<String>) {
+        if self.too_deep {
             return;
         }
-        let span = self.peek(false).span;
-        let text = self.file.slice(&span).unwrap_or("");
-        match text {
-            "yield" => {
-                let ok = matches!(
-                    self.contexts.last(),
-                    Some(
-                        FnContext::Function {
-                            is_generator: true,
-                            ..
-                        } | FnContext::Method {
-                            is_generator: true,
-                            ..
-                        }
-                    )
-                );
-                if !ok {
-                    self.error(
-                        span,
-                        "`yield` is permitted only directly inside a generator function (SPEC.md §4.4)",
-                    );
-                }
-            }
-            "await" if !self.await_allowed() => {
-                self.error(
-                    span,
-                    "`await` is permitted only inside an `async` function or at the top level of a module (SPEC.md §5.1)",
-                );
-            }
-            _ => {}
-        }
-    }
-
-    /// A diagnostic at `span`.
-    pub fn report(&mut self, code: Code, span: Span, message: impl Into<String>) {
         self.diagnostics
             .push(Diagnostic::new(code, self.file.path(), span, message));
+    }
+
+    /// The place before the next child of the innermost open node.
+    pub(super) fn marker(&self) -> Marker {
+        self.builder.marker()
+    }
+
+    /// Opens a node adopting what the innermost open node gained since `marker`.
+    pub(super) fn start_node_at(&mut self, marker: Marker, kind: NodeKind) -> NodeId {
+        self.builder.start_node_at(marker, kind)
+    }
+
+    /// The end of a simple statement: a `;`, or before the next token a line break, a
+    /// `}` or the end of the file (where ASI would end it). Anything else on the line
+    /// is E000, unless the statement has already reported something, or it is a
+    /// character the lexer reported, which is skipped with the rest of its line.
+    pub(super) fn terminate(&mut self) {
+        if self.eat(&TokenKind::Punct(Punct::Semicolon)) {
+            return;
+        }
+        let next = self.peek(false).clone();
+        if next.has_newline_before
+            || matches!(next.kind, TokenKind::Punct(Punct::RBrace) | TokenKind::Eof)
+            || self.diagnostics.len() > self.item_mark
+        {
+            return;
+        }
+        if next.kind == TokenKind::Error {
+            self.skip_rest_of_line(Scope::Block);
+            return;
+        }
+        self.error(
+            next.span,
+            "expected `;` or a line break after the statement",
+        );
+    }
+
+    /// Consumes tokens, brackets balanced, up to (not including) `stop` at depth zero,
+    /// an unmatched closer or the end of the file: recovery inside a malformed
+    /// construct.
+    pub(super) fn skip_until(&mut self, stop: &TokenKind) {
+        let mut depth: u32 = 0;
+        loop {
+            let kind = self.peek(false).kind.clone();
+            match kind {
+                TokenKind::Eof => return,
+                _ if depth == 0 && &kind == stop => return,
+                TokenKind::Punct(Punct::LParen | Punct::LBracket | Punct::LBrace) => depth += 1,
+                TokenKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace) => {
+                    if depth == 0 {
+                        return;
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+            self.bump(false);
+        }
     }
 
     /// Opens a node.

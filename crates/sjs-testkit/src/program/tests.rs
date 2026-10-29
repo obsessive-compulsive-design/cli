@@ -658,6 +658,20 @@ fn precedence_parenthesises_exactly_where_needed() {
         "r = typeof (a + b)\n"
     );
     assert_eq!(
+        render(Expr::Unary("-", b(Expr::Unary("-", b(num("2")))))),
+        "r = - -2\n",
+        "`--2` would lex as a decrement"
+    );
+    assert_eq!(
+        render(Expr::Unary("+", b(Expr::Unary("+", b(id("a")))))),
+        "r = + +a\n"
+    );
+    assert_eq!(
+        render(Expr::Unary("-", b(Expr::Unary("+", b(id("a")))))),
+        "r = -+a\n",
+        "different signs need no space"
+    );
+    assert_eq!(
         render(Expr::Unary("!", b(Expr::Unary("!", b(id("a")))))),
         "r = !!a\n"
     );
@@ -1267,4 +1281,67 @@ fn generated_programs_never_export_a_name_twice() {
         kept_private > 0,
         "some declaration stayed private because its name was already exported"
     );
+}
+
+/// A member a field before it would join, there being no ASI inside a class body:
+/// `x = 1` then `[Symbol.iterator]() {}` is an index expression, and `x = 1` then
+/// `*g() {}` a multiplication.
+fn joins_a_field_before_it(member: &Member) -> bool {
+    matches!(
+        member,
+        Member::Method {
+            key: MemberKey::Symbol(_),
+            ..
+        } | Member::Method {
+            is_static: false,
+            is_async: false,
+            is_generator: true,
+            ..
+        }
+    )
+}
+
+#[test]
+fn no_generated_class_member_continues_the_field_before_it() {
+    let mut ordered = 0;
+    for seed in 0..600u64 {
+        let program = generate(seed, Options::default()).0;
+        for item in &program.items {
+            let (Item::Decl(Decl::Class { members, .. })
+            | Item::Export(Decl::Class { members, .. })) = item
+            else {
+                continue;
+            };
+            let first_field = members
+                .iter()
+                .position(|member| matches!(member, Member::Field { .. }));
+            let Some(first_field) = first_field else {
+                continue;
+            };
+            if members[..first_field].iter().any(joins_a_field_before_it) {
+                ordered += 1;
+            }
+            assert!(
+                !members[first_field..].iter().any(joins_a_field_before_it),
+                "seed {seed}: a member after a field would continue it\n{program}"
+            );
+        }
+    }
+    assert!(ordered > 10, "the ordering was exercised {ordered} times");
+    assert!(joins_a_field_before_it(&Member::Method {
+        is_static: false,
+        is_async: false,
+        is_generator: true,
+        key: MemberKey::Ident("g".to_owned()),
+        params: Vec::new(),
+        body: Vec::new(),
+    }));
+    assert!(!joins_a_field_before_it(&Member::Method {
+        is_static: true,
+        is_async: false,
+        is_generator: true,
+        key: MemberKey::Ident("g".to_owned()),
+        params: Vec::new(),
+        body: Vec::new(),
+    }));
 }

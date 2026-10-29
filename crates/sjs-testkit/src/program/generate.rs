@@ -1074,12 +1074,18 @@ impl Generator<'_> {
             .map(|_| self.member(member_ctx, &mut taken))
             .collect();
         // `x = 1` followed by `[Symbol.iterator]() {}` would parse as an index expression
-        // (ASI inside class bodies), so computed-key methods go before every field.
+        // and by `*g() {}` as a multiplication (no ASI inside class bodies), so
+        // computed-key methods and bare generator methods go before every field.
         members.sort_by_key(|member| {
             !matches!(
                 member,
                 Member::Method {
                     key: MemberKey::Symbol(_),
+                    ..
+                } | Member::Method {
+                    is_static: false,
+                    is_async: false,
+                    is_generator: true,
                     ..
                 }
             )

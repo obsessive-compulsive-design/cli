@@ -17,12 +17,13 @@
 //! block; a label is a number, string, boolean, bigint or negative number literal, a
 //! repeated label and a second `default` are E000, and a braceless clause body is E000
 //! with the braced replacement. `try` needs a `catch` or a `finally`; `catch {` and
-//! `catch (e) {` parse, and a pattern in `catch (…)` is E000. Expressions are extents
-//! until the expression stories land ([`Parser::raw_expression`]).
+//! `catch (e) {` parse, and a pattern in `catch (…)` is E000. A simple statement ends
+//! at a `;` or where ASI would end it ([`Parser::terminate`]); expressions are
+//! `expressions.rs`'s.
 
 use sjs_diag::{Code, Span};
 
-use super::{bindings, exports, functions, FnContext, Jump, Parser, Scope};
+use super::{bindings, exports, expressions, functions, FnContext, Jump, Parser, Scope};
 use crate::token::{Keyword, Punct, TokenKind};
 use crate::tree::NodeKind;
 
@@ -83,16 +84,16 @@ fn dispatch(parser: &mut Parser<'_>) {
             if matches!(parser.peek(true).kind, SEMICOLON | RBRACE | TokenKind::Eof) {
                 parser.error(token.span, "expected an expression after `throw`");
             } else {
-                parser.raw_expression(&[]);
+                expressions::expression(parser);
             }
-            parser.eat(&SEMICOLON);
+            parser.terminate();
             parser.finish_node();
         }
         TokenKind::Keyword(Keyword::Debugger) => {
             // The lexer has reported the removed word.
             parser.start_node(NodeKind::DebuggerStmt);
             parser.bump(false);
-            parser.eat(&SEMICOLON);
+            parser.terminate();
             parser.finish_node();
         }
         TokenKind::Keyword(Keyword::Switch) => switch_stmt(parser),
@@ -110,12 +111,7 @@ fn dispatch(parser: &mut Parser<'_>) {
         }
         RBRACE | TokenKind::Eof => parser.error(token.span, "expected a statement"),
         TokenKind::Ident if parser.peek_second().kind == COLON => labelled(parser),
-        _ => {
-            parser.start_node(NodeKind::ExprStmt);
-            parser.raw_expression(&[]);
-            parser.eat(&SEMICOLON);
-            parser.finish_node();
-        }
+        _ => expressions::expression_statement(parser),
     }
 }
 
@@ -161,7 +157,7 @@ fn condition(parser: &mut Parser<'_>, keyword: &str) -> bool {
         parser.error(span, message);
         return false;
     }
-    if parser.raw_expression(&[]) == 0 {
+    if expressions::expression(parser).is_missing() {
         let span = parser.peek(false).span;
         let message = format!("expected a condition after `{keyword} (`");
         parser.error(span, message);
@@ -230,7 +226,7 @@ fn do_while(parser: &mut Parser<'_>) {
     if parser.eat(&TokenKind::Keyword(Keyword::While)) {
         condition(parser, "while");
     }
-    parser.eat(&SEMICOLON);
+    parser.terminate();
     parser.finish_node();
 }
 
@@ -263,9 +259,9 @@ fn return_stmt(parser: &mut Parser<'_>) {
     }
     let next = parser.peek(true);
     if !next.has_newline_before && !matches!(next.kind, SEMICOLON | RBRACE | TokenKind::Eof) {
-        parser.raw_expression(&[]);
+        expressions::expression(parser);
     }
-    parser.eat(&SEMICOLON);
+    parser.terminate();
     parser.finish_node();
 }
 
@@ -298,7 +294,7 @@ fn jump(parser: &mut Parser<'_>) {
             "`continue` is permitted only inside a loop of the same function",
         );
     }
-    parser.eat(&SEMICOLON);
+    parser.terminate();
     parser.finish_node();
 }
 
@@ -372,9 +368,7 @@ fn head(parser: &mut Parser<'_>, is_await: bool, for_span: Span) -> NodeKind {
     if next.kind == TokenKind::Ident && parser.text(&next) == "of" {
         parser.finish_node();
         parser.bump(false);
-        // An iterable follows `of`, so a `/` there begins a regex.
-        parser.peek(true);
-        if parser.raw_expression(&[]) == 0 {
+        if expressions::expression(parser).is_missing() {
             parser.error(next.span, "expected an iterable after `of`");
         }
         return NodeKind::ForOfStmt;
@@ -390,7 +384,7 @@ fn head(parser: &mut Parser<'_>, is_await: bool, for_span: Span) -> NodeKind {
         EQ => {
             parser.start_node(NodeKind::Initializer);
             parser.bump(false);
-            if parser.raw_expression(&[COMMA]) == 0 {
+            if expressions::assignment(parser).is_missing() {
                 parser.error(next.span, "expected an expression after `=`");
             }
             parser.finish_node();
@@ -442,7 +436,7 @@ fn classic(parser: &mut Parser<'_>) {
             "the condition of a classic `for` is required: an infinite loop is `while (true)` (SPEC.md §4.3)",
         );
     } else {
-        parser.raw_expression(&[]);
+        expressions::expression(parser);
     }
     if !parser.eat(&SEMICOLON) {
         let span = parser.peek(false).span;
@@ -463,7 +457,7 @@ fn update(parser: &mut Parser<'_>) {
         (TokenKind::Ident, TokenKind::Punct(Punct::PlusEq | Punct::MinusEq)) => {
             parser.bump(false);
             parser.bump(false);
-            parser.raw_expression(&[]) > 0
+            !expressions::assignment(parser).is_missing()
         }
         (TokenKind::Ident, TokenKind::Punct(Punct::PlusPlus | Punct::MinusMinus))
         | (TokenKind::Punct(Punct::PlusPlus | Punct::MinusMinus), TokenKind::Ident) => {
@@ -486,11 +480,7 @@ fn update(parser: &mut Parser<'_>) {
 /// Skips the rest of a malformed `for` header, to its `)` (or a `}` or the end of the
 /// file), so the header yields one diagnostic.
 fn skip_header(parser: &mut Parser<'_>) {
-    while !matches!(parser.peek(false).kind, RPAREN | RBRACE | TokenKind::Eof) {
-        if parser.raw_expression(&[]) == 0 {
-            parser.bump(false);
-        }
-    }
+    parser.skip_until(&RPAREN);
 }
 
 /// `switch (expr) { clauses }`.
@@ -669,7 +659,7 @@ fn case_value(parser: &mut Parser<'_>, labels: &mut Labels) -> bool {
             };
             parser.error(start.span, message);
             // The rest of the label, up to its `:`, for recovery.
-            parser.raw_expression(&[COLON]);
+            parser.skip_until(&COLON);
             false
         }
     }
@@ -748,10 +738,10 @@ pub(super) fn var_decl(parser: &mut Parser<'_>) {
     if bindings::pattern(parser, &mut names) && parser.peek(false).kind == EQ {
         parser.start_node(NodeKind::Initializer);
         parser.bump(false);
-        parser.raw_expression(&[]);
+        expressions::assignment(parser);
         parser.finish_node();
     }
-    parser.eat(&SEMICOLON);
+    parser.terminate();
     parser.finish_node();
 }
 
@@ -819,7 +809,7 @@ mod tests {
     fn every_statement_form_parses() {
         assert_eq!(
             clean("{\n  f()\n}\nif (a) {\n  b()\n} else if (c) {\n} else {\n}"),
-            "(Module (Block { (ExprStmt f ( )) }) (IfStmt if ( a ) (Block { (ExprStmt b ( )) }) else (IfStmt if ( c ) (Block { }) else (Block { }))) <eof>)"
+            "(Module (Block { (ExprStmt (CallExpr f ( ))) }) (IfStmt if ( a ) (Block { (ExprStmt (CallExpr b ( ))) }) else (IfStmt if ( c ) (Block { }) else (Block { }))) <eof>)"
         );
         assert_eq!(
             clean("while (a) {\n  break\n}\nfor (const x of xs) {\n  continue\n}\nfor (let [k, v] of m) {}\nfor await (const y of ys) {}"),
@@ -827,16 +817,16 @@ mod tests {
         );
         assert_eq!(
             clean("for (let i = 0; i < n; i += 2) {}\nfor (let i = n; i > 0; i -= 1) {}\nfor (let i = 0; i < n; i++) {}\nfor (let i = 0; i < n; i--) {}\nfor (let i = 0; i < n; ++i) {}\nfor (let i = 0; i < n; --i) {}"),
-            "(Module (ForStmt for ( (LetDecl let i (Initializer = 0)) ; i < n ; (ForUpdate i += 2) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = n)) ; i > 0 ; (ForUpdate i -= 1) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = 0)) ; i < n ; (ForUpdate i ++) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = 0)) ; i < n ; (ForUpdate i --) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = 0)) ; i < n ; (ForUpdate ++ i) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = 0)) ; i < n ; (ForUpdate -- i) ) (Block { })) <eof>)"
+            "(Module (ForStmt for ( (LetDecl let i (Initializer = 0)) ; (BinaryExpr i < n) ; (ForUpdate i += 2) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = n)) ; (BinaryExpr i > 0) ; (ForUpdate i -= 1) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = 0)) ; (BinaryExpr i < n) ; (ForUpdate i ++) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = 0)) ; (BinaryExpr i < n) ; (ForUpdate i --) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = 0)) ; (BinaryExpr i < n) ; (ForUpdate ++ i) ) (Block { })) (ForStmt for ( (LetDecl let i (Initializer = 0)) ; (BinaryExpr i < n) ; (ForUpdate -- i) ) (Block { })) <eof>)"
         );
         assert_eq!(
             clean("function f(a) {\n  if (a) {\n    return\n  }\n  throw new Error(\"x\")\n  return a;\n}\nf(1);\n/a/v.test(\"a\")"),
-            "(Module (FunctionDecl function f (Params ( (Param a) )) (Block { (IfStmt if ( a ) (Block { (ReturnStmt return) })) (ThrowStmt throw new Error ( \"x\" )) (ReturnStmt return a ;) })) (ExprStmt f ( 1 ) ;) (ExprStmt /a/v . test ( \"a\" )) <eof>)",
+            "(Module (FunctionDecl function f (Params ( (Param a) )) (Block { (IfStmt if ( a ) (Block { (ReturnStmt return) })) (ThrowStmt throw (NewExpr new Error ( \"x\" ))) (ReturnStmt return a ;) })) (ExprStmt (CallExpr f ( 1 )) ;) (ExprStmt (CallExpr (MemberExpr /a/v . test) ( \"a\" ))) <eof>)",
             "a statement may start with a regex"
         );
         assert_eq!(
             clean("switch (x) {\n  case 1:\n  case 2: {\n    break\n  }\n  default: {\n    f()\n  }\n}\ntry {\n} catch (e) {\n} finally {\n}\ntry {\n} catch {\n}"),
-            "(Module (SwitchStmt switch ( x ) { (CaseClause (CaseLabel case 1 :) (CaseLabel case 2 :) (Block { (BreakStmt break) })) (CaseClause (CaseLabel default :) (Block { (ExprStmt f ( )) })) }) (TryStmt try (Block { }) (CatchClause catch ( e ) (Block { })) (FinallyClause finally (Block { }))) (TryStmt try (Block { }) (CatchClause catch (Block { }))) <eof>)"
+            "(Module (SwitchStmt switch ( x ) { (CaseClause (CaseLabel case 1 :) (CaseLabel case 2 :) (Block { (BreakStmt break) })) (CaseClause (CaseLabel default :) (Block { (ExprStmt (CallExpr f ( ))) })) }) (TryStmt try (Block { }) (CatchClause catch ( e ) (Block { })) (FinallyClause finally (Block { }))) (TryStmt try (Block { }) (CatchClause catch (Block { }))) <eof>)"
         );
         assert_eq!(
             clean("function f() {\n  return\n  1\n}"),
@@ -855,7 +845,7 @@ mod tests {
         );
         assert_eq!(
             clean("f()\n;"),
-            "(Module (ExprStmt f ( ) ;) <eof>)",
+            "(Module (ExprStmt (CallExpr f ( )) ;) <eof>)",
             "a `;` on the next line still ends the expression statement"
         );
         let found = diagnostics(text);
@@ -891,7 +881,7 @@ mod tests {
         }
         assert_eq!(
             sexp("if (x) y()"),
-            "(Module (IfStmt if ( x ) (ExprStmt y ( ))) <eof>)",
+            "(Module (IfStmt if ( x ) (ExprStmt (CallExpr y ( )))) <eof>)",
             "parsed anyway, as the statement it is"
         );
         assert_eq!(
@@ -982,7 +972,7 @@ mod tests {
             (
                 "for (let i = 0 i < n) {}",
                 1,
-                21,
+                16,
                 "expected `;` after the counter",
             ),
             (
@@ -1003,6 +993,12 @@ mod tests {
                 6,
                 "declares its binding in the header",
             ),
+            (
+                "for (x of f(a)) {}",
+                1,
+                6,
+                "declares its binding in the header",
+            ),
             ("for (const 1 of xs) {}", 1, 12, "expected a binding name"),
             ("for (const x xs) {}", 1, 14, "expected `of` or `=`"),
             (
@@ -1011,12 +1007,18 @@ mod tests {
                 14,
                 "expected an iterable after `of`",
             ),
+        ]);
+    }
+
+    #[test]
+    fn a_malformed_for_head_or_await_form_is_e000_once() {
+        check_e000(&[
             ("for x {}", 1, 5, "expected `(` after `for`"),
             ("for (var x of xs) {}", 1, 6, "use `const` or `let`"),
             (
                 "for (const x of xs {}",
                 1,
-                22,
+                20,
                 "expected `)` to close the `for` header",
             ),
             (
@@ -1065,7 +1067,7 @@ mod tests {
         ]);
         assert_eq!(
             sexp("for (const k in o) {}\ndo {} while (x)\na: f()\nwith (o) {}\ndebugger;\nvar v = 1"),
-            "(Module (ForInStmt for ( (ConstDecl const k) in o ) (Block { })) (DoWhileStmt do (Block { }) while ( x )) (LabelledStmt a : (ExprStmt f ( ))) (WithStmt with ( o ) (Block { })) (DebuggerStmt debugger ;) (VarDecl var v (Initializer = 1)) <eof>)",
+            "(Module (ForInStmt for ( (ConstDecl const k) in o ) (Block { })) (DoWhileStmt do (Block { }) while ( x )) (LabelledStmt a : (ExprStmt (CallExpr f ( )))) (WithStmt with ( o ) (Block { })) (DebuggerStmt debugger ;) (VarDecl var v (Initializer = 1)) <eof>)",
             "each is parsed for recovery"
         );
         assert_eq!(
@@ -1169,6 +1171,13 @@ mod tests {
         assert_eq!(sexp(&chain).matches("(IfStmt").count(), 11);
         for text in [
             "{".repeat(100_000),
+            format!("{}f()", "a: ".repeat(1_000)),
+            format!(
+                "{}{}\n{}",
+                "{".repeat(300),
+                "}".repeat(300),
+                "{".repeat(300)
+            ),
             "if (a) ".repeat(100_000),
             "function f() {".repeat(100_000),
             "if (a) {} else ".repeat(100_000),
@@ -1189,7 +1198,7 @@ mod tests {
         check_e000(&[
             ("if x {}", 1, 4, "expected `(` after `if`"),
             ("if () {}", 1, 5, "expected a condition after `if (`"),
-            ("while (x {}", 1, 12, "expected `)` after the condition"),
+            ("while (x {}", 1, 10, "expected `)` after the condition"),
             ("if (x)", 1, 7, "expected `{` to open the body"),
             ("if (x) {} else", 1, 15, "expected `{` to open the body"),
             ("throw", 1, 1, "expected an expression after `throw`"),
@@ -1201,7 +1210,7 @@ mod tests {
             ),
             ("else {}", 1, 1, "expected a statement, not `else`"),
             ("do {}", 1, 1, "write a `while` loop"),
-            ("f())", 1, 4, "expected a statement, not `)`"),
+            ("f())", 1, 4, "expected `;` or a line break"),
             ("}", 1, 1, "unmatched `}`"),
             (
                 "switch (x)",
@@ -1251,7 +1260,7 @@ mod tests {
         for (text, expected) in [
             (
                 "{\n  const { 1 } = x\n  f()\n}",
-                "(Module (Block { (ConstDecl const (ObjectPattern {)) 1 } = x (ExprStmt f ( )) }) <eof>)",
+                "(Module (Block { (ConstDecl const (ObjectPattern {)) 1 } = x (ExprStmt (CallExpr f ( ))) }) <eof>)",
             ),
             (
                 "{ const [a, , b] = y }",
@@ -1263,7 +1272,7 @@ mod tests {
             ),
             (
                 "const [a, , b] = y; f()",
-                "(Module (ConstDecl const (ArrayPattern [ (PatternElement a) ,)) , b ] = y ; (ExprStmt f ( )) <eof>)",
+                "(Module (ConstDecl const (ArrayPattern [ (PatternElement a) ,)) , b ] = y ; (ExprStmt (CallExpr f ( ))) <eof>)",
             ),
         ] {
             assert_eq!(sexp(text), expected, "{text}");
@@ -1293,7 +1302,7 @@ mod tests {
         }
         assert_eq!(
             sexp("{\n  const [a, , b] = { c: 1 }\n  f()\n}"),
-            "(Module (Block { (ConstDecl const (ArrayPattern [ (PatternElement a) ,)) , b ] = { c : 1 } (ExprStmt f ( )) }) <eof>)"
+            "(Module (Block { (ConstDecl const (ArrayPattern [ (PatternElement a) ,)) , b ] = { c : 1 } (ExprStmt (CallExpr f ( ))) }) <eof>)"
         );
     }
 
@@ -1338,7 +1347,7 @@ mod tests {
         }
         assert_eq!(
             sexp("class\n(f)"),
-            "(Module (ClassDecl class) (ExprStmt ( f )) <eof>)"
+            "(Module (ClassDecl class) (ExprStmt (ParenExpr ( f ))) <eof>)"
         );
     }
 
@@ -1419,6 +1428,14 @@ mod tests {
                 "a `case` label is a literal",
             ),
         ]);
+    }
+
+    #[test]
+    fn a_malformed_label_is_skipped_to_its_colon() {
+        assert_eq!(
+            sexp("switch (x) {\n  case y: {}\n  case 1: {}\n}"),
+            "(Module (SwitchStmt switch ( x ) { (CaseClause (CaseLabel case y :) (Block { })) (CaseClause (CaseLabel case 1 :) (Block { })) }) <eof>)"
+        );
     }
 
     #[test]
@@ -1511,7 +1528,7 @@ mod tests {
         }
         assert_eq!(
             sexp("switch (x) {\n  case 1: f()\n}"),
-            "(Module (SwitchStmt switch ( x ) { (CaseClause (CaseLabel case 1 :) (ExprStmt f ( ))) }) <eof>)",
+            "(Module (SwitchStmt switch ( x ) { (CaseClause (CaseLabel case 1 :) (ExprStmt (CallExpr f ( )))) }) <eof>)",
             "parsed anyway as the clause body"
         );
     }

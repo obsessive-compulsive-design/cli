@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use sjs_diag::Span;
 
-use super::{functions, FnContext, Parser};
+use super::{expressions, functions, FnContext, Parser};
 use crate::token::{Keyword, Punct, TokenKind};
 use crate::tree::NodeKind;
 
@@ -422,9 +422,8 @@ fn field(parser: &mut Parser<'_>, is_static: bool, key: &Key) {
     if parser.peek(false).kind == EQ {
         parser.start_node(NodeKind::Initializer);
         let eq = parser.bump(false).span;
-        let consumed =
-            parser.with_context(FnContext::Initializer, |parser| parser.raw_expression(&[]));
-        if consumed == 0 {
+        let consumed = parser.with_context(FnContext::Initializer, expressions::assignment);
+        if consumed.is_missing() {
             parser.error(eq, "expected an expression after `=`");
         }
         parser.finish_node();
@@ -650,7 +649,7 @@ mod tests {
         );
         assert_eq!(
             clean("class A {\n  m() {}\n  async n(a) { await a }\n  *g() { yield 1 }\n  async *h() { yield await 1 }\n  static s() {}\n  static async *t() {}\n  #p() {}\n  static #q() {}\n}"),
-            "(Module (ClassDecl class A (ClassBody { (ClassMethod m (Params ( )) (Block { })) (ClassMethod async n (Params ( (Param a) )) (Block { (ExprStmt await a) })) (ClassMethod * g (Params ( )) (Block { (ExprStmt yield 1) })) (ClassMethod async * h (Params ( )) (Block { (ExprStmt yield await 1) })) (ClassMethod static s (Params ( )) (Block { })) (ClassMethod static async * t (Params ( )) (Block { })) (ClassMethod #p (Params ( )) (Block { })) (ClassMethod static #q (Params ( )) (Block { })) })) <eof>)"
+            "(Module (ClassDecl class A (ClassBody { (ClassMethod m (Params ( )) (Block { })) (ClassMethod async n (Params ( (Param a) )) (Block { (ExprStmt (AwaitExpr await a)) })) (ClassMethod * g (Params ( )) (Block { (ExprStmt (YieldExpr yield 1)) })) (ClassMethod async * h (Params ( )) (Block { (ExprStmt (YieldExpr yield (AwaitExpr await 1))) })) (ClassMethod static s (Params ( )) (Block { })) (ClassMethod static async * t (Params ( )) (Block { })) (ClassMethod #p (Params ( )) (Block { })) (ClassMethod static #q (Params ( )) (Block { })) })) <eof>)"
         );
         assert_eq!(
             clean("class A {\n  get x() { return 1 }\n  set x(v) {}\n  static get y() {}\n  get #z() {}\n  set #z(v) {}\n}"),
@@ -666,7 +665,7 @@ mod tests {
         );
         assert_eq!(
             clean("class A extends B {\n  constructor(a) {\n    super(a)\n    this.#x = super.y\n  }\n  #x\n}"),
-            "(Module (ClassDecl class A (ClassHeritage extends B) (ClassBody { (ClassMethod constructor (Params ( (Param a) )) (Block { (ExprStmt super ( a )) (ExprStmt this . #x = super . y) })) (ClassField #x) })) <eof>)"
+            "(Module (ClassDecl class A (ClassHeritage extends B) (ClassBody { (ClassMethod constructor (Params ( (Param a) )) (Block { (ExprStmt (CallExpr super ( a ))) (ExprStmt (AssignExpr (MemberExpr this . #x) = (MemberExpr super . y))) })) (ClassField #x) })) <eof>)"
         );
         assert_eq!(
             clean("export class A {}\nexport { A as B }"),
@@ -695,7 +694,7 @@ mod tests {
             "`async` ends at a newline; `static` and `get` do not"
         );
         assert_eq!(
-            diagnostics("const class = 2\nf(class)"),
+            diagnostics("const class = 2"),
             vec![(
                 Code::E000,
                 1,
@@ -703,6 +702,14 @@ mod tests {
                 "expected a binding name, `{` or `[`".to_owned()
             )],
             "a `class` that begins no class is left to whoever reported it"
+        );
+        assert_eq!(
+            diagnostics("f(class)")
+                .iter()
+                .map(|d| d.3.as_str())
+                .collect::<Vec<_>>(),
+            ["expected an argument or `)`"],
+            "in an operand it is no expression"
         );
         assert_eq!(
             clean("class A {\n  static async *[Symbol.iterator]() {}\n  if() {}\n  class = 1\n}"),

@@ -150,6 +150,48 @@ pub enum NodeKind {
     CatchClause,
     /// `finally { … }`.
     FinallyClause,
+    /// `( expr )` (US-028).
+    ParenExpr,
+    /// The removed comma operator, `a, b`, parsed for recovery.
+    SequenceExpr,
+    /// `target op value` for `=` and the compound operators.
+    AssignExpr,
+    /// `test ? a : b`.
+    CondExpr,
+    /// `left op right` for every binary operator, `??`, `&&` and `||` included.
+    BinaryExpr,
+    /// `! - + ~ typeof` and the removed `void`/`delete` before an operand.
+    UnaryExpr,
+    /// `await operand`.
+    AwaitExpr,
+    /// `yield [operand]` or `yield* operand`.
+    YieldExpr,
+    /// `++`/`--`, before or after the operand.
+    UpdateExpr,
+    /// `object.name` or `object?.name`.
+    MemberExpr,
+    /// `object[index]` or `object?.[index]`.
+    IndexExpr,
+    /// `callee(args)` or `callee?.(args)`.
+    CallExpr,
+    /// `new Callee(args)`.
+    NewExpr,
+    /// `import(…)`.
+    ImportCall,
+    /// The removed `new.target` and `import.meta`, parsed for recovery.
+    MetaProperty,
+    /// `` tag`…` ``.
+    TaggedTemplate,
+    /// `` `…${expr}…` ``: a template with substitutions.
+    TemplateLit,
+    /// `[ … ]` as a value.
+    ArrayLit,
+    /// `{ … }` as a value.
+    ObjectLit,
+    /// One `key: value`, shorthand or `key = default` entry of an object literal.
+    Property,
+    /// `...expr` in an array or object literal or an argument list.
+    SpreadElement,
 }
 
 /// A node's index in the arena; `NodeId(0)` is the root.
@@ -160,8 +202,9 @@ pub struct NodeId(u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TokenId(u32);
 
+/// A child of a node in the arena: a nested node or a token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Child {
+pub(crate) enum Child {
     Node(NodeId),
     Token(TokenId),
 }
@@ -398,6 +441,24 @@ impl<'t> TokenRef<'t> {
     }
 }
 
+/// A place in the innermost open node, taken before its next child, to which
+/// [`TreeBuilder::start_node_at`] can later return: an operand learns it is the left
+/// side of `a + b` only at the `+`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Marker {
+    children: usize,
+    tokens: usize,
+}
+
+impl Marker {
+    /// How many tokens the builder held when the marker was taken: the index of the
+    /// first token added after it.
+    #[must_use]
+    pub fn token_index(self) -> usize {
+        self.tokens
+    }
+}
+
 /// Builds a tree once, in source order: open a node, add its tokens and nested nodes,
 /// close it. Consumed by [`TreeBuilder::finish`], after which the tree is immutable.
 #[derive(Debug, Default)]
@@ -432,6 +493,77 @@ impl TreeBuilder {
         }
         self.open.push(id);
         id
+    }
+
+    /// The place before the next child of the innermost open node.
+    #[must_use]
+    pub fn marker(&self) -> Marker {
+        let children = self
+            .open
+            .last()
+            .map_or(0, |id| self.nodes[to_index(id.0)].children.len());
+        Marker {
+            children,
+            tokens: self.tokens.len(),
+        }
+    }
+
+    /// Opens a node that adopts every child the innermost open node gained since
+    /// `marker` was taken in it, and makes it the innermost open node.
+    pub fn start_node_at(&mut self, marker: Marker, kind: NodeKind) -> NodeId {
+        let id = NodeId(to_id(self.nodes.len()));
+        let parent = self.open.last().copied();
+        let adopted = match parent {
+            Some(parent) => {
+                let children = &mut self.nodes[to_index(parent.0)].children;
+                let at = marker.children.min(children.len());
+                children.split_off(at)
+            }
+            None => Vec::new(),
+        };
+        for child in &adopted {
+            if let Child::Node(node) = child {
+                self.nodes[to_index(node.0)].parent = Some(id);
+            }
+        }
+        self.nodes.push(NodeData {
+            kind,
+            parent,
+            children: adopted,
+            first: marker.tokens,
+            end: self.tokens.len(),
+        });
+        if let Some(parent) = parent {
+            self.nodes[to_index(parent.0)]
+                .children
+                .push(Child::Node(id));
+        }
+        self.open.push(id);
+        id
+    }
+
+    /// The kind of a node already started.
+    pub(crate) fn kind_of(&self, id: NodeId) -> NodeKind {
+        self.nodes[to_index(id.0)].kind
+    }
+
+    /// The children of a node already started, in source order.
+    pub(crate) fn children_of(&self, id: NodeId) -> &[Child] {
+        &self.nodes[to_index(id.0)].children
+    }
+
+    /// From the first token's text to the last's end, for a closed node that holds
+    /// tokens.
+    pub(crate) fn span_of(&self, id: NodeId) -> Span {
+        let data = &self.nodes[to_index(id.0)];
+        let first = &self.tokens[data.first];
+        let last = &self.tokens[data.end - 1];
+        Span::new(
+            first.span.start,
+            last.span.end,
+            first.span.byte_start,
+            last.span.byte_end,
+        )
     }
 
     /// Adds a token to the innermost open node.
@@ -678,6 +810,67 @@ mod tests {
     fn the_sexp_rendering_shows_nodes_and_token_text() {
         let (f, tree) = nested("a b  c");
         assert_eq!(tree.to_sexp(&f), "(Module (Module a) b (Module) c <eof>)");
+    }
+
+    #[test]
+    fn a_node_opened_at_a_marker_adopts_what_followed_it() {
+        let f = file("a b c");
+        let mut tokens = lex(&f).0.tokens.into_iter();
+        let mut builder = TreeBuilder::new();
+        builder.start_node(NodeKind::Module);
+        builder.token(tokens.next().expect("a"));
+        let marker = builder.marker();
+        assert_eq!(marker.token_index(), 1, "after `a`");
+        builder.start_node(NodeKind::ExprStmt);
+        builder.token(tokens.next().expect("b"));
+        builder.finish_node();
+        builder.token(tokens.next().expect("c"));
+        let wrapper = builder.start_node_at(marker, NodeKind::BinaryExpr);
+        builder.finish_node();
+        assert_eq!(builder.kind_of(wrapper), NodeKind::BinaryExpr);
+        assert_eq!(
+            builder.span_of(wrapper),
+            Span::new(Position::new(1, 3), Position::new(1, 6), 2, 5),
+            "from `b` to the end of `c`"
+        );
+        assert_eq!(
+            builder.children_of(wrapper).len(),
+            2,
+            "the ExprStmt and `c`"
+        );
+        for token in tokens {
+            builder.token(token);
+        }
+        builder.finish_node();
+        let tree = builder.finish();
+        assert_eq!(
+            tree.to_sexp(&f),
+            "(Module a (BinaryExpr (ExprStmt b) c) <eof>)"
+        );
+        let adopted = tree.node(NodeId(1));
+        assert_eq!(adopted.kind(), NodeKind::ExprStmt);
+        assert_eq!(
+            adopted.parent().map(NodeRef::id),
+            Some(wrapper),
+            "the adopted node's parent is the wrapper"
+        );
+        assert_eq!(
+            tree.node(wrapper).parent().map(NodeRef::id),
+            Some(NodeId(0))
+        );
+        assert_eq!(tree.node(wrapper).tokens().len(), 2);
+        let c = tree.token(TokenId(2));
+        assert_eq!(c.parent().id(), wrapper, "`c` is found inside the wrapper");
+        let mut builder = TreeBuilder::new();
+        let marker = builder.marker();
+        assert_eq!(marker.token_index(), 0);
+        builder.start_node_at(marker, NodeKind::Module);
+        builder.finish_node();
+        assert_eq!(
+            builder.finish().node_count(),
+            1,
+            "a node opened at a marker with nothing open becomes the root"
+        );
     }
 
     #[test]

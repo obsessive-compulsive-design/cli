@@ -34,8 +34,10 @@ pub(super) fn import_section(parser: &mut Parser<'_>) {
         )
     {
         let reported = parser.diagnostics.len();
+        let outer = std::mem::replace(&mut parser.item_mark, reported);
         import_decl(parser);
         parser.recover(reported, Scope::Module);
+        parser.item_mark = outer;
     }
 }
 
@@ -90,7 +92,7 @@ pub(super) fn import_decl(parser: &mut Parser<'_>) {
     let attributes = (parser.peek(false).kind == TokenKind::Keyword(Keyword::With))
         .then(|| import_attributes(parser));
     check(parser, form, &path, path_span, attributes);
-    parser.eat(&TokenKind::Punct(Punct::Semicolon));
+    parser.terminate();
     parser.finish_node();
 }
 
@@ -364,7 +366,7 @@ mod tests {
         );
         assert_eq!(
             clean("import { a } from \"./x.js\"\nimport * as b from \"./y.js\"\nconst c = a + b"),
-            "(Module (ImportDecl import (NamedImports { (ImportSpecifier a) }) from \"./x.js\") (ImportDecl import (NamespaceImport * as b) from \"./y.js\") (ConstDecl const c (Initializer = a + b)) <eof>)",
+            "(Module (ImportDecl import (NamedImports { (ImportSpecifier a) }) from \"./x.js\") (ImportDecl import (NamespaceImport * as b) from \"./y.js\") (ConstDecl const c (Initializer = (BinaryExpr a + b))) <eof>)",
             "several imports, then the items"
         );
         assert_eq!(
@@ -617,20 +619,20 @@ mod tests {
     fn dynamic_imports_and_property_names_are_not_declarations() {
         assert_eq!(
             clean("const m = import(\"./x.js\")"),
-            "(Module (ConstDecl const m (Initializer = import ( \"./x.js\" ))) <eof>)"
+            "(Module (ConstDecl const m (Initializer = (ImportCall import ( \"./x.js\" )))) <eof>)"
         );
         assert_eq!(
             clean("import(\"./x.js\")"),
-            "(Module (ExprStmt import ( \"./x.js\" )) <eof>)",
+            "(Module (ExprStmt (ImportCall import ( \"./x.js\" ))) <eof>)",
             "even first"
         );
         assert_eq!(
             clean("a.import\na?.import"),
-            "(Module (ExprStmt a . import) (ExprStmt a ?. import) <eof>)"
+            "(Module (ExprStmt (MemberExpr a . import)) (ExprStmt (MemberExpr a ?. import)) <eof>)"
         );
         assert_eq!(
             clean("import { a } from \"./x.js\"\nx = a / 2 / 1"),
-            "(Module (ImportDecl import (NamedImports { (ImportSpecifier a) }) from \"./x.js\") (ExprStmt x = a / 2 / 1) <eof>)",
+            "(Module (ImportDecl import (NamedImports { (ImportSpecifier a) }) from \"./x.js\") (ExprStmt (AssignExpr x = (BinaryExpr (BinaryExpr a / 2) / 1))) <eof>)",
             "the items keep the regex guess"
         );
     }

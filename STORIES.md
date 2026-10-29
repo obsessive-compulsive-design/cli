@@ -1304,7 +1304,64 @@ as a body (`if (x) const y = 1`) is `E000`.
 `switch (x) {}`; a clause block that is empty `{}`.
 
 #### US-028 Expression grammar and operators
-§2, §4.1, §4.3 · After: US-023 · Size: L · M0
+§2, §4.1, §4.3 · After: US-023 · Size: L · M0 · **Status: complete** (2026-10-28)
+
+> Delivered in `sjs-syntax`: `parser/expressions.rs` parses every expression by
+> precedence climbing: assignment (`=`, the compound operators and `??=`, right-
+> associative), the conditional (right-associative), `??`, `||`, `&&`, `|`, `^`, `&`,
+> `===`/`!==`, the relational operators with `instanceof`, the shifts, additive,
+> multiplicative and `**` (right-associative), the unary operators `! - + ~ typeof
+> await`, prefix and postfix `++`/`--`, and `yield`/`yield*` at the assignment level
+> inside generators, into `AssignExpr`, `CondExpr`, `BinaryExpr`, `UnaryExpr`,
+> `AwaitExpr`, `UpdateExpr`, `YieldExpr`, `ParenExpr` and `SequenceExpr`. Beneath them
+> the member, index, call, `new`, `import(…)`, template, tagged-template, array, object
+> and spread forms parse for their structure only: their rules (`new A` without
+> parentheses, `import(x)`, tags other than `String.raw`, optional-chain groups, holes,
+> object methods and accessors, `__proto__`, E134) are US-029's and US-030's. Removed
+> operators are E000 naming the replacement: `==` and `!=` with the fixes `===`/`!==`,
+> `||=`, `&&=` and the comma operator (so `yield a, b` is E000); `in`, `void` and
+> `delete` keep the lexer's single report. `??` beside `&&`/`||` without parentheses
+> and a unary operand as the base of `**` (`-2 ** 2`, `typeof a ** 2`, `await a ** 2`)
+> are E000; `(a ?? b) || c`, `x ?? (y || z)` and `(-2) ** 2` are clean. An update that is
+> a whole expression statement is S012 with the fix `i += 1`/`i -= 1` (also for `a.b++`,
+> `--i`); used as a value anywhere else (`x = i++`, `f(--i)`, `i++ + 1`) it is E000; its
+> operand must be a name or a property; a line break before a postfix `++` ends the
+> statement, as ES's restricted production says. The left side of `=` is a name, a
+> property (not an optional chain) or a pattern: an array or object literal there is
+> reinterpreted (`ArrayPattern`, `ObjectPattern`, `PatternProperty`, `RestElement`,
+> nested, with defaults), every target checked, and a shorthand default `{ a = 1 }` is
+> E000 unless the literal becomes a pattern; a compound assignment takes a name or a
+> property; `a + b = c` is E000; a parenthesised name or property is accepted and is S005
+> with the fix `(a)` → `a`. An arrow function or `yield` inside an operand is E000 asking
+> for parentheses. `await` outside an `async` function is E000, at the module's top level
+> accepted. The token-run extent and its heuristics are gone: a `/` is a regex or a
+> division by its grammatical position, and a simple statement ends at a `;` or where ASI
+> would end it (a line break, `}` or the end of the file), anything else on the line
+> being E000 once. Lines are joined as ES joins them (a line starting with `(` or `[`
+> continues the previous expression), which US-031 reports as E001. `async` before
+> `function` or an arrow's parameters counts only on the same line. Bracketed forms
+> recover through their closer, a lexer error token absorbs the pieces glued to it, and a
+> statement that has reported does not also report its terminator. The nesting bound now
+> covers expressions too, and once it trips nothing further is reported. `TreeBuilder`
+> gained `marker`/`start_node_at`, so an operand is wrapped once its operator is seen,
+> plus `kind_of`/`children_of`/`span_of` for the pattern reinterpretation. Fixtures under
+> `tests/conformance/04-expressions/` (ten E000 cases and a conforming file, one S012,
+> one S005). The corpus generator (US-009) put a bare generator method after a field,
+> which ES joins into a multiplication (`x = a` then `*g() {}`), and rendered `-(-x)` as
+> `--x`, a decrement: both fixed, with tests, and the manifest snapshot regenerated.
+> **Decisions:** the bitwise compound assignments (`<<=`, `>>=`, `>>>=`, `&=`, `|=`,
+> `^=`) are accepted although §2's `AssignExpr` lists eight operators, since they are
+> ES2025, absent from the removed productions and §12, and their operators are permitted
+> (§4.1); the replacement named for `||=`/`&&=` follows §12's `||`/`&&` row, the spec's
+> own row being garbled; S005 is reported here only for a parenthesised assignment
+> target (US-041 owns S005 in general); `(a?.b).c` is a plain member, since the
+> parentheses end the chain. The precedence table test covers every adjacent pair of
+> levels in both orders plus each operator's associativity: over 110 cases. Verified:
+> 100% lines and regions; 354 mutants on the diff (285 caught, 35 unviable, 18 timeouts,
+> 16 missed), then after tests for each survivor, the removal of a dead branch (`&&`/`||`
+> can never hold an unparenthesised `??`, which binds more loosely) and simpler code for
+> spans, template parts and optional chains, the 263 mutants of every function touched
+> rerun: 229 caught, 25 unviable, 9 timeouts, 0 missed.
 
 **Scope.** Precedence climbing for assignment (incl. `??=` and compound ops), ternary,
 `??`, `||`, `&&`, `|`, `^`, `&`, `===`/`!==`, relational incl. `instanceof`, shift,

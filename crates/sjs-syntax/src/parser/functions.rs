@@ -9,7 +9,7 @@
 
 use sjs_diag::Span;
 
-use super::{bindings, FnContext, Parser, Scope};
+use super::{bindings, expressions, FnContext, Parser, Scope};
 use crate::token::{Keyword, Punct, TokenKind};
 use crate::tree::NodeKind;
 
@@ -65,9 +65,9 @@ pub(super) fn function(parser: &mut Parser<'_>, expression: bool) -> Option<(Str
 }
 
 /// `[async] (params) => expr | block` in expression position, at `async`, `(` or the
-/// lone parameter name. `stops` are the enclosing expression's stop tokens, which end
-/// an expression body.
-pub(super) fn arrow(parser: &mut Parser<'_>, stops: &[TokenKind]) {
+/// lone parameter name. An expression body is an assignment expression: a `,` after it
+/// belongs to the enclosing list (or is the removed comma operator).
+pub(super) fn arrow(parser: &mut Parser<'_>) {
     parser.start_node(NodeKind::ArrowFunction);
     let is_async = parser.at_word("async") && parser.peek_second().kind != ARROW;
     if is_async {
@@ -84,13 +84,8 @@ pub(super) fn arrow(parser: &mut Parser<'_>, stops: &[TokenKind]) {
         let arrow = parser.bump(false).span;
         if parser.peek(false).kind == LBRACE {
             body(parser);
-        } else {
-            // There is no comma operator, so a `,` always ends an expression body.
-            let mut body_stops = stops.to_vec();
-            body_stops.push(COMMA);
-            if parser.raw_expression(&body_stops) == 0 {
-                parser.error(arrow, "expected an expression or a block after `=>`");
-            }
+        } else if expressions::assignment(parser).is_missing() {
+            parser.error(arrow, "expected an expression or a block after `=>`");
         }
     }
     parser.contexts.truncate(mark);
@@ -188,7 +183,7 @@ pub(super) fn params(parser: &mut Parser<'_>) -> Option<(usize, bool)> {
                 parser.start_node(NodeKind::Param);
                 let ok = one_param(parser, &mut names);
                 if ok {
-                    bindings::default_value(parser, RPAREN);
+                    bindings::default_value(parser);
                 }
                 parser.finish_node();
                 if !ok {
@@ -251,10 +246,13 @@ pub(super) fn block(parser: &mut Parser<'_>) {
     parser.finish_node();
 }
 
-/// True when `function` or `async function` starts here.
+/// True when `function` or `async function` starts here (`async` [no line break]
+/// `function`: after a line break `async` is a name).
 pub(super) fn at_function(parser: &mut Parser<'_>) -> bool {
     parser.peek(false).kind == FUNCTION
-        || (parser.at_word("async") && parser.peek_second().kind == FUNCTION)
+        || (parser.at_word("async")
+            && parser.peek_second().kind == FUNCTION
+            && !parser.peek_second().has_newline_before)
 }
 
 #[cfg(test)]
@@ -320,11 +318,11 @@ mod tests {
         );
         assert_eq!(
             clean("function* g() { yield 1 }\nasync function* h() { yield await 1 }"),
-            "(Module (FunctionDecl function * g (Params ( )) (Block { (ExprStmt yield 1) })) (FunctionDecl async function * h (Params ( )) (Block { (ExprStmt yield await 1) })) <eof>)"
+            "(Module (FunctionDecl function * g (Params ( )) (Block { (ExprStmt (YieldExpr yield 1)) })) (FunctionDecl async function * h (Params ( )) (Block { (ExprStmt (YieldExpr yield (AwaitExpr await 1))) })) <eof>)"
         );
         assert_eq!(
             clean("function f({ a, b: [c] }, [d] = [], ...{ e }) {}"),
-            "(Module (FunctionDecl function f (Params ( (Param (ObjectPattern { (PatternProperty a) , (PatternProperty b : (ArrayPattern [ (PatternElement c) ])) })) , (Param (ArrayPattern [ (PatternElement d) ]) (Initializer = [ ])) , (RestParam ... (ObjectPattern { (PatternProperty e) })) )) (Block { })) <eof>)"
+            "(Module (FunctionDecl function f (Params ( (Param (ObjectPattern { (PatternProperty a) , (PatternProperty b : (ArrayPattern [ (PatternElement c) ])) })) , (Param (ArrayPattern [ (PatternElement d) ]) (Initializer = (ArrayLit [ ]))) , (RestParam ... (ObjectPattern { (PatternProperty e) })) )) (Block { })) <eof>)"
         );
         assert_eq!(
             clean("function f() {\n  const a = 1\n  function g() {}\n  {\n    let b = 2\n  }\n}"),
@@ -338,7 +336,7 @@ mod tests {
         );
         assert_eq!(
             clean("export function f() {}\nexport async function g() {}\nf()"),
-            "(Module (ExportDecl export (FunctionDecl function f (Params ( )) (Block { }))) (ExportDecl export (FunctionDecl async function g (Params ( )) (Block { }))) (ExprStmt f ( )) <eof>)"
+            "(Module (ExportDecl export (FunctionDecl function f (Params ( )) (Block { }))) (ExportDecl export (FunctionDecl async function g (Params ( )) (Block { }))) (ExprStmt (CallExpr f ( ))) <eof>)"
         );
     }
 
@@ -350,7 +348,7 @@ mod tests {
         );
         assert_eq!(
             clean("const f = async (a) => a + 1\nconst g = 2"),
-            "(Module (ConstDecl const f (Initializer = (ArrowFunction async (Params ( (Param a) )) => a + 1))) (ConstDecl const g (Initializer = 2)) <eof>)",
+            "(Module (ConstDecl const f (Initializer = (ArrowFunction async (Params ( (Param a) )) => (BinaryExpr a + 1)))) (ConstDecl const g (Initializer = 2)) <eof>)",
             "an expression body ends where the enclosing expression would"
         );
         assert_eq!(
@@ -360,46 +358,56 @@ mod tests {
         );
         assert_eq!(
             clean("const f = () => ({})"),
-            "(Module (ConstDecl const f (Initializer = (ArrowFunction (Params ( )) => ( { } )))) <eof>)",
+            "(Module (ConstDecl const f (Initializer = (ArrowFunction (Params ( )) => (ParenExpr ( (ObjectLit { }) ))))) <eof>)",
             "`=> ({{}})` is an object"
         );
         assert_eq!(
             clean("const r = f((a) => a, b, () => () => 1)"),
-            "(Module (ConstDecl const r (Initializer = f ( (ArrowFunction (Params ( (Param a) )) => a) , b , (ArrowFunction (Params ( )) => (ArrowFunction (Params ( )) => 1)) ))) <eof>)",
+            "(Module (ConstDecl const r (Initializer = (CallExpr f ( (ArrowFunction (Params ( (Param a) )) => a) , b , (ArrowFunction (Params ( )) => (ArrowFunction (Params ( )) => 1)) )))) <eof>)",
             "arrows nest inside call arguments and inside arrows"
         );
         assert_eq!(
             clean("const f = (a) => {\n  const b = a\n  return (c) => b + c\n}"),
-            "(Module (ConstDecl const f (Initializer = (ArrowFunction (Params ( (Param a) )) => (Block { (ConstDecl const b (Initializer = a)) (ReturnStmt return (ArrowFunction (Params ( (Param c) )) => b + c)) })))) <eof>)"
+            "(Module (ConstDecl const f (Initializer = (ArrowFunction (Params ( (Param a) )) => (Block { (ConstDecl const b (Initializer = a)) (ReturnStmt return (ArrowFunction (Params ( (Param c) )) => (BinaryExpr b + c))) })))) <eof>)"
         );
         assert_eq!(
             clean("const r = async(x)\nconst s = async(x) + 1"),
-            "(Module (ConstDecl const r (Initializer = async ( x ))) (ConstDecl const s (Initializer = async ( x ) + 1)) <eof>)",
+            "(Module (ConstDecl const r (Initializer = (CallExpr async ( x )))) (ConstDecl const s (Initializer = (BinaryExpr (CallExpr async ( x )) + 1))) <eof>)",
             "`async(x)` is a call to a binding named `async`"
         );
         assert_eq!(
             clean("const f = (a) => /x/v\nconst g = (a) => `${a}`"),
-            "(Module (ConstDecl const f (Initializer = (ArrowFunction (Params ( (Param a) )) => /x/v))) (ConstDecl const g (Initializer = (ArrowFunction (Params ( (Param a) )) => `${ a }`))) <eof>)",
+            "(Module (ConstDecl const f (Initializer = (ArrowFunction (Params ( (Param a) )) => /x/v))) (ConstDecl const g (Initializer = (ArrowFunction (Params ( (Param a) )) => (TemplateLit `${ a }`)))) <eof>)",
             "a regex or template may start the body"
         );
         assert_eq!(
             clean("const r = c ? (a) => a : (b) => b\nconst s = (a) => a ? b : c\nconst t = [() => 1, 2]"),
-            "(Module (ConstDecl const r (Initializer = c ? (ArrowFunction (Params ( (Param a) )) => a) : (ArrowFunction (Params ( (Param b) )) => b))) (ConstDecl const s (Initializer = (ArrowFunction (Params ( (Param a) )) => a ? b : c))) (ConstDecl const t (Initializer = [ (ArrowFunction (Params ( )) => 1) , 2 ])) <eof>)",
+            "(Module (ConstDecl const r (Initializer = (CondExpr c ? (ArrowFunction (Params ( (Param a) )) => a) : (ArrowFunction (Params ( (Param b) )) => b)))) (ConstDecl const s (Initializer = (ArrowFunction (Params ( (Param a) )) => (CondExpr a ? b : c)))) (ConstDecl const t (Initializer = (ArrayLit [ (ArrowFunction (Params ( )) => 1) , 2 ]))) <eof>)",
             "an arrow body ends at an enclosing conditional's `:` or at a `,`, but owns its own conditional"
         );
         assert_eq!(
             clean("const r = c ? (a) => a ? 1 : 2 : (b) => b"),
-            "(Module (ConstDecl const r (Initializer = c ? (ArrowFunction (Params ( (Param a) )) => a ? 1 : 2) : (ArrowFunction (Params ( (Param b) )) => b))) <eof>)",
+            "(Module (ConstDecl const r (Initializer = (CondExpr c ? (ArrowFunction (Params ( (Param a) )) => (CondExpr a ? 1 : 2)) : (ArrowFunction (Params ( (Param b) )) => b)))) <eof>)",
             "a body's own conditional closes before the enclosing `:` ends the body"
         );
         assert_eq!(
-            clean("x = () => 1, 2\nfor (const y of await ((a) => a) ? () => ({ b }) : await c) {}"),
-            "(Module (ExprStmt x = (ArrowFunction (Params ( )) => 1) , 2) (ForOfStmt for ( (ConstDecl const y) of await ( (ArrowFunction (Params ( (Param a) )) => a) ) ? (ArrowFunction (Params ( )) => ( { b } )) : await c ) (Block { })) <eof>)",
-            "the same at statement level, where `await` after the body is the module's"
+            sexp("x = () => 1, 2"),
+            "(Module (ExprStmt (SequenceExpr (AssignExpr x = (ArrowFunction (Params ( )) => 1)) , 2)) <eof>)",
+            "at statement level the `,` after the body is the comma operator (E000)"
+        );
+        assert_eq!(
+            diagnostics("x = () => 1, 2").len(),
+            1,
+            "the comma operator, once"
+        );
+        assert_eq!(
+            clean("for (const y of await ((a) => a) ? () => ({ b }) : await c) {}"),
+            "(Module (ForOfStmt for ( (ConstDecl const y) of (CondExpr (AwaitExpr await (ParenExpr ( (ArrowFunction (Params ( (Param a) )) => a) ))) ? (ArrowFunction (Params ( )) => (ParenExpr ( (ObjectLit { (Property b) }) ))) : (AwaitExpr await c)) ) (Block { })) <eof>)",
+            "where `await` after the body is the module's"
         );
         assert_eq!(
             clean("const f = (a = 1) => a\nconst g = ((a) => a)(1)"),
-            "(Module (ConstDecl const f (Initializer = (ArrowFunction (Params ( (Param a (Initializer = 1)) )) => a))) (ConstDecl const g (Initializer = ( (ArrowFunction (Params ( (Param a) )) => a) ) ( 1 ))) <eof>)"
+            "(Module (ConstDecl const f (Initializer = (ArrowFunction (Params ( (Param a (Initializer = 1)) )) => a))) (ConstDecl const g (Initializer = (CallExpr (ParenExpr ( (ArrowFunction (Params ( (Param a) )) => a) )) ( 1 )))) <eof>)"
         );
     }
 
@@ -538,7 +546,7 @@ mod tests {
         ]);
         assert_eq!(
             sexp("const f = (=> 1"),
-            "(Module (ConstDecl const f (Initializer = ( => 1)) <eof>)",
+            "(Module (ConstDecl const f (Initializer = (ParenExpr ( => 1))) <eof>)",
             "an unmatched `(` is not an arrow: the tokens stay with the enclosing expression"
         );
         assert_eq!(
@@ -619,13 +627,22 @@ mod tests {
     fn declarations_only_at_statement_start_and_blocks_close_their_scope() {
         assert_eq!(
             clean("x = f\nfunction f() {}\na.function"),
-            "(Module (ExprStmt x = f) (FunctionDecl function f (Params ( )) (Block { })) (ExprStmt a . function) <eof>)"
+            "(Module (ExprStmt (AssignExpr x = f)) (FunctionDecl function f (Params ( )) (Block { })) (ExprStmt (MemberExpr a . function)) <eof>)"
         );
         assert_eq!(
-            clean("o.function(1)\no.async (b) => b\no.b => 1"),
-            "(Module (ExprStmt o . function ( 1 )) (ExprStmt o . async (ArrowFunction (Params ( (Param b) )) => b)) (ExprStmt o . b => 1) <eof>)",
-            "after `.` the word is a property name: no function expression and no lone-parameter arrow is read there (the `(` after `o.async` is its own token)"
+            clean("o.function(1)"),
+            "(Module (ExprStmt (CallExpr (MemberExpr o . function) ( 1 ))) <eof>)",
+            "after `.` the word is a property name: no function expression is read there"
         );
+        for (text, column) in [("o.async (b) => b", 13), ("o.b => 1", 5)] {
+            let found = diagnostics(text);
+            assert_eq!(found.len(), 1, "{text}: {found:?}");
+            assert_eq!(
+                (found[0].1, found[0].2),
+                (1, column),
+                "nor an arrow after a property: the `=>` is out of place: {text}"
+            );
+        }
         assert_eq!(
             clean("function f() { const a = 1 }\nconst b = 2"),
             "(Module (FunctionDecl function f (Params ( )) (Block { (ConstDecl const a (Initializer = 1)) })) (ConstDecl const b (Initializer = 2)) <eof>)",
@@ -668,39 +685,40 @@ mod tests {
         let f = file(&text);
         let (tree, found) = parse(&f);
         assert_eq!(tree.print(&f), text);
-        assert!(found.is_empty(), "{found:?}");
+        let messages: Vec<&str> = found.iter().map(|d| d.message.as_str()).collect();
+        assert_eq!(messages, ["expected `)`"], "a parenthesis, not an arrow");
     }
 
     #[test]
     fn regexes_read_as_lookahead_leave_no_stale_report() {
         assert_eq!(
             clean("const r = f(/\\d/v)\nconst s = f((a) => a, /[\\(]/v)"),
-            "(Module (ConstDecl const r (Initializer = f ( /\\d/v ))) (ConstDecl const s (Initializer = f ( (ArrowFunction (Params ( (Param a) )) => a) , /[\\(]/v ))) <eof>)",
+            "(Module (ConstDecl const r (Initializer = (CallExpr f ( /\\d/v )))) (ConstDecl const s (Initializer = (CallExpr f ( (ArrowFunction (Params ( (Param a) )) => a) , /[\\(]/v )))) <eof>)",
             "the arrow scan read the regex as division first"
         );
         assert_eq!(
             clean("const t = `a${f(b, /x/v)[c]}d`\nconst u = f((a) => a, `${/y/v}`)"),
-            "(Module (ConstDecl const t (Initializer = `a${ f ( b , /x/v ) [ c ] }d`)) (ConstDecl const u (Initializer = f ( (ArrowFunction (Params ( (Param a) )) => a) , `${ /y/v }` ))) <eof>)",
+            "(Module (ConstDecl const t (Initializer = (TemplateLit `a${ (IndexExpr (CallExpr f ( b , /x/v )) [ c ]) }d`))) (ConstDecl const u (Initializer = (CallExpr f ( (ArrowFunction (Params ( (Param a) )) => a) , (TemplateLit `${ /y/v }`) )))) <eof>)",
             "a regex lexed again inside a substitution keeps the substitution open"
         );
         assert_eq!(
             clean("for (const x of /a/v) {}\nconst y = of / 2\nfor (const z of [/b/v]) {}"),
-            "(Module (ForOfStmt for ( (ConstDecl const x) of /a/v ) (Block { })) (ConstDecl const y (Initializer = of / 2)) (ForOfStmt for ( (ConstDecl const z) of [ /b/v ] ) (Block { })) <eof>)",
+            "(Module (ForOfStmt for ( (ConstDecl const x) of /a/v ) (Block { })) (ConstDecl const y (Initializer = (BinaryExpr of / 2))) (ForOfStmt for ( (ConstDecl const z) of (ArrayLit [ /b/v ]) ) (Block { })) <eof>)",
             "a `/` after the contextual keyword `of` starts a regex; after a value named `of` it divides"
         );
         assert_eq!(
             clean("const a = await /x/v\nfunction* g() { yield /y/v }\nconst b = o.await / 2"),
-            "(Module (ConstDecl const a (Initializer = await /x/v)) (FunctionDecl function * g (Params ( )) (Block { (ExprStmt yield /y/v) })) (ConstDecl const b (Initializer = o . await / 2)) <eof>)",
+            "(Module (ConstDecl const a (Initializer = (AwaitExpr await /x/v))) (FunctionDecl function * g (Params ( )) (Block { (ExprStmt (YieldExpr yield /y/v)) })) (ConstDecl const b (Initializer = (BinaryExpr (MemberExpr o . await) / 2))) <eof>)",
             "an operand follows `await` and `yield`; after `.` they are property names"
         );
         assert_eq!(
             clean("const a = { b: 1 } / 2\nx = { c: [1] } / 3\nif (y) {}\n/z/v\nfunction f() {\n  return { d: 1 } / 4\n}\n{}\n/w/v"),
-            "(Module (ConstDecl const a (Initializer = { b : 1 } / 2)) (ExprStmt x = { c : [ 1 ] } / 3) (IfStmt if ( y ) (Block { })) (ExprStmt /z/v) (FunctionDecl function f (Params ( )) (Block { (ReturnStmt return { d : 1 } / 4) })) (Block { }) (ExprStmt /w/v) <eof>)",
+            "(Module (ConstDecl const a (Initializer = (BinaryExpr (ObjectLit { (Property b : 1) }) / 2))) (ExprStmt (AssignExpr x = (BinaryExpr (ObjectLit { (Property c : (ArrayLit [ 1 ])) }) / 3))) (IfStmt if ( y ) (Block { })) (ExprStmt /z/v) (FunctionDecl function f (Params ( )) (Block { (ReturnStmt return (BinaryExpr (ObjectLit { (Property d : 1) }) / 4)) })) (Block { }) (ExprStmt /w/v) <eof>)",
             "a `}}` closing an object literal ends a value; one closing a block does not"
         );
         assert_eq!(
             clean("async function* g() {\n  yield {} / 2\n  const a = await {} / 3\n}"),
-            "(Module (FunctionDecl async function * g (Params ( )) (Block { (ExprStmt yield { } / 2) (ConstDecl const a (Initializer = await { } / 3)) })) <eof>)",
+            "(Module (FunctionDecl async function * g (Params ( )) (Block { (ExprStmt (YieldExpr yield (BinaryExpr (ObjectLit { }) / 2))) (ConstDecl const a (Initializer = (BinaryExpr (AwaitExpr await (ObjectLit { })) / 3))) })) <eof>)",
             "an object literal after `yield` or `await` is a value too"
         );
         assert_eq!(

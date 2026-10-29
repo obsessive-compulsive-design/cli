@@ -1,8 +1,7 @@
 //! `const` and `let` declarations with their binding patterns (SPEC.md §2 `ConstDecl`,
 //! `LetDecl`, §4.2, §12): a name, an object pattern `{ a, b: pattern = default,
 //! ...rest }` or an array pattern `[ pattern = default, ...rest ]`, then `= Expr`. The
-//! initializer and every default are expression extents until the expression stories
-//! land ([`Parser::raw_expression`]).
+//! initializer and every default are assignment expressions.
 //!
 //! Early errors reported here: `let x` without an initializer (E000 with the fix
 //! `let x = undefined`), a `const` without one, an elision in an array pattern (dense
@@ -11,7 +10,7 @@
 
 use sjs_diag::Span;
 
-use super::Parser;
+use super::{expressions, Parser};
 use crate::token::{Keyword, Punct, TokenKind};
 use crate::tree::NodeKind;
 
@@ -21,9 +20,9 @@ const EQ: TokenKind = TokenKind::Punct(Punct::Eq);
 const RBRACE: TokenKind = TokenKind::Punct(Punct::RBrace);
 const RBRACKET: TokenKind = TokenKind::Punct(Punct::RBracket);
 const ELLIPSIS: TokenKind = TokenKind::Punct(Punct::Ellipsis);
-const SEMICOLON: TokenKind = TokenKind::Punct(Punct::Semicolon);
 
-/// A `const` or `let` declaration, at its keyword, with the `;` that may end it.
+/// A `const` or `let` declaration, at its keyword, through its end (a `;` or a line
+/// break).
 /// Returns the names it binds with their spans, in source order.
 pub(super) fn declaration(parser: &mut Parser<'_>) -> Vec<(String, Span)> {
     let is_let = parser.peek(false).kind == TokenKind::Keyword(Keyword::Let);
@@ -41,7 +40,7 @@ pub(super) fn declaration(parser: &mut Parser<'_>) -> Vec<(String, Span)> {
     if parser.peek(false).kind == EQ {
         parser.start_node(NodeKind::Initializer);
         let eq = parser.bump(false).span;
-        if parser.raw_expression(&[COMMA]) == 0 {
+        if expressions::assignment(parser).is_missing() {
             parser.error(eq, "expected an expression after `=`");
         }
         parser.finish_node();
@@ -72,7 +71,7 @@ pub(super) fn declaration(parser: &mut Parser<'_>) -> Vec<(String, Span)> {
             parser.error(span, "a `const` declaration needs an initializer");
         }
     }
-    parser.eat(&SEMICOLON);
+    parser.terminate();
     parser.finish_node();
     names
 }
@@ -171,7 +170,7 @@ fn object_pattern(parser: &mut Parser<'_>, names: &mut Vec<(String, Span)>) -> b
                 } else {
                     binding_name(parser, names);
                 }
-                default_value(parser, RBRACE);
+                default_value(parser);
                 parser.finish_node();
             }
             _ => {
@@ -227,7 +226,7 @@ fn array_pattern(parser: &mut Parser<'_>, names: &mut Vec<(String, Span)>) -> bo
                     parser.finish_node();
                     return false;
                 }
-                default_value(parser, RBRACKET);
+                default_value(parser);
                 parser.finish_node();
             }
         }
@@ -270,15 +269,14 @@ fn rest_element(
     false
 }
 
-/// An optional `= default`, whose expression runs to the next `,` or `close` at
-/// bracket depth zero.
-pub(super) fn default_value(parser: &mut Parser<'_>, close: TokenKind) {
+/// An optional `= default`: an assignment expression.
+pub(super) fn default_value(parser: &mut Parser<'_>) {
     if parser.peek(false).kind != EQ {
         return;
     }
     parser.start_node(NodeKind::Initializer);
     let eq = parser.bump(false).span;
-    if parser.raw_expression(&[COMMA, close]) == 0 {
+    if expressions::assignment(parser).is_missing() {
         parser.error(eq, "expected an expression after `=`");
     }
     parser.finish_node();
@@ -331,13 +329,13 @@ mod tests {
         );
         assert_eq!(
             clean("const a = 1\nlet b = a + 2;\nconst c = f(\n  a,\n  b\n)"),
-            "(Module (ConstDecl const a (Initializer = 1)) (LetDecl let b (Initializer = a + 2) ;) (ConstDecl const c (Initializer = f ( a , b ))) <eof>)",
+            "(Module (ConstDecl const a (Initializer = 1)) (LetDecl let b (Initializer = (BinaryExpr a + 2)) ;) (ConstDecl const c (Initializer = (CallExpr f ( a , b )))) <eof>)",
             "a newline or `;` ends the initializer; brackets keep it open"
         );
         assert_eq!(
             clean("const a = 1 +\n  2\nconst b = a\n(c)"),
-            "(Module (ConstDecl const a (Initializer = 1 + 2)) (ConstDecl const b (Initializer = a)) (ExprStmt ( c )) <eof>)",
-            "a line ending in an operator continues; a line starting with `(` does not"
+            "(Module (ConstDecl const a (Initializer = (BinaryExpr 1 + 2))) (ConstDecl const b (Initializer = (CallExpr a ( c )))) <eof>)",
+            "a line ending in an operator continues, and so does one starting with `(`, as ES parses it (US-031 reports that hazard)"
         );
         assert_eq!(
             clean("{ const a = 1 }"),
@@ -346,22 +344,22 @@ mod tests {
         );
         assert_eq!(
             clean("const t = `${a}` + `b`\nconst r = /x/v"),
-            "(Module (ConstDecl const t (Initializer = `${ a }` + `b`)) (ConstDecl const r (Initializer = /x/v)) <eof>)",
+            "(Module (ConstDecl const t (Initializer = (BinaryExpr (TemplateLit `${ a }`) + `b`))) (ConstDecl const r (Initializer = /x/v)) <eof>)",
             "templates and regexes inside initializers"
         );
         assert_eq!(
             clean("const o = { a: 1,\n  b: 2 }\nconst p = o.const"),
-            "(Module (ConstDecl const o (Initializer = { a : 1 , b : 2 })) (ConstDecl const p (Initializer = o . const)) <eof>)",
+            "(Module (ConstDecl const o (Initializer = (ObjectLit { (Property a : 1) , (Property b : 2) }))) (ConstDecl const p (Initializer = (MemberExpr o . const))) <eof>)",
             "`const` after `.` is a property name"
         );
         assert_eq!(
             clean("const a = typeof\n  x\nconst b = new\n  C()\nconst c = d instanceof\n  C"),
-            "(Module (ConstDecl const a (Initializer = typeof x)) (ConstDecl const b (Initializer = new C ( ))) (ConstDecl const c (Initializer = d instanceof C)) <eof>)",
+            "(Module (ConstDecl const a (Initializer = (UnaryExpr typeof x))) (ConstDecl const b (Initializer = (NewExpr new C ( )))) (ConstDecl const c (Initializer = (BinaryExpr d instanceof C))) <eof>)",
             "a keyword that takes an operand keeps the line open"
         );
         assert_eq!(
             clean("const a = this\nconst b = `${\n  a\n}`\nconst c = `x`\nconst d = 1"),
-            "(Module (ConstDecl const a (Initializer = this)) (ConstDecl const b (Initializer = `${ a }`)) (ConstDecl const c (Initializer = `x`)) (ConstDecl const d (Initializer = 1)) <eof>)",
+            "(Module (ConstDecl const a (Initializer = this)) (ConstDecl const b (Initializer = (TemplateLit `${ a }`))) (ConstDecl const c (Initializer = `x`)) (ConstDecl const d (Initializer = 1)) <eof>)",
             "`this` and a template end a line; a substitution keeps it open"
         );
         assert_eq!(
@@ -393,7 +391,7 @@ mod tests {
         );
         assert_eq!(
             clean("const { a = f(1, { b: 2 }), c = [3, 4] } = d"),
-            "(Module (ConstDecl const (ObjectPattern { (PatternProperty a (Initializer = f ( 1 , { b : 2 } ))) , (PatternProperty c (Initializer = [ 3 , 4 ])) }) (Initializer = d)) <eof>)",
+            "(Module (ConstDecl const (ObjectPattern { (PatternProperty a (Initializer = (CallExpr f ( 1 , (ObjectLit { (Property b : 2) }) )))) , (PatternProperty c (Initializer = (ArrayLit [ 3 , 4 ]))) }) (Initializer = d)) <eof>)",
             "defaults run to the next `,` at bracket depth zero"
         );
         assert_eq!(
@@ -592,9 +590,17 @@ mod tests {
     #[test]
     fn declarations_start_statements_only() {
         assert_eq!(
-            clean("a.const = 1\nx?.let\nf(const)"),
-            "(Module (ExprStmt a . const = 1) (ExprStmt x ?. let) (ExprStmt f ( const )) <eof>)",
-            "`const` after `.`, `?.` or `(` is not a declaration"
+            clean("a.const = 1\nx?.let"),
+            "(Module (ExprStmt (AssignExpr (MemberExpr a . const) = 1)) (ExprStmt (MemberExpr x ?. let)) <eof>)",
+            "`const` after `.` or `?.` is a property name, not a declaration"
+        );
+        assert_eq!(
+            diagnostics("f(const)")
+                .iter()
+                .map(|d| d.3.as_str())
+                .collect::<Vec<_>>(),
+            ["expected an argument or `)`"],
+            "nor after `(`, where it is no expression either"
         );
         assert_eq!(
             clean("const a = 1; const b = 2"),

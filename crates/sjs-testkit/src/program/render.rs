@@ -564,12 +564,16 @@ fn render_expr(e: &Expr, level: usize) -> String {
         Expr::SuperMember(name) => format!("super.{name}"),
         Expr::SuperCall(args) => format!("super({})", args_text(args, level)),
         Expr::Unary(op, operand) => {
-            let space = if op.chars().all(char::is_alphabetic) {
+            let operand = expr(operand, UNARY, level);
+            // A word needs a space; so does `-` before `-x` (or `+` before `+x`), which
+            // would otherwise lex as `--` (or `++`).
+            let doubled = matches!(*op, "-" | "+") && operand.starts_with(*op);
+            let space = if op.chars().all(char::is_alphabetic) || doubled {
                 " "
             } else {
                 ""
             };
-            format!("{op}{space}{}", expr(operand, UNARY, level))
+            format!("{op}{space}{operand}")
         }
         Expr::Binary(left, op, right) => render_binary(left, op, right, level),
         Expr::Ternary(cond, then, otherwise) => format!(
