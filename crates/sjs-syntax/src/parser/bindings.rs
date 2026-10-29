@@ -591,7 +591,7 @@ mod tests {
     fn declarations_start_statements_only() {
         assert_eq!(
             clean("a.const = 1\nx?.let"),
-            "(Module (ExprStmt (AssignExpr (MemberExpr a . const) = 1)) (ExprStmt (MemberExpr x ?. let)) <eof>)",
+            "(Module (ExprStmt (AssignExpr (MemberExpr a . const) = 1)) (ExprStmt (OptionalChain (MemberExpr x ?. let))) <eof>)",
             "`const` after `.` or `?.` is a property name, not a declaration"
         );
         assert_eq!(

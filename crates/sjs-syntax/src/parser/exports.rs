@@ -457,7 +457,9 @@ export { a }"
             "(Module (FunctionDecl function f (Params ( )) (Block { (ExportDecl export (ConstDecl const a (Initializer = 1))) })) (ExportDecl export (NamedExports { (ExportSpecifier b) })) <eof>)"
         );
         assert_eq!(
-            diagnostics("const o = { export: 1 }\nconst p = o.export\n`${ {}.x }`\nexport { p }"),
+            diagnostics(
+                "const o = { export: 1 }\nconst p = o.export\nconst q = `${ {}.x }`\nexport { p }"
+            ),
             Vec::new(),
             "`export` as a property name and braces inside templates do not count"
         );

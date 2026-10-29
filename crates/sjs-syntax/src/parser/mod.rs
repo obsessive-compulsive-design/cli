@@ -611,7 +611,7 @@ mod tests {
             .find(|&i| tree.tokens().get(i) != stream.tokens.get(i))
             .unwrap_or(0);
         let at = tree.tokens().get(index).map_or(0, |t| t.span.byte_start);
-        let snippet = &f.text()[at.saturating_sub(60)..(at + 60).min(f.len())];
+        let snippet = around(f.text(), at);
         assert_eq!(
             tree.tokens().get(index),
             stream.tokens.get(index),
@@ -633,6 +633,18 @@ mod tests {
             );
         }
         (diagnostics, lexed)
+    }
+
+    /// Up to 60 bytes either side of `at`, widened to character boundaries.
+    fn around(text: &str, at: usize) -> &str {
+        let lo = (0..=at.saturating_sub(60))
+            .rev()
+            .find(|&i| text.is_char_boundary(i))
+            .unwrap_or(0);
+        let hi = ((at + 60).min(text.len())..=text.len())
+            .find(|&i| text.is_char_boundary(i))
+            .unwrap_or(text.len());
+        &text[lo..hi]
     }
 
     /// For any text: the tree prints back to it, under a `Module` root whose last
@@ -698,7 +710,7 @@ mod tests {
             "",
             "a = 1",
             "  // only\n",
-            "x = /a/v\n`${a}`",
+            "x = /a/v\ny = `${a}`",
             "\"\u{FEFF}\"",
             "@ $ \\u",
         ] {

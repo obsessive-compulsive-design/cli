@@ -1383,7 +1383,38 @@ Edge: `a < b < c` left-assoc; `typeof typeof x`; `await` in a non-async function
 right-assoc; `x ?? (y || z)`.
 
 #### US-029 Member, call, optional chaining, `new`, `import()`, `this`, `super`, templates
-§2 · After: US-028 · Size: M · M0
+§2 · After: US-028 · Size: M · M0 · **Status: complete** (2026-10-28)
+
+> Delivered in `sjs-syntax` (`parser/expressions.rs`): `a.b`, `a?.b`, `a[b]`, `a?.[b]`,
+> `a()` and `a?.()` chain in any mix as nested `MemberExpr`/`IndexExpr`/`CallExpr`
+> links, and a chain holding a `?.` is wrapped in one `OptionalChain` node, the
+> short-circuit group, from its object to where the chain ends: `a?.b.c` is
+> `(OptionalChain (MemberExpr (MemberExpr a ?. b) . c))` while `(a?.b).c` is a plain
+> member of a parenthesised value, and so assignable. `new` takes `A` or `ns.A` and
+> always an argument list: `new A` is E000 with the fix `new A` → `new A()`, `new
+> a.b.c()` and `new a[0]()` are E000 at the extra link, `new (f())()`, `new new A()()`,
+> `new this.A()` are E000 at the callee, all parsed for recovery; `new A().b` and `new
+> A()()` are fine; `new.target` is E000 naming §12 (`MetaProperty`). `import(…)` takes
+> one string literal path under the static import's rules (`imports::check_dynamic`:
+> E201 for a path that is not relative or not `.js`/`.json`, E205 for a `.json` path,
+> which the grammar gives no attribute clause); `import(x)`, a template path, an empty
+> list and a second argument are each E000 once; `import.meta` is E000 naming §5.1.
+> `String.raw` is the one template tag: any other tag (`tag`, `a.b`, `f()`,
+> `String.raw.x`, `String.raw[0]`, `String.raw()`, a second template on `String.raw`)
+> is E000 naming §12, and a template never continues an optional chain (`a?.\`x\``,
+> `a?.b\`x\``: E000, as ES2025 forbids). A keyword after `.` or `?.` is a property name
+> (`a.delete(k)`, `a?.in`); `this` parses anywhere (E126 is the checker's); `super()`
+> and `super.x` keep US-025's checks and `super?.x` its E000. Fixtures under
+> `tests/conformance/04-expressions/E000/` (ten cases, the conforming file extended) and
+> `05-modules/E201/dynamic-bare.js`, `05-modules/E205/dynamic-json.js`. **Decisions:**
+> the `OptionalChain` node makes the earlier `?.`-walker over pattern targets
+> unnecessary, so it is gone; `new A?.()` is reported as the missing argument list,
+> since `new A` must be followed by `(`; `(String).raw` is not the tag `String.raw`;
+> a `.json` dynamic import is E205 rather than a new grammar for `import(…, { with })`,
+> which §2 does not have; the round-trip test helper's failure snippet is now widened
+> to character boundaries, a fixture comment having put a `…` exactly where it sliced.
+> Verified: 100% lines and regions, 37 mutants on the diff (34 caught, 1 unviable, 2
+> timeouts, 0 missed).
 
 **Done when**
 - `a.b`, `a?.b`, `a[b]`, `a?.[b]`, `a()`, `a?.()` chain in any mix with optional-chain

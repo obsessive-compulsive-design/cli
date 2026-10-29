@@ -174,6 +174,9 @@ pub enum NodeKind {
     IndexExpr,
     /// `callee(args)` or `callee?.(args)`.
     CallExpr,
+    /// A member, index or call chain holding a `?.`: one short-circuit group, from its
+    /// object to where the chain ends (parentheses end it).
+    OptionalChain,
     /// `new Callee(args)`.
     NewExpr,
     /// `import(…)`.

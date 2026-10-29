@@ -281,6 +281,21 @@ fn check(parser: &mut Parser<'_>, form: Form, path: &str, span: Span, attributes
     }
 }
 
+/// The path of `import(…)` (US-029): a static import's rules, with no attribute clause
+/// to make a JSON module of it.
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
+pub(super) fn check_dynamic(parser: &mut Parser<'_>, path: &str, span: Span) {
+    if let Some(message) = foreign(path) {
+        parser.report(Code::E201, span, message);
+    } else if path.rsplit('/').next().unwrap_or("").ends_with(".json") {
+        parser.report(
+            Code::E205,
+            span,
+            "`import(…)` loads a `.js` module: a JSON module is imported statically, with `with { type: \"json\" }` (SPEC.md §5.1)",
+        );
+    }
+}
+
 /// Why `path` is not a path into the project (E201), if it is not.
 #[allow(clippy::case_sensitive_file_extension_comparisons)]
 pub(super) fn foreign(path: &str) -> Option<String> {
@@ -628,7 +643,7 @@ mod tests {
         );
         assert_eq!(
             clean("a.import\na?.import"),
-            "(Module (ExprStmt (MemberExpr a . import)) (ExprStmt (MemberExpr a ?. import)) <eof>)"
+            "(Module (ExprStmt (MemberExpr a . import)) (ExprStmt (OptionalChain (MemberExpr a ?. import))) <eof>)"
         );
         assert_eq!(
             clean("import { a } from \"./x.js\"\nx = a / 2 / 1"),

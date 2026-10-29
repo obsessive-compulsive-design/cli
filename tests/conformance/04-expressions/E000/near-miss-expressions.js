@@ -19,6 +19,12 @@ const o = { a, b: 1, "c": 2, [a]: 3 }
 const r = /a+/v.test("aa")
 const t = `${a} and ${`${b}`}`
 const n = await Promise.resolve(1)
+const p = o?.a.b
+const q = o?.[0]?.()
+const s = String.raw`${a}\n`
+const u = new Map().size + new Map().size
+const w = await import("./w.js")
+const y = o.delete(1)
 function* gen() {
   yield
   yield 1

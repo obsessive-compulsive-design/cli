@@ -3,9 +3,14 @@
 //! conditional, `??`, `||`, `&&`, `|`, `^`, `&`, `===`/`!==`, the relational operators
 //! with `instanceof`, the shifts, the additive and multiplicative operators and `**`
 //! (right-associative), the unary operators `! - + ~ typeof await`, `++`/`--`, and
-//! `yield` inside generators. Beneath them sit the member, call, `new`, `import(…)`,
-//! template, array and object forms, parsed for their structure: their own rules are
-//! US-029's and US-030's.
+//! `yield` inside generators. Beneath them sit the member, index, call and tagged-template
+//! chains (US-029): a chain holding a `?.` is one `OptionalChain`, the short-circuit
+//! group, from its object to where the chain ends (parentheses end it); `new A(…)` and
+//! `new ns.A(…)` name a class and always take an argument list; `import("./x.js")`
+//! takes one string literal path under the static import's rules; `String.raw` is the
+//! one template tag; a keyword after `.` is a property name; `new.target` and
+//! `import.meta` are removed. Array and object literals parse for their structure
+//! only: their rules are US-030's.
 //!
 //! Removed operators are E000 naming the replacement and parsed for recovery: `==` and
 //! `!=` (fix: `===`, `!==`), `||=`, `&&=` and the comma operator; `in`, `void` and
@@ -19,9 +24,9 @@
 
 use sjs_diag::{Code, Span};
 
-use super::{classes, functions, FnContext, Parser};
+use super::{classes, functions, imports, FnContext, Parser};
 use crate::token::{Keyword, Punct, TemplatePart, Token, TokenKind};
-use crate::tree::{Child, NodeId, NodeKind};
+use crate::tree::{Child, Marker, NodeId, NodeKind};
 
 const LPAREN: TokenKind = TokenKind::Punct(Punct::LParen);
 const RPAREN: TokenKind = TokenKind::Punct(Punct::RParen);
@@ -489,16 +494,30 @@ fn chain(p: &mut Parser<'_>, calls: bool) -> Expr {
         return start;
     }
     let mut shape = start.shape;
+    // A `?.` seen so far: the chain from here on is one short-circuit group, and no
+    // template may continue it (ES2025 forbids a template anywhere in an optional
+    // chain).
     let mut optional = false;
+    // Whether the chain so far is exactly `String.raw`, the one tag a template may
+    // have (SPEC.md §12).
+    let base_string = start.shape == Shape::Name && p.file.slice(&start.span) == Some("String");
+    let mut first_link = true;
+    let mut raw_tag = false;
     loop {
         let token = p.peek(false).clone();
         match token.kind {
             DOT => {
+                let name = p.peek_second().clone();
+                raw_tag = first_link
+                    && base_string
+                    && name.kind == TokenKind::Ident
+                    && p.text(&name) == "raw";
                 p.start_node_at(marker, NodeKind::MemberExpr);
                 p.bump(false);
                 member_name(p);
             }
             LBRACKET => {
+                raw_tag = false;
                 p.start_node_at(marker, NodeKind::IndexExpr);
                 p.bump(false);
                 index(p);
@@ -517,6 +536,15 @@ fn chain(p: &mut Parser<'_>, calls: bool) -> Expr {
                         p.bump(false);
                         arguments(p);
                     }
+                    TokenKind::Template(_) => {
+                        p.error(
+                            token.span,
+                            "an optional call on a template tag is removed: a template never follows `?.` (SPEC.md §2 `PostfixExpr`)",
+                        );
+                        p.start_node_at(marker, NodeKind::TaggedTemplate);
+                        p.bump(false);
+                        template(p);
+                    }
                     _ => {
                         p.start_node_at(marker, NodeKind::MemberExpr);
                         p.bump(false);
@@ -525,28 +553,52 @@ fn chain(p: &mut Parser<'_>, calls: bool) -> Expr {
                 }
             }
             LPAREN if calls => {
+                raw_tag = false;
                 p.start_node_at(marker, NodeKind::CallExpr);
                 arguments(p);
             }
-            TokenKind::Template(ref template)
-                if calls && matches!(template.part, TemplatePart::Whole | TemplatePart::Head) =>
+            TokenKind::Template(ref part)
+                if calls && matches!(part.part, TemplatePart::Whole | TemplatePart::Head) =>
             {
-                p.start_node_at(marker, NodeKind::TaggedTemplate);
-                if template.part == TemplatePart::Head {
-                    template_literal(p);
-                } else {
-                    p.bump(false);
+                if optional {
+                    p.error(
+                        token.span,
+                        "a template cannot continue an optional chain (SPEC.md §2 `PostfixExpr`)",
+                    );
+                } else if !raw_tag {
+                    p.error(
+                        token.span,
+                        "a tagged template other than `String.raw` is removed: write a function that takes the string (SPEC.md §12)",
+                    );
                 }
+                raw_tag = false;
+                p.start_node_at(marker, NodeKind::TaggedTemplate);
+                template(p);
             }
             _ => break,
         }
         p.finish_node();
+        first_link = false;
         shape = match token.kind {
             DOT | LBRACKET if !optional => Shape::Member,
             _ => Shape::Other,
         };
     }
+    if optional {
+        p.start_node_at(marker, NodeKind::OptionalChain);
+        p.finish_node();
+    }
     p.expr(shape, start.span)
+}
+
+/// A template at the next token: a whole one, or a head with its substitutions.
+fn template(p: &mut Parser<'_>) {
+    if matches!(p.peek(false).kind, TokenKind::Template(ref part) if part.part == TemplatePart::Head)
+    {
+        template_literal(p);
+    } else {
+        p.bump(false);
+    }
 }
 
 /// The name after `.` or `?.`: any identifier or keyword, or a private name.
@@ -973,50 +1025,157 @@ fn template_literal(p: &mut Parser<'_>) {
     p.finish_node();
 }
 
-/// `new Callee(args)`, structurally (US-029 owns its rules), or the removed
-/// `new.target`.
+/// `new A(args)` or `new ns.A(args)`: a class by name, and always an argument list.
+/// The removed `new.target` and any other callee are E000, parsed for recovery.
 fn new_expr(p: &mut Parser<'_>) {
     let node = p.start_node(NodeKind::NewExpr);
-    p.bump(false);
-    if p.peek(false).kind == DOT {
-        p.retag(node, NodeKind::MetaProperty);
-        p.bump(false);
-        member_name(p);
-        p.finish_node();
-        return;
+    let keyword = p.bump(false).clone();
+    let next = p.peek(false).clone();
+    match next.kind {
+        DOT => {
+            p.retag(node, NodeKind::MetaProperty);
+            p.bump(false);
+            let target = p.at_word("target");
+            if matches!(p.peek(false).kind, TokenKind::Ident | TokenKind::Keyword(_)) {
+                p.bump(false);
+            }
+            let span = p.span_from(keyword.span);
+            let message = if target {
+                "`new.target` is removed: there is no prototype manipulation, so a constructor only ever builds its own class (SPEC.md §12)"
+            } else {
+                "expected a class after `new`"
+            };
+            p.error(span, message);
+            p.finish_node();
+            return;
+        }
+        TokenKind::Ident => {
+            let marker = p.marker();
+            p.bump(false);
+            if p.peek(false).kind == DOT {
+                p.start_node_at(marker, NodeKind::MemberExpr);
+                p.bump(false);
+                member_name(p);
+                p.finish_node();
+            }
+            if matches!(p.peek(false).kind, DOT | LBRACKET) {
+                let span = p.peek(false).span;
+                p.error(
+                    span,
+                    "`new` names a class as `A` or `ns.A`: one `.` at most (SPEC.md §2 `PrimaryExpr`)",
+                );
+                extra_links(p, marker);
+            }
+        }
+        _ => {
+            let callee = if p.enter() {
+                chain(p, false)
+            } else {
+                too_deep(p)
+            };
+            p.leave();
+            if callee.is_missing() {
+                p.error(next.span, "expected a class after `new`");
+                p.finish_node();
+                return;
+            }
+            p.error(
+                next.span,
+                "`new` names a class: `new A()` or `new ns.A()` (SPEC.md §2 `PrimaryExpr`)",
+            );
+        }
     }
-    let callee = if p.enter() {
-        chain(p, false)
-    } else {
-        too_deep(p)
-    };
-    p.leave();
-    if callee.is_missing() {
-        let span = p.peek(false).span;
-        p.error(span, "expected a class after `new`");
-    } else if p.peek(false).kind == LPAREN {
+    if p.peek(false).kind == LPAREN {
         arguments(p);
+    } else {
+        let span = p.span_from(keyword.span);
+        let current = p.file.slice(&span).unwrap_or("").to_owned();
+        p.error_with_fix(
+            span,
+            "`new` always takes an argument list: `new A()` (SPEC.md §2 `PrimaryExpr`)",
+            current.clone(),
+            format!("{current}()"),
+        );
     }
     p.finish_node();
 }
 
-/// `import(…)`, structurally (US-029 owns its rules), or the removed `import.meta`.
+/// `.name` and `[index]` links after a `new` callee that has too many (reported):
+/// parsed so the tree keeps them.
+fn extra_links(p: &mut Parser<'_>, marker: Marker) {
+    loop {
+        match p.peek(false).kind {
+            DOT => {
+                p.start_node_at(marker, NodeKind::MemberExpr);
+                p.bump(false);
+                member_name(p);
+            }
+            LBRACKET => {
+                p.start_node_at(marker, NodeKind::IndexExpr);
+                p.bump(false);
+                index(p);
+            }
+            _ => return,
+        }
+        p.finish_node();
+    }
+}
+
+/// `import("./x.js")`: one string literal path under the static import's rules
+/// (SPEC.md §5.1), so the module graph stays static. `import.meta` is removed.
 fn import_expr(p: &mut Parser<'_>) {
     let node = p.start_node(NodeKind::ImportCall);
-    p.bump(false);
-    match p.peek(false).kind {
-        LPAREN => arguments(p),
+    let keyword = p.bump(false).clone();
+    let next = p.peek(false).clone();
+    match next.kind {
+        LPAREN => {
+            p.bump(false);
+            import_path(p);
+        }
         DOT => {
             p.retag(node, NodeKind::MetaProperty);
             p.bump(false);
-            member_name(p);
+            let meta = p.at_word("meta");
+            if matches!(p.peek(false).kind, TokenKind::Ident | TokenKind::Keyword(_)) {
+                p.bump(false);
+            }
+            let span = p.span_from(keyword.span);
+            let message = if meta {
+                "`import.meta` is removed: a module has no identity at runtime (SPEC.md §5.1)"
+            } else {
+                "expected `(` after `import`"
+            };
+            p.error(span, message);
         }
-        _ => {
-            let span = p.peek(false).span;
-            p.error(span, "expected `(` after `import`");
-        }
+        _ => p.error(next.span, "expected `(` after `import`"),
     }
     p.finish_node();
+}
+
+/// The argument list of `import(…)` after its `(`, through its `)`.
+fn import_path(p: &mut Parser<'_>) {
+    const LITERAL: &str = "`import(…)` takes a string literal path, so the module graph is static: `import(\"./x.js\")` (SPEC.md §5.1)";
+    let token = p.peek(true).clone();
+    let TokenKind::String(path) = token.kind else {
+        p.error(token.span, LITERAL);
+        // Recovery: whatever argument is there.
+        assignment(p);
+        close(p, &RPAREN);
+        return;
+    };
+    p.bump(false);
+    imports::check_dynamic(p, &path, token.span);
+    if p.eat(&RPAREN) {
+        return;
+    }
+    let span = p.peek(false).span;
+    let message = if p.peek(false).kind == COMMA {
+        "`import(…)` takes the path alone: a JSON module is imported statically, with `with { type: \"json\" }` (SPEC.md §5.1)"
+    } else {
+        "expected `)` after the path"
+    };
+    p.error(span, message);
+    close(p, &RPAREN);
 }
 
 /// Past the nesting bound: the rest of the block is skipped (reported once).
@@ -1147,7 +1306,7 @@ fn target(p: &mut Parser<'_>, child: Child) {
         }
         Child::Node(node) => match p.builder.kind_of(node) {
             NodeKind::ArrayLit | NodeKind::ObjectLit => to_pattern(p, node),
-            NodeKind::MemberExpr | NodeKind::IndexExpr if !p.optional(node) => {}
+            NodeKind::MemberExpr | NodeKind::IndexExpr => {}
             NodeKind::ParenExpr if p.paren_target(node) => {}
             NodeKind::AssignExpr if p.is_default(node) => {
                 let first = p.builder.children_of(node)[0];
@@ -1250,32 +1409,13 @@ impl Parser<'_> {
         self.error(update.span, message);
     }
 
-    /// Whether a member, index or call node has `?.` anywhere along its chain: in its
-    /// own link or in the links of its object, down to the chain's first token.
-    fn optional(&self, mut node: NodeId) -> bool {
-        loop {
-            let children = self.builder.children_of(node);
-            let own = children.iter().any(|child| {
-                matches!(child, Child::Token(id) if self.builder.token_ref(*id).kind == QUESTION_DOT)
-            });
-            if own {
-                return true;
-            }
-            // The object of a link is its first child; a chain ends at a token there,
-            // so `(a?.b).c` is a member of a parenthesised value, not of the chain.
-            match children.first() {
-                Some(Child::Node(inner)) => node = *inner,
-                _ => return false,
-            }
-        }
-    }
-
     /// Whether a parenthesised expression holds a name or a property (`(a)`, `(a.b)`).
     fn paren_target(&self, node: NodeId) -> bool {
         let inner = self.builder.children_of(node).get(1).copied();
         if let Some(Child::Node(inner)) = inner {
+            // An optional chain is its own node kind, so a member here has no `?.`.
             return match self.builder.kind_of(inner) {
-                NodeKind::MemberExpr | NodeKind::IndexExpr => !self.optional(inner),
+                NodeKind::MemberExpr | NodeKind::IndexExpr => true,
                 NodeKind::ParenExpr => self.paren_target(inner),
                 _ => false,
             };
@@ -1847,16 +1987,10 @@ mod tests {
     #[test]
     fn members_calls_new_templates_and_literals_parse_for_their_structure() {
         for (text, expected) in [
-            ("a?.b?.[c]?.(d)", "(CallExpr (IndexExpr (MemberExpr a ?. b) ?. [ c ]) ?. ( d ))"),
+            ("a?.b?.[c]?.(d)", "(OptionalChain (CallExpr (IndexExpr (MemberExpr a ?. b) ?. [ c ]) ?. ( d )))"),
             ("a.if.true.null", "(MemberExpr (MemberExpr (MemberExpr a . if) . true) . null)"),
             ("f(...a, b,)", "(CallExpr f ( (SpreadElement ... a) , b , ))"),
-            ("new A", "(NewExpr new A)"),
-            ("new new A()()", "(NewExpr new (NewExpr new A ( )) ( ))"),
             ("import(\"./a.js\")", "(ImportCall import ( \"./a.js\" ))"),
-            ("import.meta", "(MetaProperty import . meta)"),
-            ("new.target", "(MetaProperty new . target)"),
-            ("tag`a${b}c${d}e`", "(TaggedTemplate tag (TemplateLit `a${ b }c${ d }e`))"),
-            ("tag`a`", "(TaggedTemplate tag `a`)"),
             ("`a${`b${c}`}`", "(TemplateLit `a${ (TemplateLit `b${ c }`) }`)"),
             ("[1, , ...a,]", "(ArrayLit [ 1 , , (SpreadElement ... a) , ])"),
             ("[]", "(ArrayLit [ ])"),
@@ -2105,7 +2239,9 @@ mod tests {
             format!("x = {}a{}", "[".repeat(300), "]".repeat(300)),
             format!("x = {}a", "a ** ".repeat(300)),
             format!("x = !({}a)", "a ** ".repeat(300)),
-            format!("x = {}A", "new ".repeat(300)),
+            // Each `new` but the last has a `new` for its callee, reported only after
+            // the callee is parsed: once the bound trips, those reports are silenced.
+            format!("x = {}A()", "new ".repeat(300)),
             format!("x = {}a", "() => ".repeat(300)),
             format!("x = {}a", "!".repeat(300)),
         ] {
@@ -2123,11 +2259,6 @@ mod tests {
             sexp("a, b c"),
             "(Module (ExprStmt (SequenceExpr a , b)) c <eof>)",
             "the sequence ends with its last comma's operand"
-        );
-        assert_eq!(
-            value("new a?.b()"),
-            "(CallExpr (MemberExpr (NewExpr new a) ?. b) ( ))",
-            "a `new` callee stops at `?.`"
         );
         assert_eq!(
             diagnostics("[(a?.b).c] = d"),
@@ -2154,6 +2285,428 @@ mod tests {
                 "not an arrow: only `(…)`, a name or `async` on the same line begins one: {text}"
             );
         }
+    }
+
+    #[test]
+    fn an_optional_chain_is_one_short_circuit_group_in_the_tree() {
+        for (text, expected) in [
+            ("a?.b.c", "(OptionalChain (MemberExpr (MemberExpr a ?. b) . c))"),
+            ("a?.[0]?.()", "(OptionalChain (CallExpr (IndexExpr a ?. [ 0 ]) ?. ( )))"),
+            (
+                "a.b?.c(d)[e]",
+                "(OptionalChain (IndexExpr (CallExpr (MemberExpr (MemberExpr a . b) ?. c) ( d )) [ e ]))",
+            ),
+            ("(a?.b).c", "(MemberExpr (ParenExpr ( (OptionalChain (MemberExpr a ?. b)) )) . c)"),
+            ("f?.(a)?.b", "(OptionalChain (MemberExpr (CallExpr f ?. ( a )) ?. b))"),
+            ("a?.#x", "(OptionalChain (MemberExpr a ?. #x))"),
+            ("a.b.c", "(MemberExpr (MemberExpr a . b) . c)"),
+            ("a[b][c]()", "(CallExpr (IndexExpr (IndexExpr a [ b ]) [ c ]) ( ))"),
+            ("a?.b\n.c", "(OptionalChain (MemberExpr (MemberExpr a ?. b) . c))"),
+        ] {
+            assert_eq!(value(text), expected, "{text}");
+        }
+        assert_eq!(
+            diagnostics("[(a?.b).c] = d\n(a?.b).c = 1"),
+            Vec::new(),
+            "parentheses end the group, so the member after them is assignable"
+        );
+        check_one(&[
+            ("a?.b.c = 1", Code::E000, 1, 1, "the left side of `=`"),
+            ("(a?.b.c) = 1", Code::E000, 1, 1, "the left side of `=`"),
+        ]);
+    }
+
+    #[test]
+    fn new_names_a_class_and_always_takes_an_argument_list() {
+        for (text, expected) in [
+            ("new A()", "(NewExpr new A ( ))"),
+            (
+                "new ns.A(1, 2)",
+                "(NewExpr new (MemberExpr ns . A) ( 1 , 2 ))",
+            ),
+            ("new A().b", "(MemberExpr (NewExpr new A ( )) . b)"),
+            ("new A()()", "(CallExpr (NewExpr new A ( )) ( ))"),
+            ("new A(new B())", "(NewExpr new A ( (NewExpr new B ( )) ))"),
+            (
+                "new A()?.b",
+                "(OptionalChain (MemberExpr (NewExpr new A ( )) ?. b))",
+            ),
+        ] {
+            assert_eq!(value(text), expected, "{text}");
+        }
+        check_one(&[
+            (
+                "x = new A",
+                Code::E000,
+                1,
+                5,
+                "`new` always takes an argument list",
+            ),
+            (
+                "x = new ns.A",
+                Code::E000,
+                1,
+                5,
+                "`new` always takes an argument list",
+            ),
+            (
+                "x = new A?.()",
+                Code::E000,
+                1,
+                5,
+                "`new` always takes an argument list",
+            ),
+            ("x = new a.b.c()", Code::E000, 1, 12, "one `.` at most"),
+            ("x = new a[0]()", Code::E000, 1, 10, "one `.` at most"),
+            ("x = new (f())()", Code::E000, 1, 9, "`new` names a class:"),
+            (
+                "x = new new A()()",
+                Code::E000,
+                1,
+                9,
+                "`new` names a class:",
+            ),
+            ("x = new this.A()", Code::E000, 1, 9, "`new` names a class:"),
+            ("x = new 1()", Code::E000, 1, 9, "`new` names a class:"),
+            (
+                "x = new.target",
+                Code::E000,
+                1,
+                5,
+                "`new.target` is removed",
+            ),
+            (
+                "x = new.x",
+                Code::E000,
+                1,
+                5,
+                "expected a class after `new`",
+            ),
+            (
+                "x = new.()",
+                Code::E000,
+                1,
+                5,
+                "expected a class after `new`",
+            ),
+            ("x = new", Code::E000, 1, 8, "expected a class after `new`"),
+        ]);
+        assert_eq!(
+            fixes("x = new A"),
+            vec![(
+                Code::E000,
+                Some("new A".to_owned()),
+                Some("new A()".to_owned())
+            )]
+        );
+        assert_eq!(
+            fixes("x = new ns.A + 1"),
+            vec![(
+                Code::E000,
+                Some("new ns.A".to_owned()),
+                Some("new ns.A()".to_owned())
+            )],
+            "the fix ends at the callee"
+        );
+    }
+
+    #[test]
+    fn bad_new_forms_are_parsed_for_recovery() {
+        for (text, expected) in [
+            (
+                "new a.b.c()",
+                "(NewExpr new (MemberExpr (MemberExpr a . b) . c) ( ))",
+            ),
+            (
+                "new a.b[0]()",
+                "(NewExpr new (IndexExpr (MemberExpr a . b) [ 0 ]) ( ))",
+            ),
+            (
+                "new (f())()",
+                "(NewExpr new (ParenExpr ( (CallExpr f ( )) )) ( ))",
+            ),
+            ("new new A()()", "(NewExpr new (NewExpr new A ( )) ( ))"),
+            ("new.target", "(MetaProperty new . target)"),
+            ("new A", "(NewExpr new A)"),
+        ] {
+            let f = file(&format!("x = {text}"));
+            let tree = parse(&f).0.to_sexp(&f);
+            assert!(
+                tree.contains(expected),
+                "parsed for recovery: {text}: {tree}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_dynamic_import_takes_one_literal_relative_path() {
+        assert_eq!(
+            value("import(\"./x.js\")"),
+            "(ImportCall import ( \"./x.js\" ))"
+        );
+        assert_eq!(
+            value("await import(\"../y.js\")"),
+            "(AwaitExpr await (ImportCall import ( \"../y.js\" )))"
+        );
+        check_one(&[
+            ("x = import(y)", Code::E000, 1, 12, "string literal path"),
+            (
+                "x = import(`./y.js`)",
+                Code::E000,
+                1,
+                12,
+                "string literal path",
+            ),
+            ("x = import()", Code::E000, 1, 12, "string literal path"),
+            (
+                "x = import(\"./y.js\", o)",
+                Code::E000,
+                1,
+                20,
+                "takes the path alone",
+            ),
+            (
+                "x = import(\"./y.js\" o)",
+                Code::E000,
+                1,
+                21,
+                "expected `)` after the path",
+            ),
+            (
+                "x = import(\"lodash\")",
+                Code::E201,
+                1,
+                12,
+                "is not a relative path",
+            ),
+            (
+                "x = import(\"./x.css\")",
+                Code::E201,
+                1,
+                12,
+                "does not end in `.js`",
+            ),
+            (
+                "x = import(\"./c.json\")",
+                Code::E205,
+                1,
+                12,
+                "loads a `.js` module",
+            ),
+            (
+                "x = import.meta",
+                Code::E000,
+                1,
+                5,
+                "`import.meta` is removed",
+            ),
+            (
+                "x = import.x",
+                Code::E000,
+                1,
+                5,
+                "expected `(` after `import`",
+            ),
+            (
+                "x = import.()",
+                Code::E000,
+                1,
+                5,
+                "expected `(` after `import`",
+            ),
+            (
+                "x = import",
+                Code::E000,
+                1,
+                11,
+                "expected `(` after `import`",
+            ),
+        ]);
+        assert_eq!(
+            sexp("x = import.meta.url"),
+            "(Module (ExprStmt (AssignExpr x = (MemberExpr (MetaProperty import . meta) . url))) <eof>)",
+            "parsed for recovery"
+        );
+    }
+
+    #[test]
+    fn string_raw_is_the_one_template_tag() {
+        for (text, expected) in [
+            (
+                "String.raw`a${b}c`",
+                "(TaggedTemplate (MemberExpr String . raw) (TemplateLit `a${ b }c`))",
+            ),
+            (
+                "String.raw`a`",
+                "(TaggedTemplate (MemberExpr String . raw) `a`)",
+            ),
+            (
+                "String.raw`a`.length",
+                "(MemberExpr (TaggedTemplate (MemberExpr String . raw) `a`) . length)",
+            ),
+        ] {
+            assert_eq!(value(text), expected, "{text}");
+        }
+        check_one(&[
+            (
+                "x = tag`a`",
+                Code::E000,
+                1,
+                8,
+                "other than `String.raw` is removed",
+            ),
+            (
+                "x = tag`a${b}`",
+                Code::E000,
+                1,
+                8,
+                "other than `String.raw` is removed",
+            ),
+            (
+                "x = a.b`a`",
+                Code::E000,
+                1,
+                8,
+                "other than `String.raw` is removed",
+            ),
+            (
+                "x = String.x.raw`a`",
+                Code::E000,
+                1,
+                17,
+                "other than `String.raw` is removed",
+            ),
+            (
+                "x = String.raw.x`a`",
+                Code::E000,
+                1,
+                17,
+                "other than `String.raw` is removed",
+            ),
+            (
+                "x = String.raw[0]`a`",
+                Code::E000,
+                1,
+                18,
+                "other than `String.raw` is removed",
+            ),
+            (
+                "x = String.raw()`a`",
+                Code::E000,
+                1,
+                17,
+                "other than `String.raw` is removed",
+            ),
+            (
+                "x = Strings.raw`a`",
+                Code::E000,
+                1,
+                16,
+                "other than `String.raw` is removed",
+            ),
+            (
+                "x = String.row`a`",
+                Code::E000,
+                1,
+                15,
+                "other than `String.raw` is removed",
+            ),
+            (
+                "x = f()`a`",
+                Code::E000,
+                1,
+                8,
+                "other than `String.raw` is removed",
+            ),
+            (
+                "x = String.raw`a``b`",
+                Code::E000,
+                1,
+                18,
+                "other than `String.raw` is removed",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn a_template_never_continues_an_optional_chain() {
+        check_one(&[
+            (
+                "x = a?.`a`",
+                Code::E000,
+                1,
+                6,
+                "an optional call on a template tag is removed",
+            ),
+            (
+                "x = a?.`a${b}`",
+                Code::E000,
+                1,
+                6,
+                "an optional call on a template tag is removed",
+            ),
+            (
+                "x = a?.b`a`",
+                Code::E000,
+                1,
+                9,
+                "cannot continue an optional chain",
+            ),
+            (
+                "x = String?.raw`a`",
+                Code::E000,
+                1,
+                16,
+                "cannot continue an optional chain",
+            ),
+        ]);
+        assert_eq!(
+            sexp("x = a?.`a`"),
+            "(Module (ExprStmt (AssignExpr x = (OptionalChain (TaggedTemplate a ?. `a`)))) <eof>)",
+            "parsed for recovery"
+        );
+    }
+
+    #[test]
+    fn keywords_after_a_dot_are_property_names_and_this_and_super_parse_in_place() {
+        for (text, expected) in [
+            ("a.delete(k)", "(CallExpr (MemberExpr a . delete) ( k ))"),
+            ("a?.in", "(OptionalChain (MemberExpr a ?. in))"),
+            (
+                "a.void.new.class.import",
+                "(MemberExpr (MemberExpr (MemberExpr (MemberExpr a . void) . new) . class) . import)",
+            ),
+            ("this", "this"),
+            ("f(a,)", "(CallExpr f ( a , ))"),
+            ("f(...xs)", "(CallExpr f ( (SpreadElement ... xs) ))"),
+        ] {
+            assert_eq!(value(text), expected, "{text}");
+        }
+        assert_eq!(
+            clean("this\nthis.x = 1"),
+            "(Module (ExprStmt this) (ExprStmt (AssignExpr (MemberExpr this . x) = 1)) <eof>)",
+            "`this` at the top level parses: E126 is the checker's"
+        );
+        assert_eq!(
+            diagnostics("class A extends B {\n  constructor() {\n    super()\n    super.x?.y\n    super[0]()\n  }\n}"),
+            Vec::new()
+        );
+        check_one(&[
+            (
+                "class A {\n  m() {\n    return super?.x\n  }\n}",
+                Code::E000,
+                3,
+                12,
+                "`super?.x` is removed",
+            ),
+            (
+                "super.x",
+                Code::E000,
+                1,
+                1,
+                "`super.x` is permitted only inside a class member",
+            ),
+        ]);
     }
 
     #[test]
