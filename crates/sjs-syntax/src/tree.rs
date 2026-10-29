@@ -138,10 +138,18 @@ pub enum NodeKind {
     ContinueStmt,
     /// `throw expr`.
     ThrowStmt,
-    /// `switch (expr) { … }` (its clause structure is US-027's).
+    /// `switch (expr) { clauses }`.
     SwitchStmt,
-    /// `try { … } [catch …] [finally …]` (its handler rules are US-027's).
+    /// Stacked labels and one block in a `switch` (US-027).
+    CaseClause,
+    /// `case literal :` or `default :`.
+    CaseLabel,
+    /// `try { … } [catch …] [finally …]`.
     TryStmt,
+    /// `catch [(name)] { … }`.
+    CatchClause,
+    /// `finally { … }`.
+    FinallyClause,
 }
 
 /// A node's index in the arena; `NodeId(0)` is the root.

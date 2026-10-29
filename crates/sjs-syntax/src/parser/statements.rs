@@ -13,10 +13,12 @@
 //! `return` outside a function, and `for await` outside an `async` function or the
 //! module's top level. A bare `;` is an empty statement, reported S002.
 //!
-//! `switch` and `try` get their structure here so the declarations inside them parse;
-//! their own rules (literal labels, braced clauses, one `default`, `try` needing a
-//! handler) are US-027's. Expressions are extents until the expression stories land
-//! ([`Parser::raw_expression`]).
+//! `switch` (US-027): each clause is stacked `case literal:` / `default:` labels and one
+//! block; a label is a number, string, boolean, bigint or negative number literal, a
+//! repeated label and a second `default` are E000, and a braceless clause body is E000
+//! with the braced replacement. `try` needs a `catch` or a `finally`; `catch {` and
+//! `catch (e) {` parse, and a pattern in `catch (…)` is E000. Expressions are extents
+//! until the expression stories land ([`Parser::raw_expression`]).
 
 use sjs_diag::{Code, Span};
 
@@ -491,8 +493,7 @@ fn skip_header(parser: &mut Parser<'_>) {
     }
 }
 
-/// `switch (expr) { case …: … default: … }`, structurally: the clause rules are
-/// US-027's.
+/// `switch (expr) { clauses }`.
 fn switch_stmt(parser: &mut Parser<'_>) {
     parser.start_node(NodeKind::SwitchStmt);
     parser.bump(false);
@@ -510,9 +511,25 @@ fn switch_stmt(parser: &mut Parser<'_>) {
     parser.finish_node();
 }
 
+/// A `case` label's value, compared as `===` compares it.
+#[derive(Debug, Clone, PartialEq)]
+enum Label {
+    Number(f64),
+    String(Box<str>),
+    Bool(bool),
+    BigInt(Box<str>),
+}
+
+/// The labels a `switch` has used so far.
+#[derive(Debug, Default)]
+struct Labels {
+    seen: Vec<Label>,
+    default: bool,
+}
+
 /// The clauses of a `switch` body after its `{`, through its `}`.
 fn clauses(parser: &mut Parser<'_>) {
-    let mut exported = exports::Exported::new();
+    let mut labels = Labels::default();
     loop {
         let token = parser.peek(false).clone();
         match token.kind {
@@ -524,46 +541,203 @@ fn clauses(parser: &mut Parser<'_>) {
                 parser.error(token.span, "expected `}` to close the `switch` body");
                 return;
             }
-            TokenKind::Keyword(Keyword::Case | Keyword::Default) => {
-                parser.bump(false);
-                if token.kind == TokenKind::Keyword(Keyword::Case)
-                    && parser.raw_expression(&[]) == 0
-                {
-                    let span = parser.peek(false).span;
-                    parser.error(span, "expected a label after `case`");
-                }
-                if !parser.eat(&COLON) {
-                    let span = parser.peek(false).span;
-                    parser.error(span, "expected `:` after the clause label");
-                }
-            }
-            _ => super::item(parser, Scope::Block, &mut exported),
+            _ => clause(parser, &mut labels),
         }
     }
 }
 
-/// `try block [catch [(e)] block] [finally block]`, structurally: the handler rules
-/// are US-027's.
-fn try_stmt(parser: &mut Parser<'_>) {
-    parser.start_node(NodeKind::TryStmt);
-    parser.bump(false);
-    body(parser);
-    if parser.eat(&TokenKind::Keyword(Keyword::Catch)) {
-        if parser.eat(&LPAREN) {
-            parser.raw_expression(&[]);
-            if !parser.eat(&RPAREN) {
-                let span = parser.peek(false).span;
-                parser.error(span, "expected `)` after the `catch` binding");
-                parser.finish_node();
-                return;
-            }
+/// True at `case` or `default`.
+fn at_label(parser: &mut Parser<'_>) -> bool {
+    matches!(
+        parser.peek(false).kind,
+        TokenKind::Keyword(Keyword::Case | Keyword::Default)
+    )
+}
+
+/// One clause: its stacked labels, then its block. Statements without braces are E000
+/// with the braced replacement, once per clause, and are parsed as the clause's body.
+fn clause(parser: &mut Parser<'_>, labels: &mut Labels) {
+    parser.start_node(NodeKind::CaseClause);
+    while at_label(parser) {
+        if !label(parser, labels) {
+            // One report per malformed label; the rest of its line goes with it.
+            parser.skip_rest_of_line(Scope::Block);
+            parser.finish_node();
+            return;
         }
-        body(parser);
     }
-    if parser.eat(&TokenKind::Keyword(Keyword::Finally)) {
-        body(parser);
+    let first = parser.peek(true).clone();
+    match first.kind {
+        LBRACE => functions::block(parser),
+        RBRACE | TokenKind::Eof => parser.error(
+            first.span,
+            "expected `{` to open the clause body: each clause is a block (SPEC.md §2 `CaseClause`)",
+        ),
+        _ => {
+            let mut exported = exports::Exported::new();
+            while !at_label(parser) && !matches!(parser.peek(false).kind, RBRACE | TokenKind::Eof) {
+                super::item(parser, Scope::Block, &mut exported);
+            }
+            let last = parser.last.unwrap_or(first.span);
+            let span = Span::new(first.span.start, last.end, first.span.byte_start, last.byte_end);
+            let current = parser.file.slice(&span).unwrap_or("").to_owned();
+            let replacement = format!("{{ {current} }}");
+            parser.error_with_fix(
+                span,
+                "each clause body is a block in braces (SPEC.md §2 `CaseClause`, §4.3)",
+                current,
+                replacement,
+            );
+        }
     }
     parser.finish_node();
+}
+
+/// `case literal :` or `default :`. A label that is not a literal, a second `default`
+/// and a repeated literal are E000. False when the label is malformed (reported once).
+fn label(parser: &mut Parser<'_>, labels: &mut Labels) -> bool {
+    parser.start_node(NodeKind::CaseLabel);
+    let keyword = parser.bump(false).clone();
+    let mut malformed = false;
+    if keyword.kind == TokenKind::Keyword(Keyword::Default) {
+        if labels.default {
+            parser.error(keyword.span, "a `switch` has one `default`");
+        }
+        labels.default = true;
+    } else {
+        malformed = !case_value(parser, labels);
+    }
+    let closed = parser.eat(&COLON);
+    if !closed && !malformed {
+        let span = parser.peek(false).span;
+        parser.error(span, "expected `:` after the clause label");
+    }
+    parser.finish_node();
+    closed
+}
+
+/// The literal after `case`, up to (not including) its `:`. False when it is not a
+/// literal (reported, and skipped to the `:`).
+fn case_value(parser: &mut Parser<'_>, labels: &mut Labels) -> bool {
+    let start = parser.peek(false).clone();
+    let negative = start.kind == TokenKind::Punct(Punct::Minus);
+    if negative {
+        parser.bump(false);
+    }
+    let token = parser.peek(false).clone();
+    let value = match token.kind.clone() {
+        TokenKind::Number(number) => Some(Label::Number(if negative {
+            -number.value
+        } else {
+            number.value
+        })),
+        TokenKind::String(text) if !negative => Some(Label::String(text)),
+        TokenKind::Bool(value) if !negative => Some(Label::Bool(value)),
+        TokenKind::BigInt(digits) if !negative => Some(Label::BigInt(digits)),
+        _ => None,
+    };
+    // A literal is the whole label when what follows cannot continue it: the `:`, or
+    // (malformed, reported by the caller) a brace, a new line or the end of the file.
+    let after = parser.peek_second().clone();
+    let whole =
+        after.has_newline_before || matches!(after.kind, COLON | LBRACE | RBRACE | TokenKind::Eof);
+    match value {
+        Some(value) if whole => {
+            parser.bump(false);
+            if labels.seen.contains(&value) {
+                let span = Span::new(
+                    start.span.start,
+                    token.span.end,
+                    start.span.byte_start,
+                    token.span.byte_end,
+                );
+                let message = format!(
+                    "the label `{}` is already used in this `switch`",
+                    parser.file.slice(&span).unwrap_or("")
+                );
+                parser.error(span, message);
+            }
+            labels.seen.push(value);
+            true
+        }
+        _ => {
+            let undefined = token.kind == TokenKind::Ident && parser.text(&token) == "undefined";
+            let message = if undefined {
+                "`case undefined:` is not a literal label: `undefined` is a name, so narrow before the `switch` (SPEC.md §2 `CaseClause`)"
+            } else {
+                "a `case` label is a literal: a number, a string, a boolean, a bigint or a negative number (SPEC.md §2 `CaseClause`)"
+            };
+            parser.error(start.span, message);
+            // The rest of the label, up to its `:`, for recovery.
+            parser.raw_expression(&[COLON]);
+            false
+        }
+    }
+}
+
+/// `try block [catch [(name)] block] [finally block]`: at least one of `catch` and
+/// `finally`.
+fn try_stmt(parser: &mut Parser<'_>) {
+    parser.start_node(NodeKind::TryStmt);
+    let keyword = parser.bump(false).span;
+    body(parser);
+    let mut handled = false;
+    if parser.peek(false).kind == TokenKind::Keyword(Keyword::Catch) {
+        handled = true;
+        parser.start_node(NodeKind::CatchClause);
+        parser.bump(false);
+        let ok = !parser.eat(&LPAREN) || catch_binding(parser);
+        if ok {
+            body(parser);
+        }
+        parser.finish_node();
+        if !ok {
+            parser.finish_node();
+            return;
+        }
+    }
+    if parser.peek(false).kind == TokenKind::Keyword(Keyword::Finally) {
+        handled = true;
+        parser.start_node(NodeKind::FinallyClause);
+        parser.bump(false);
+        body(parser);
+        parser.finish_node();
+    }
+    if !handled {
+        parser.error(
+            keyword,
+            "a `try` needs a `catch` or a `finally` (SPEC.md §2 `TryStmt`)",
+        );
+    }
+    parser.finish_node();
+}
+
+/// The binding of `catch (…)` after its `(`, through its `)`: one name. A pattern is
+/// E000 and parsed for recovery. False when the parentheses do not close (reported).
+fn catch_binding(parser: &mut Parser<'_>) -> bool {
+    let token = parser.peek(false).clone();
+    match token.kind {
+        TokenKind::Ident => {
+            parser.bump(false);
+        }
+        LBRACE | TokenKind::Punct(Punct::LBracket) => {
+            parser.error(
+                token.span,
+                "a `catch` binding is a name: destructure it inside the block (SPEC.md §2 `TryStmt`)",
+            );
+            bindings::pattern(parser, &mut Vec::new());
+        }
+        _ => {
+            parser.error(token.span, "expected a name in `catch (…)`");
+            return false;
+        }
+    }
+    if parser.eat(&RPAREN) {
+        return true;
+    }
+    let span = parser.peek(false).span;
+    parser.error(span, "expected `)` after the `catch` binding");
+    false
 }
 
 /// `var pattern [= expr]`: the lexer has reported `var`; parsed for recovery.
@@ -662,7 +836,7 @@ mod tests {
         );
         assert_eq!(
             clean("switch (x) {\n  case 1:\n  case 2: {\n    break\n  }\n  default: {\n    f()\n  }\n}\ntry {\n} catch (e) {\n} finally {\n}\ntry {\n} catch {\n}"),
-            "(Module (SwitchStmt switch ( x ) { case 1 : case 2 : (Block { (BreakStmt break) }) default : (Block { (ExprStmt f ( )) }) }) (TryStmt try (Block { }) catch ( e ) (Block { }) finally (Block { })) (TryStmt try (Block { }) catch (Block { })) <eof>)"
+            "(Module (SwitchStmt switch ( x ) { (CaseClause (CaseLabel case 1 :) (CaseLabel case 2 :) (Block { (BreakStmt break) })) (CaseClause (CaseLabel default :) (Block { (ExprStmt f ( )) })) }) (TryStmt try (Block { }) (CatchClause catch ( e ) (Block { })) (FinallyClause finally (Block { }))) (TryStmt try (Block { }) (CatchClause catch (Block { }))) <eof>)"
         );
         assert_eq!(
             clean("function f() {\n  return\n  1\n}"),
@@ -1045,7 +1219,7 @@ mod tests {
                 "switch (x) {\n  case: {}\n}",
                 2,
                 7,
-                "expected a label after `case`",
+                "a `case` label is a literal",
             ),
             (
                 "switch (x) {\n  case 1 }",
@@ -1057,7 +1231,7 @@ mod tests {
             (
                 "try {} catch (e {}",
                 1,
-                19,
+                17,
                 "expected `)` after the `catch` binding",
             ),
         ]);
@@ -1165,6 +1339,220 @@ mod tests {
         assert_eq!(
             sexp("class\n(f)"),
             "(Module (ClassDecl class) (ExprStmt ( f )) <eof>)"
+        );
+    }
+
+    #[test]
+    fn switch_clauses_are_stacked_literal_labels_and_one_block() {
+        assert_eq!(
+            clean("switch (x) {}"),
+            "(Module (SwitchStmt switch ( x ) { }) <eof>)"
+        );
+        assert_eq!(
+            clean("switch (x) {\n  default: {}\n  case 1n:\n  case -1: {}\n  case \"a\": {}\n  case true:\n  case false: {}\n  case 1.5: {}\n  case -0x10: {}\n}"),
+            "(Module (SwitchStmt switch ( x ) { (CaseClause (CaseLabel default :) (Block { })) (CaseClause (CaseLabel case 1n :) (CaseLabel case - 1 :) (Block { })) (CaseClause (CaseLabel case \"a\" :) (Block { })) (CaseClause (CaseLabel case true :) (CaseLabel case false :) (Block { })) (CaseClause (CaseLabel case 1.5 :) (Block { })) (CaseClause (CaseLabel case - 0x10 :) (Block { })) }) <eof>)",
+            "`default` anywhere; labels of every literal kind; empty blocks"
+        );
+        assert_eq!(
+            clean("switch (x) {\n  case 1:\n  default: {\n    break\n  }\n}"),
+            "(Module (SwitchStmt switch ( x ) { (CaseClause (CaseLabel case 1 :) (CaseLabel default :) (Block { (BreakStmt break) })) }) <eof>)",
+            "`default` stacks with `case`"
+        );
+        assert_eq!(
+            clean("switch (x) {\n  case 1: {}\n  case -1: {}\n  case 1n: {}\n  case \"1\": {}\n}")
+                .matches("(CaseClause")
+                .count(),
+            4,
+            "1, -1, 1n and \"1\" are four labels"
+        );
+    }
+
+    #[test]
+    fn every_bad_label_is_e000_once() {
+        check_e000(&[
+            (
+                "switch (x) {\n  case undefined: {}\n}",
+                2,
+                8,
+                "narrow before the `switch`",
+            ),
+            (
+                "switch (x) {\n  case y: {}\n}",
+                2,
+                8,
+                "a `case` label is a literal",
+            ),
+            (
+                "switch (x) {\n  case 1 + 2: {}\n}",
+                2,
+                8,
+                "a `case` label is a literal",
+            ),
+            (
+                "switch (x) {\n  case -\"a\": {}\n}",
+                2,
+                8,
+                "a `case` label is a literal",
+            ),
+            (
+                "switch (x) {\n  case -y: {}\n}",
+                2,
+                8,
+                "a `case` label is a literal",
+            ),
+            (
+                "switch (x) {\n  case -true: {}\n}",
+                2,
+                8,
+                "a `case` label is a literal",
+            ),
+            (
+                "switch (x) {\n  case -1n: {}\n}",
+                2,
+                8,
+                "a `case` label is a literal",
+            ),
+            (
+                "switch (x) {\n  case `t`: {}\n}",
+                2,
+                8,
+                "a `case` label is a literal",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn a_repeated_label_or_default_is_e000_once() {
+        check_e000(&[
+            (
+                "switch (x) {\n  case 1: {}\n  case 1: {}\n}",
+                3,
+                8,
+                "the label `1` is already used",
+            ),
+            (
+                "switch (x) {\n  case 1:\n  case 1.0: {}\n}",
+                3,
+                8,
+                "the label `1.0` is already used",
+            ),
+            (
+                "switch (x) {\n  case 16: {}\n  case 0x10: {}\n}",
+                3,
+                8,
+                "is already used",
+            ),
+            (
+                "switch (x) {\n  case 0: {}\n  case -0: {}\n}",
+                3,
+                8,
+                "the label `-0` is already used",
+            ),
+            (
+                "switch (x) {\n  case 1n: {}\n  case 0x1n: {}\n}",
+                3,
+                8,
+                "is already used",
+            ),
+            (
+                "switch (x) {\n  case \"a\": {}\n  case \"\\x61\": {}\n}",
+                3,
+                8,
+                "is already used",
+            ),
+            (
+                "switch (x) {\n  case true: {}\n  case true: {}\n}",
+                3,
+                8,
+                "is already used",
+            ),
+            (
+                "switch (x) {\n  default: {}\n  default: {}\n}",
+                3,
+                3,
+                "a `switch` has one `default`",
+            ),
+            (
+                "switch (x) {\n  case 1 }",
+                2,
+                10,
+                "expected `:` after the clause label",
+            ),
+            (
+                "switch (x) {\n  case 1:\n}",
+                3,
+                1,
+                "expected `{` to open the clause body",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn a_braceless_clause_body_is_e000_with_the_braced_replacement() {
+        for (text, current) in [
+            ("switch (x) {\n  case 1: f()\n}", "f()"),
+            (
+                "switch (x) {\n  case 1:\n    f()\n    break\n  default: {}\n}",
+                "f()\n    break",
+            ),
+            ("switch (x) {\n  case 1: {}\n  f()\n}", "f()"),
+        ] {
+            let found = diagnostics(text);
+            assert_eq!(found.len(), 1, "{text}: {found:?}");
+            assert!(
+                found[0].3.contains("each clause body is a block"),
+                "{text}: {found:?}"
+            );
+            assert_eq!(
+                fixes(text),
+                vec![(Some(current.to_owned()), Some(format!("{{ {current} }}")))],
+                "{text}"
+            );
+        }
+        assert_eq!(
+            sexp("switch (x) {\n  case 1: f()\n}"),
+            "(Module (SwitchStmt switch ( x ) { (CaseClause (CaseLabel case 1 :) (ExprStmt f ( ))) }) <eof>)",
+            "parsed anyway as the clause body"
+        );
+    }
+
+    #[test]
+    fn try_needs_a_handler_and_catch_binds_one_name() {
+        assert_eq!(
+            clean("try {\n} catch {\n}\ntry {\n} catch (e) {\n} finally {\n}\ntry {\n} finally {\n}"),
+            "(Module (TryStmt try (Block { }) (CatchClause catch (Block { }))) (TryStmt try (Block { }) (CatchClause catch ( e ) (Block { })) (FinallyClause finally (Block { }))) (TryStmt try (Block { }) (FinallyClause finally (Block { }))) <eof>)"
+        );
+        check_e000(&[
+            ("try {}", 1, 1, "a `try` needs a `catch` or a `finally`"),
+            (
+                "try {} catch ({ a }) {}",
+                1,
+                15,
+                "a `catch` binding is a name",
+            ),
+            (
+                "try {} catch ([a, b]) {}",
+                1,
+                15,
+                "a `catch` binding is a name",
+            ),
+            (
+                "try {} catch (1) {}",
+                1,
+                15,
+                "expected a name in `catch (…)`",
+            ),
+            (
+                "try {} catch (e f) {}",
+                1,
+                17,
+                "expected `)` after the `catch` binding",
+            ),
+        ]);
+        assert_eq!(
+            sexp("try {} catch ({ a }) {}"),
+            "(Module (TryStmt try (Block { }) (CatchClause catch ( (ObjectPattern { (PatternProperty a) }) ) (Block { }))) <eof>)",
+            "parsed anyway"
         );
     }
 

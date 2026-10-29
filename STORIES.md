@@ -1266,7 +1266,30 @@ semicolon); `for (const [k, v] of m)`; `for await` outside an async context is `
 as a body (`if (x) const y = 1`) is `E000`.
 
 #### US-027 `switch` and `try`
-§2, §4.3 · After: US-026 · Size: S · M0
+§2, §4.3 · After: US-026 · Size: S · M0 · **Status: complete** (2026-10-28)
+
+> Delivered in `sjs-syntax` (`parser/statements.rs`): a `switch` body is a list of
+> `CaseClause` nodes, each one or more stacked `CaseLabel`s (`case literal :` or
+> `default :`, in any order and position) followed by one `Block`. A label is a number,
+> string, boolean or bigint literal or a negative number; anything else is E000 once,
+> and `case undefined:` names the decision (narrow before the `switch`). Labels are
+> compared by value as `===` compares them: `1`/`1.0`/`0x1`, `0`/`-0`, `1n`/`0x1n` and
+> `"a"`/`"\x61"` are each a repeated label, E000 at the repeat; a second `default` is
+> E000. A clause body without braces is E000 with the fix wrapping every statement up
+> to the next label (`f()` → `{ f() }`) and is parsed as the clause's body; a clause
+> with no body is E000. `try` is `TryStmt` with `CatchClause` and `FinallyClause`; a
+> `try` with neither is E000; `catch {` and `catch (e) {` parse; a pattern in `catch
+> (…)` is E000 and parsed for recovery. A malformed label is one report, after which
+> the rest of its line is skipped. Fixtures under `tests/conformance/04-statements/E000/`
+> (seven cases and a conforming file with an empty `switch (x) {}`, `case 1n:`, `case
+> -1:`, an empty clause block and both `catch` forms). The corpus generator (US-009)
+> could repeat a label within a `switch` or use `case undefined:`: its labels are now
+> unique literals, and the manifest snapshot was regenerated. **Decisions:** the unary
+> minus is accepted on number labels only, as the story lists them, so `case -1n:` and
+> `case -true:` are E000; fallthrough between clauses is the checker's E108 (US-110),
+> not a syntax error. Verified: 100% lines and regions, 54 mutants on the diff (40
+> caught, 2 unviable, 10 timeouts, 2 missed), then the 20 mutants of `case_value`
+> rerun after tests for negated boolean and bigint labels: 20 caught, 0 missed.
 
 **Done when**
 - `case` labels are literals (number, string, boolean, bigint, and a unary-minus number);

@@ -1363,13 +1363,14 @@ impl Generator<'_> {
         self.note(Production::Switch);
         let switch_ctx = ctx.with(IN_SWITCH);
         let count = 1 + self.rng.index(3);
+        let mut taken = Vec::new();
         let cases = (0..count)
             .map(|_| {
                 let labels = if self.chance(1, 3) {
                     self.note(Production::SwitchStacked);
-                    vec![self.literal(), self.literal()]
+                    vec![self.case_label(&mut taken), self.case_label(&mut taken)]
                 } else {
-                    vec![self.literal()]
+                    vec![self.case_label(&mut taken)]
                 };
                 let mut body = self.block(switch_ctx);
                 body.push(Stmt::Break);
@@ -1565,6 +1566,19 @@ impl Generator<'_> {
             _ => {
                 self.note(Production::Undefined);
                 Literal::Undefined
+            }
+        }
+    }
+
+    /// A `case` label: a literal other than `undefined` (a name, not a `Literal`) that
+    /// no earlier label of the same `switch` used, since a repeated label is E000. The
+    /// pool is far larger than the six labels a generated `switch` holds.
+    fn case_label(&mut self, taken: &mut Vec<Literal>) -> Literal {
+        loop {
+            let label = self.literal();
+            if label != Literal::Undefined && !taken.contains(&label) {
+                taken.push(label.clone());
+                return label;
             }
         }
     }
