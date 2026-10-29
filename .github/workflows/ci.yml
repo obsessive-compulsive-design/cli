@@ -51,7 +51,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup show active-toolchain || rustup toolchain install
+      # US-033: the pinned 10 000-program corpus round-trips through the parser here.
       - run: cargo test --workspace --all-targets
+        env:
+          SJS_CORPUS_PROGRAMS: "10000"
       - run: cargo test --workspace --doc
 
   coverage:

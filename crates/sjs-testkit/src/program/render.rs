@@ -629,9 +629,10 @@ fn render_arrow(
     );
     match body {
         Ok(value) => {
-            let text = render_expr(value, level);
-            if matches!(**value, Expr::Object(_)) {
-                format!("{head} ({text})")
+            // ES reads a body whose first token is `{` as a block, so one that begins
+            // with an object literal, however deep on its left, is parenthesised.
+            if starts_with_brace(value) {
+                format!("{head} ({})", render_expr(value, level))
             } else {
                 format!("{head} {}", expr(value, ASSIGN, level))
             }
@@ -642,6 +643,20 @@ fn render_arrow(
             out.pop();
             out
         }
+    }
+}
+
+/// Whether the first token of `e`, as rendered, is `{`: an object literal, or an
+/// expression whose leftmost operand is one.
+fn starts_with_brace(e: &Expr) -> bool {
+    match e {
+        Expr::Object(_) => true,
+        Expr::Ternary(test, _, _) => starts_with_brace(test),
+        Expr::Binary(left, _, _) | Expr::Assign(left, _, _) => starts_with_brace(left),
+        Expr::Member(base, _, _) | Expr::Index(base, _, _) | Expr::Call(base, _, _) => {
+            starts_with_brace(base)
+        }
+        _ => false,
     }
 }
 

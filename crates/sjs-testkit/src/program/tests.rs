@@ -732,6 +732,62 @@ fn precedence_parenthesises_exactly_where_needed() {
     );
 }
 
+/// An arrow with the expression body `e`.
+fn arrow(e: Expr) -> Expr {
+    Expr::Arrow {
+        is_async: false,
+        params: Vec::new(),
+        body: Ok(b(e)),
+    }
+}
+
+#[test]
+fn an_arrow_body_that_begins_with_a_brace_is_parenthesised() {
+    let render = |e: Expr| {
+        Program {
+            items: vec![Item::Stmt(Stmt::Expr(Expr::Assign(b(id("r")), "=", b(e))))],
+        }
+        .to_string()
+    };
+    let object = || Expr::Object(vec![Property::Shorthand("a".to_owned())]);
+    for (body, expected) in [
+        (object(), "r = () => ({ a })\n"),
+        (
+            Expr::Ternary(b(object()), b(id("x")), b(id("y"))),
+            "r = () => ({ a } ? x : y)\n",
+        ),
+        (
+            Expr::Binary(b(object()), "===", b(id("x"))),
+            "r = () => ({ a } === x)\n",
+        ),
+        (
+            Expr::Assign(b(object()), "=", b(id("o"))),
+            "r = () => ({ a } = o)\n",
+        ),
+        (
+            Expr::Member(b(object()), "a".to_owned(), false),
+            "r = () => ({ a }.a)\n",
+        ),
+        (
+            Expr::Index(b(object()), b(num("0")), false),
+            "r = () => ({ a }[0])\n",
+        ),
+        (
+            Expr::Call(b(object()), Vec::new(), false),
+            "r = () => ({ a }())\n",
+        ),
+        // An object that is not the first token needs nothing.
+        (
+            Expr::Ternary(b(id("x")), b(object()), b(id("y"))),
+            "r = () => x ? { a } : y\n",
+        ),
+        (Expr::Paren(b(object())), "r = () => ({ a })\n"),
+        (id("x"), "r = () => x\n"),
+    ] {
+        assert_eq!(render(arrow(body)), expected);
+    }
+}
+
 #[test]
 fn strings_escape_what_the_subset_needs() {
     let render = |text: &str| {

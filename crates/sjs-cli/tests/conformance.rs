@@ -77,6 +77,40 @@ fn every_fixture_produces_exactly_its_declared_diagnostics() {
     assert!(failures.is_empty(), "\n{}\n", failures.join("\n"));
 }
 
+/// The grammar sweep (US-033): every `02-grammar/pass/` fixture (one per §2
+/// production) declares no diagnostic, and every `02-grammar/fail/` fixture (one per
+/// removed production or syntactic §12 row) declares exactly one. The main test holds
+/// each to what it declares.
+#[test]
+fn the_grammar_sweep_declares_none_for_pass_and_one_for_fail() {
+    let fixtures = discover(&conformance_root().join("02-grammar")).expect("readable");
+    let mut pass = 0;
+    let mut fail = 0;
+    for fixture in &fixtures {
+        let expected = expectations_of(fixture).expect("well-formed expectations");
+        let is_pass = fixture.name.starts_with("pass/");
+        let is_fail = fixture.name.starts_with("fail/");
+        assert!(
+            is_pass || is_fail,
+            "{}: not under pass/ or fail/",
+            fixture.name
+        );
+        assert_eq!(
+            expected.len(),
+            usize::from(is_fail),
+            "{}: {expected:?}",
+            fixture.name
+        );
+        pass += usize::from(is_pass);
+        fail += usize::from(is_fail);
+    }
+    assert!(pass >= 38, "{pass} pass fixtures: one per §2 production");
+    assert!(
+        fail >= 39,
+        "{fail} fail fixtures: one per removed production and §12 row"
+    );
+}
+
 /// The harness's own fixtures under `_harness/` are deliberately wrong; each must fail
 /// with the message a reviewer would need.
 #[test]

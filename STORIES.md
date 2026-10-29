@@ -1589,7 +1589,37 @@ by both rules and reported once.
 inside a template substitution recovers at the template end.
 
 #### US-033 Grammar conformance sweep
-§2, §11.2 M0, §12 · After: US-032 · Size: M · M0
+§2, §11.2 M0, §12 · After: US-032 · Size: M · M0 · **Status: complete** (2026-10-29)
+
+> Delivered: `tests/conformance/02-grammar/pass/` holds one fixture per production the
+> §2 grammar block defines (38: `Module` … `ObjectLit`), each exercising every
+> alternative of its production and producing no diagnostic; `02-grammar/fail/` holds
+> one per "Removed productions" item (27, `VariableStatement` … `ArrowParameters`
+> without parentheses) and one per further syntactic row of §12 (12: `!=`, `arguments`,
+> a static `prototype`, a user symbol as a member key, `eval`, an object-literal
+> accessor, ASI, regex flags, a tagged template, a braceless body, `#!`, `++` as a
+> value), each declaring exactly one diagnostic at its exact position (E000, or the
+> named E001, E002, E201 or E202) with the fix where one exists (`==` → `===`, `!=` →
+> `!==`, `let x` → `let x = undefined`, `a` → `(a)`, `f()` → `{ f() }`), and each message
+> naming the §12 replacement; the rows the checker enforces (`null` values, fallthrough,
+> `.call`, `this` outside classes, `Object.create`, `Proxy`, `Promise` forms, globals,
+> dictionaries) have no fixture here. The conformance test gained a check that every
+> `pass/` fixture declares nothing and every `fail/` fixture exactly one. The 10 000-
+> program round-trip is `crates/sjs-syntax/tests/corpus.rs`: the pinned corpus (the
+> testkit's seeds `0..10 000` with the default options, held by its manifest snapshot)
+> prints back byte for byte and parses clean; `SJS_CORPUS_PROGRAMS` sets how many, the
+> CI `test` job and `scripts/gates.sh` run all ten thousand, a routine run the first
+> thousand (the parser's own 2 000-program unit test, with doubles, stays). The full
+> corpus found one more generator fault, fixed here: an arrow whose expression body
+> began with an object literal (`() => {} ? a : b`, `() => {}.x`) was written without
+> parentheses, which ES reads as a block body; the renderer now parenthesises a body
+> whose leftmost token is `{`, however deep on its left, and the manifest snapshot was
+> regenerated. **Decisions:** a §12 row with several syntactic forms gets one fixture
+> per form (`new.target`, `__proto__`, a static `prototype`); the sweep's fixtures
+> stand beside the stories' own (the harness runs both); the routine corpus size is a
+> thousand so mutation testing, which runs every test per mutant, stays tractable.
+> Verified: 100% lines and regions, 8 mutants on the diff (8 caught), the corpus
+> round-trip clean on all 10 000 programs.
 
 **Done when**
 - `tests/conformance/02-grammar/pass/` has a fixture per production in §2 and `fail/` has
