@@ -180,7 +180,9 @@ impl Keyword {
             Keyword::With => Some("nothing: there is no dynamic scope"),
             Keyword::Void => Some("`undefined`"),
             Keyword::Delete => Some("assigning `undefined`, or `Map.delete`"),
-            Keyword::In => Some("a discriminant property or `Object.hasOwn`"),
+            Keyword::In => Some(
+                "a discriminant property or `Object.hasOwn`, and `for…of` over `Object.keys` or `Object.entries` for `for…in`",
+            ),
             Keyword::Arguments => Some("rest parameters"),
             Keyword::Eval => Some("nothing: there is no code from strings"),
             Keyword::Debugger => Some("nothing: it is a host-side signal"),

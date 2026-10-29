@@ -1203,7 +1203,51 @@ expression position is `E000`.
 accepted; `extends a.b.c` is `E000` (grammar allows one dot).
 
 #### US-026 Statements and blocks
-§2, §4.3 · After: US-024 · Size: M · M0
+§2, §4.3 · After: US-024 · Size: M · M0 · **Status: complete** (2026-10-28)
+
+> Delivered in `sjs-syntax`: `parser/statements.rs` parses blocks, `if`/`else`/`else
+> if`, `while`, `for…of`, `for await…of`, the classic `for`, `return`, `break`,
+> `continue`, `throw` and expression statements into `Block`, `IfStmt`, `WhileStmt`,
+> `ForOfStmt`, `ForStmt` (with `ForUpdate`), `ReturnStmt`, `BreakStmt`,
+> `ContinueStmt`, `ThrowStmt` and `ExprStmt`; the driver's items are now declarations
+> and statements, dispatched at each statement start, and every statement or
+> declaration owns the `;` that ends it (so `import …;` no longer ends the import
+> section). A braceless body (`if (x) y()`, `else y()`, `for (…) y()`, `while (x) y()`)
+> is E000 with the fix `y()` → `{ y() }` and is parsed as the statement it is; a
+> declaration as a body is E000 naming that. The classic header is exactly `let i = …;
+> condition; update`: `for (;;)`, a `const` counter, two counters, a missing condition
+> and any update other than `i += k`, `i -= k`, `i++`, `i--`, `++i`, `--i` are each E000
+> with the reason, once. `do…while`, `with`, labels and labelled `break`/`continue` are
+> E000 naming the §12 replacement and parsed for recovery (`DoWhileStmt`, `WithStmt`,
+> `LabelledStmt`); `var`, `debugger` and `for…in` keep the lexer's single report at the
+> keyword (`VarDecl`, `DebuggerStmt`, `ForInStmt`), and the `in` message now names
+> `for…of` over `Object.keys`/`Object.entries`. A bare `;` is `EmptyStmt`, reported S002
+> with the fix `;` → `` (US-031 extends S002 to every `;`). ES early errors, each E000
+> once: `break` outside a loop or `switch` of the same function, `continue` outside a
+> loop, `return` outside a function (the top level, a static block, a field
+> initializer, which now push `FnContext::Initializer`), and `for await` outside an
+> `async` context (the module's top level counts). Recovery: an item that reports a
+> syntax error and stops mid-line has the rest of its line skipped (brackets balanced;
+> a block's own `}` is left to it), so the cascades the old token run swallowed stay
+> one diagnostic; a stray `}` at the top level is now E000; a bare `class` is E000 once.
+> `TreeBuilder::retag` lets the `for` node take its kind once the header decides it.
+> Fixtures under `tests/conformance/04-statements/` (18 E000 cases, a conforming file
+> with a depth-10 `else if` chain, `for (const [k, v] of m)` and top-level `for await`,
+> and one S002). The corpus generator (US-009) could emit `return` in a static block:
+> fixed with a static-block flag, manifest snapshot regenerated. **Decisions:**
+> `switch` and `try` get only their structure here (clauses and handlers parse, so the
+> declarations inside them do); their rules are US-027's. Statements nest at most
+> `MAX_NESTING` (200) levels, like the regex parser's bound: past it the rest of the
+> block is skipped and E000 is reported once, so a hostile file cannot overflow the
+> stack (expression and pattern nesting stay unbounded until their stories). Bodies,
+> conditions and expressions are still token extents (`raw_expression`), so `a b` on
+> one line or a stray keyword inside an expression is not yet reported (US-028). The
+> random-text round-trip test no longer asserts agreement with `lex()`, whose guess
+> cannot know a `/` after a block's `}` is a regex. Verified: 100% lines and regions,
+> 233 mutants on the diff (177 caught, 7 unviable, 31 timeouts, 18 missed), then the 66
+> mutants in the six functions with survivors plus the changed class declaration
+> rerun after targeted tests and the `class` guard's removal: 55 caught, 2 unviable,
+> 9 timeouts, 0 missed.
 
 **Done when**
 - `Block`, `if`/`else`/`else if`, `while`, `for…of`, `for await…of`, the classic `for`,

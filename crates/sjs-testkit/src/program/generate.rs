@@ -503,6 +503,9 @@ const IN_LOOP: u8 = 8;
 const IN_SWITCH: u8 = 16;
 const IN_CLASS: u8 = 32;
 const IN_DERIVED_CONSTRUCTOR: u8 = 64;
+/// A static block: a member body like a method's (no `await`), but `return` is an
+/// early error there.
+const IN_STATIC_BLOCK: u8 = 128;
 
 /// The flags whose condition holds, added (never or-ed) so each bit is counted once.
 fn flags_of(flags: &[(bool, u8)]) -> u8 {
@@ -1199,8 +1202,9 @@ impl Generator<'_> {
             }
             _ => {
                 self.note(Production::StaticBlock);
-                // `await` is reserved inside a static block, as in a plain method.
-                Member::StaticBlock(self.block(ctx))
+                // `await` is reserved inside a static block, as in a plain method, and
+                // `return` is an early error.
+                Member::StaticBlock(self.block(ctx.with(IN_STATIC_BLOCK)))
             }
         }
     }
@@ -1239,7 +1243,7 @@ impl Generator<'_> {
                 self.note(Production::BlockDecl);
                 Stmt::Decl(self.decl(ctx))
             }
-            9 if ctx.has(IN_FUNCTION) => {
+            9 if ctx.has(IN_FUNCTION) && !ctx.has(IN_STATIC_BLOCK) => {
                 if self.chance(1, 2) {
                     self.note(Production::ReturnValue);
                     Stmt::Return(Some(self.expr(deep)))
@@ -1835,8 +1839,8 @@ mod tests {
     use super::super::tree::Expr;
     use super::{
         arrow_ctx, flags_of, function_ctx, member_ctx, method_ctx, Ctx, Generator, Options,
-        Production, IN_CLASS, IN_DERIVED_CONSTRUCTOR, IN_FUNCTION, IN_LOOP, IN_SWITCH, IS_ASYNC,
-        IS_GENERATOR,
+        Production, IN_CLASS, IN_DERIVED_CONSTRUCTOR, IN_FUNCTION, IN_LOOP, IN_STATIC_BLOCK,
+        IN_SWITCH, IS_ASYNC, IS_GENERATOR,
     };
     use crate::prng::Rng;
     use std::collections::BTreeSet;
@@ -1895,6 +1899,10 @@ mod tests {
             );
         }
         assert_eq!(member_ctx(1).flags, IN_FUNCTION + IN_CLASS);
+        assert_eq!(
+            member_ctx(1).with(IN_STATIC_BLOCK).flags,
+            IN_FUNCTION + IN_CLASS + IN_STATIC_BLOCK
+        );
         assert_eq!(Ctx::default().deeper().depth, 1);
     }
 

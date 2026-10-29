@@ -104,6 +104,44 @@ pub enum NodeKind {
     StaticBlock,
     /// `[Symbol.iterator]` and the other three permitted computed keys.
     SymbolKey,
+    /// An expression on its own as a statement (US-026).
+    ExprStmt,
+    /// A bare `;`.
+    EmptyStmt,
+    /// `if (cond) { … } [else …]`.
+    IfStmt,
+    /// `while (cond) { … }`.
+    WhileStmt,
+    /// The classic `for (let i = …; cond; update) { … }`.
+    ForStmt,
+    /// `for [await] (const|let pattern of iterable) { … }`.
+    ForOfStmt,
+    /// The removed `for (… in …)`, parsed for recovery.
+    ForInStmt,
+    /// The update of a classic `for` header.
+    ForUpdate,
+    /// The removed `do { … } while (cond)`, parsed for recovery.
+    DoWhileStmt,
+    /// The removed `with (obj) { … }`, parsed for recovery.
+    WithStmt,
+    /// The removed `label: statement`, parsed for recovery.
+    LabelledStmt,
+    /// The removed `debugger`, parsed for recovery.
+    DebuggerStmt,
+    /// The removed `var` declaration, parsed for recovery.
+    VarDecl,
+    /// `return [expr]`.
+    ReturnStmt,
+    /// `break`.
+    BreakStmt,
+    /// `continue`.
+    ContinueStmt,
+    /// `throw expr`.
+    ThrowStmt,
+    /// `switch (expr) { … }` (its clause structure is US-027's).
+    SwitchStmt,
+    /// `try { … } [catch …] [finally …]` (its handler rules are US-027's).
+    TryStmt,
 }
 
 /// A node's index in the arena; `NodeId(0)` is the root.
@@ -403,6 +441,12 @@ impl TreeBuilder {
     /// A token already added.
     pub(crate) fn token_ref(&self, id: TokenId) -> &Token {
         &self.tokens[to_index(id.0)]
+    }
+
+    /// Changes the kind of a node already started, for a grammar that learns what a
+    /// node is only after its first tokens (the header of a `for` loop).
+    pub fn retag(&mut self, id: NodeId, kind: NodeKind) {
+        self.nodes[to_index(id.0)].kind = kind;
     }
 
     /// Closes the innermost open node.

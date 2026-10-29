@@ -1077,7 +1077,7 @@ mod word_tests {
             ),
             (
                 "in",
-                "`in` is removed; use a discriminant property or `Object.hasOwn`",
+                "`in` is removed; use a discriminant property or `Object.hasOwn`, and `for…of` over `Object.keys` or `Object.entries` for `for…in`",
             ),
             ("arguments", "`arguments` is removed; use rest parameters"),
             (
@@ -1175,7 +1175,7 @@ mod word_tests {
         );
         assert_eq!(
             removals("a.b in"),
-            ["`in` is removed; use a discriminant property or `Object.hasOwn`"]
+            ["`in` is removed; use a discriminant property or `Object.hasOwn`, and `for…of` over `Object.keys` or `Object.entries` for `for…in`"]
         );
     }
 
@@ -1674,7 +1674,7 @@ mod number_tests {
             .collect();
         assert_eq!(
             messages,
-            ["`in` is removed; use a discriminant property or `Object.hasOwn`"],
+            ["`in` is removed; use a discriminant property or `Object.hasOwn`, and `for…of` over `Object.keys` or `Object.entries` for `for…in`"],
             "`1.` is a number, not a member access, so the removed word is reported"
         );
     }

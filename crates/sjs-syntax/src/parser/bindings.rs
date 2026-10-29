@@ -21,9 +21,10 @@ const EQ: TokenKind = TokenKind::Punct(Punct::Eq);
 const RBRACE: TokenKind = TokenKind::Punct(Punct::RBrace);
 const RBRACKET: TokenKind = TokenKind::Punct(Punct::RBracket);
 const ELLIPSIS: TokenKind = TokenKind::Punct(Punct::Ellipsis);
+const SEMICOLON: TokenKind = TokenKind::Punct(Punct::Semicolon);
 
-/// A `const` or `let` declaration, at its keyword. Returns the names it binds with
-/// their spans, in source order.
+/// A `const` or `let` declaration, at its keyword, with the `;` that may end it.
+/// Returns the names it binds with their spans, in source order.
 pub(super) fn declaration(parser: &mut Parser<'_>) -> Vec<(String, Span)> {
     let is_let = parser.peek(false).kind == TokenKind::Keyword(Keyword::Let);
     parser.start_node(if is_let {
@@ -71,6 +72,7 @@ pub(super) fn declaration(parser: &mut Parser<'_>) -> Vec<(String, Span)> {
             parser.error(span, "a `const` declaration needs an initializer");
         }
     }
+    parser.eat(&SEMICOLON);
     parser.finish_node();
     names
 }
@@ -329,17 +331,17 @@ mod tests {
         );
         assert_eq!(
             clean("const a = 1\nlet b = a + 2;\nconst c = f(\n  a,\n  b\n)"),
-            "(Module (ConstDecl const a (Initializer = 1)) (LetDecl let b (Initializer = a + 2)) ; (ConstDecl const c (Initializer = f ( a , b ))) <eof>)",
+            "(Module (ConstDecl const a (Initializer = 1)) (LetDecl let b (Initializer = a + 2) ;) (ConstDecl const c (Initializer = f ( a , b ))) <eof>)",
             "a newline or `;` ends the initializer; brackets keep it open"
         );
         assert_eq!(
             clean("const a = 1 +\n  2\nconst b = a\n(c)"),
-            "(Module (ConstDecl const a (Initializer = 1 + 2)) (ConstDecl const b (Initializer = a)) ( c ) <eof>)",
+            "(Module (ConstDecl const a (Initializer = 1 + 2)) (ConstDecl const b (Initializer = a)) (ExprStmt ( c )) <eof>)",
             "a line ending in an operator continues; a line starting with `(` does not"
         );
         assert_eq!(
             clean("{ const a = 1 }"),
-            "(Module { (ConstDecl const a (Initializer = 1)) } <eof>)",
+            "(Module (Block { (ConstDecl const a (Initializer = 1)) }) <eof>)",
             "inside a block, `}}` ends the initializer"
         );
         assert_eq!(
@@ -364,7 +366,7 @@ mod tests {
         );
         assert_eq!(
             clean("for (const x of y) {}"),
-            "(Module for ( const x of y ) { } <eof>)",
+            "(Module (ForOfStmt for ( (ConstDecl const x) of y ) (Block { })) <eof>)",
             "a `for` head is the loop story's"
         );
     }
@@ -591,16 +593,16 @@ mod tests {
     fn declarations_start_statements_only() {
         assert_eq!(
             clean("a.const = 1\nx?.let\nf(const)"),
-            "(Module a . const = 1 x ?. let f ( const ) <eof>)",
+            "(Module (ExprStmt a . const = 1) (ExprStmt x ?. let) (ExprStmt f ( const )) <eof>)",
             "`const` after `.`, `?.` or `(` is not a declaration"
         );
         assert_eq!(
             clean("const a = 1; const b = 2"),
-            "(Module (ConstDecl const a (Initializer = 1)) ; (ConstDecl const b (Initializer = 2)) <eof>)"
+            "(Module (ConstDecl const a (Initializer = 1) ;) (ConstDecl const b (Initializer = 2)) <eof>)"
         );
         assert_eq!(
             clean("if (x) {\n  let y = 1\n}"),
-            "(Module if ( x ) { (LetDecl let y (Initializer = 1)) } <eof>)"
+            "(Module (IfStmt if ( x ) (Block { (LetDecl let y (Initializer = 1)) })) <eof>)"
         );
     }
 

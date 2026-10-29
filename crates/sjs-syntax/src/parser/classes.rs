@@ -83,6 +83,15 @@ pub(super) fn class_decl(parser: &mut Parser<'_>, expression: bool) -> Option<(S
         if !expression {
             let span = parser.peek(false).span;
             parser.error(span, "a `class` declaration needs a name (SPEC.md §4.5)");
+            if !matches!(
+                parser.peek(false).kind,
+                LBRACE | TokenKind::Keyword(Keyword::Extends)
+            ) {
+                // Nothing of a class follows (`class = 1`, a bare `class`): stop, and
+                // the item skips the rest of the line.
+                parser.finish_node();
+                return None;
+            }
         }
         None
     };
@@ -277,7 +286,7 @@ fn key_width(parser: &mut Parser<'_>, offset: usize) -> usize {
 fn static_block(parser: &mut Parser<'_>) {
     parser.start_node(NodeKind::StaticBlock);
     parser.bump(false);
-    parser.with_member_context(false, false, false, functions::block);
+    parser.with_context(FnContext::Initializer, functions::block);
     parser.finish_node();
 }
 
@@ -325,20 +334,25 @@ fn member_key(parser: &mut Parser<'_>) -> Option<Key> {
     }
 }
 
-/// Skips the rest of a malformed member: to a `;`, a `}`, the end of input or the
-/// next line, so one malformed member yields one diagnostic.
+/// Skips the rest of a malformed member: to a `;`, the `}` closing the class, the end
+/// of input or the next line, with the braces of a method body balanced, so one
+/// malformed member yields one diagnostic.
 fn skip_member(parser: &mut Parser<'_>) {
+    let mut depth: u32 = 0;
     loop {
         match parser.peek(false).kind {
-            RBRACE | TokenKind::Eof => return,
-            SEMICOLON => {
+            TokenKind::Eof => return,
+            RBRACE if depth == 0 => return,
+            RBRACE => depth -= 1,
+            LBRACE => depth += 1,
+            SEMICOLON if depth == 0 => {
                 parser.bump(false);
                 return;
             }
             _ => {}
         }
         parser.bump(false);
-        if parser.peek(false).has_newline_before {
+        if depth == 0 && parser.peek(false).has_newline_before {
             return;
         }
     }
@@ -409,7 +423,7 @@ fn field(parser: &mut Parser<'_>, is_static: bool, key: &Key) {
         parser.start_node(NodeKind::Initializer);
         let eq = parser.bump(false).span;
         let consumed =
-            parser.with_member_context(false, false, false, |parser| parser.raw_expression(&[]));
+            parser.with_context(FnContext::Initializer, |parser| parser.raw_expression(&[]));
         if consumed == 0 {
             parser.error(eq, "expected an expression after `=`");
         }
@@ -457,7 +471,12 @@ fn method(
         declare_private(parser, private, role, key.span);
     }
     let derived_constructor = is_constructor && parser.classes.last().is_some_and(|c| c.derived);
-    parser.with_member_context(is_async, is_generator, derived_constructor, |parser| {
+    let context = FnContext::Method {
+        is_async,
+        is_generator,
+        derived_constructor,
+    };
+    parser.with_context(context, |parser| {
         let Some((count, has_rest)) = functions::params(parser) else {
             skip_member(parser);
             return;
@@ -501,22 +520,12 @@ impl Parser<'_> {
         token.kind == TokenKind::Ident && self.text(&token) == word
     }
 
-    /// Runs `parse` inside a class member's context (a method, accessor, field
-    /// initializer or static block), where `super.x` is permitted and `super()` only
-    /// in a derived constructor.
-    fn with_member_context<T>(
-        &mut self,
-        is_async: bool,
-        is_generator: bool,
-        derived_constructor: bool,
-        parse: impl FnOnce(&mut Self) -> T,
-    ) -> T {
+    /// Runs `parse` inside a class member's context: a method or accessor
+    /// ([`FnContext::Method`]), or a field initializer or static block
+    /// ([`FnContext::Initializer`]), where `super.x` is permitted.
+    fn with_context<T>(&mut self, context: FnContext, parse: impl FnOnce(&mut Self) -> T) -> T {
         let mark = self.contexts.len();
-        self.contexts.push(FnContext::Method {
-            is_async,
-            is_generator,
-            derived_constructor,
-        });
+        self.contexts.push(context);
         let result = parse(self);
         self.contexts.truncate(mark);
         result
@@ -557,6 +566,7 @@ impl Parser<'_> {
                 derived_constructor,
                 ..
             }) => (true, *derived_constructor),
+            Some(FnContext::Initializer) => (true, false),
             _ => (false, false),
         };
         let message = match self.peek_second().kind {
@@ -640,11 +650,11 @@ mod tests {
         );
         assert_eq!(
             clean("class A {\n  m() {}\n  async n(a) { await a }\n  *g() { yield 1 }\n  async *h() { yield await 1 }\n  static s() {}\n  static async *t() {}\n  #p() {}\n  static #q() {}\n}"),
-            "(Module (ClassDecl class A (ClassBody { (ClassMethod m (Params ( )) (Block { })) (ClassMethod async n (Params ( (Param a) )) (Block { await a })) (ClassMethod * g (Params ( )) (Block { yield 1 })) (ClassMethod async * h (Params ( )) (Block { yield await 1 })) (ClassMethod static s (Params ( )) (Block { })) (ClassMethod static async * t (Params ( )) (Block { })) (ClassMethod #p (Params ( )) (Block { })) (ClassMethod static #q (Params ( )) (Block { })) })) <eof>)"
+            "(Module (ClassDecl class A (ClassBody { (ClassMethod m (Params ( )) (Block { })) (ClassMethod async n (Params ( (Param a) )) (Block { (ExprStmt await a) })) (ClassMethod * g (Params ( )) (Block { (ExprStmt yield 1) })) (ClassMethod async * h (Params ( )) (Block { (ExprStmt yield await 1) })) (ClassMethod static s (Params ( )) (Block { })) (ClassMethod static async * t (Params ( )) (Block { })) (ClassMethod #p (Params ( )) (Block { })) (ClassMethod static #q (Params ( )) (Block { })) })) <eof>)"
         );
         assert_eq!(
             clean("class A {\n  get x() { return 1 }\n  set x(v) {}\n  static get y() {}\n  get #z() {}\n  set #z(v) {}\n}"),
-            "(Module (ClassDecl class A (ClassBody { (ClassAccessor get x (Params ( )) (Block { return 1 })) (ClassAccessor set x (Params ( (Param v) )) (Block { })) (ClassAccessor static get y (Params ( )) (Block { })) (ClassAccessor get #z (Params ( )) (Block { })) (ClassAccessor set #z (Params ( (Param v) )) (Block { })) })) <eof>)"
+            "(Module (ClassDecl class A (ClassBody { (ClassAccessor get x (Params ( )) (Block { (ReturnStmt return 1) })) (ClassAccessor set x (Params ( (Param v) )) (Block { })) (ClassAccessor static get y (Params ( )) (Block { })) (ClassAccessor get #z (Params ( )) (Block { })) (ClassAccessor set #z (Params ( (Param v) )) (Block { })) })) <eof>)"
         );
         assert_eq!(
             clean("class A {\n  static {\n    const a = 1\n  }\n  static {}\n}"),
@@ -656,7 +666,7 @@ mod tests {
         );
         assert_eq!(
             clean("class A extends B {\n  constructor(a) {\n    super(a)\n    this.#x = super.y\n  }\n  #x\n}"),
-            "(Module (ClassDecl class A (ClassHeritage extends B) (ClassBody { (ClassMethod constructor (Params ( (Param a) )) (Block { super ( a ) this . #x = super . y })) (ClassField #x) })) <eof>)"
+            "(Module (ClassDecl class A (ClassHeritage extends B) (ClassBody { (ClassMethod constructor (Params ( (Param a) )) (Block { (ExprStmt super ( a )) (ExprStmt this . #x = super . y) })) (ClassField #x) })) <eof>)"
         );
         assert_eq!(
             clean("export class A {}\nexport { A as B }"),
@@ -858,6 +868,32 @@ mod tests {
                 "expected a class member",
             ),
         ]);
+    }
+
+    #[test]
+    fn a_skipped_member_keeps_its_body_braces_balanced() {
+        for text in [
+            "class A {\n  m(1) { a; b }\n  n() {}\n}",
+            "class A {\n  m(1) {\n    a\n  }\n  n() {}\n}",
+        ] {
+            let found = diagnostics(text);
+            assert_eq!(found.len(), 1, "{text}: {found:?}");
+            assert!(
+                sexp(text).contains("(ClassMethod n"),
+                "{text}: n still parses"
+            );
+        }
+    }
+
+    #[test]
+    fn a_member_skipped_at_the_end_of_the_file_leaves_one_report_for_the_class() {
+        let found = diagnostics("class A {\n  m(1) {");
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(found[0].3.contains("expected a binding name"), "{found:?}");
+        assert!(
+            found[1].3.contains("expected `}` to close the class body"),
+            "{found:?}"
+        );
     }
 
     #[test]

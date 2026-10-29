@@ -316,11 +316,11 @@ mod tests {
         );
         assert_eq!(
             clean("async function f(a, b = 1, ...c) {\n  return a\n}"),
-            "(Module (FunctionDecl async function f (Params ( (Param a) , (Param b (Initializer = 1)) , (RestParam ... c) )) (Block { return a })) <eof>)"
+            "(Module (FunctionDecl async function f (Params ( (Param a) , (Param b (Initializer = 1)) , (RestParam ... c) )) (Block { (ReturnStmt return a) })) <eof>)"
         );
         assert_eq!(
             clean("function* g() { yield 1 }\nasync function* h() { yield await 1 }"),
-            "(Module (FunctionDecl function * g (Params ( )) (Block { yield 1 })) (FunctionDecl async function * h (Params ( )) (Block { yield await 1 })) <eof>)"
+            "(Module (FunctionDecl function * g (Params ( )) (Block { (ExprStmt yield 1) })) (FunctionDecl async function * h (Params ( )) (Block { (ExprStmt yield await 1) })) <eof>)"
         );
         assert_eq!(
             clean("function f({ a, b: [c] }, [d] = [], ...{ e }) {}"),
@@ -328,17 +328,17 @@ mod tests {
         );
         assert_eq!(
             clean("function f() {\n  const a = 1\n  function g() {}\n  {\n    let b = 2\n  }\n}"),
-            "(Module (FunctionDecl function f (Params ( )) (Block { (ConstDecl const a (Initializer = 1)) (FunctionDecl function g (Params ( )) (Block { })) { (LetDecl let b (Initializer = 2)) } })) <eof>)",
+            "(Module (FunctionDecl function f (Params ( )) (Block { (ConstDecl const a (Initializer = 1)) (FunctionDecl function g (Params ( )) (Block { })) (Block { (LetDecl let b (Initializer = 2)) }) })) <eof>)",
             "declarations and nested functions directly inside the body"
         );
         assert_eq!(
             clean("function f(a = (b) => b, c = async (d) => { return d }) {}"),
-            "(Module (FunctionDecl function f (Params ( (Param a (Initializer = (ArrowFunction (Params ( (Param b) )) => b))) , (Param c (Initializer = (ArrowFunction async (Params ( (Param d) )) => (Block { return d })))) )) (Block { })) <eof>)",
+            "(Module (FunctionDecl function f (Params ( (Param a (Initializer = (ArrowFunction (Params ( (Param b) )) => b))) , (Param c (Initializer = (ArrowFunction async (Params ( (Param d) )) => (Block { (ReturnStmt return d) })))) )) (Block { })) <eof>)",
             "arrows as defaults"
         );
         assert_eq!(
             clean("export function f() {}\nexport async function g() {}\nf()"),
-            "(Module (ExportDecl export (FunctionDecl function f (Params ( )) (Block { }))) (ExportDecl export (FunctionDecl async function g (Params ( )) (Block { }))) f ( ) <eof>)"
+            "(Module (ExportDecl export (FunctionDecl function f (Params ( )) (Block { }))) (ExportDecl export (FunctionDecl async function g (Params ( )) (Block { }))) (ExprStmt f ( )) <eof>)"
         );
     }
 
@@ -370,7 +370,7 @@ mod tests {
         );
         assert_eq!(
             clean("const f = (a) => {\n  const b = a\n  return (c) => b + c\n}"),
-            "(Module (ConstDecl const f (Initializer = (ArrowFunction (Params ( (Param a) )) => (Block { (ConstDecl const b (Initializer = a)) return (ArrowFunction (Params ( (Param c) )) => b + c) })))) <eof>)"
+            "(Module (ConstDecl const f (Initializer = (ArrowFunction (Params ( (Param a) )) => (Block { (ConstDecl const b (Initializer = a)) (ReturnStmt return (ArrowFunction (Params ( (Param c) )) => b + c)) })))) <eof>)"
         );
         assert_eq!(
             clean("const r = async(x)\nconst s = async(x) + 1"),
@@ -394,7 +394,7 @@ mod tests {
         );
         assert_eq!(
             clean("x = () => 1, 2\nfor (const y of await ((a) => a) ? () => ({ b }) : await c) {}"),
-            "(Module x = (ArrowFunction (Params ( )) => 1) , 2 for ( const y of await ( (ArrowFunction (Params ( (Param a) )) => a) ) ? (ArrowFunction (Params ( )) => ( { b } )) : await c ) { } <eof>)",
+            "(Module (ExprStmt x = (ArrowFunction (Params ( )) => 1) , 2) (ForOfStmt for ( (ConstDecl const y) of await ( (ArrowFunction (Params ( (Param a) )) => a) ) ? (ArrowFunction (Params ( )) => ( { b } )) : await c ) (Block { })) <eof>)",
             "the same at statement level, where `await` after the body is the module's"
         );
         assert_eq!(
@@ -451,7 +451,7 @@ mod tests {
         }
         assert_eq!(
             sexp("const f = function (a) { return a }"),
-            "(Module (ConstDecl const f (Initializer = (FunctionExpr function (Params ( (Param a) )) (Block { return a })))) <eof>)",
+            "(Module (ConstDecl const f (Initializer = (FunctionExpr function (Params ( (Param a) )) (Block { (ReturnStmt return a) })))) <eof>)",
             "parsed anyway, as an expression node"
         );
         assert_eq!(
@@ -619,11 +619,11 @@ mod tests {
     fn declarations_only_at_statement_start_and_blocks_close_their_scope() {
         assert_eq!(
             clean("x = f\nfunction f() {}\na.function"),
-            "(Module x = f (FunctionDecl function f (Params ( )) (Block { })) a . function <eof>)"
+            "(Module (ExprStmt x = f) (FunctionDecl function f (Params ( )) (Block { })) (ExprStmt a . function) <eof>)"
         );
         assert_eq!(
             clean("o.function(1)\no.async (b) => b\no.b => 1"),
-            "(Module o . function ( 1 ) o . async (ArrowFunction (Params ( (Param b) )) => b) o . b => 1 <eof>)",
+            "(Module (ExprStmt o . function ( 1 )) (ExprStmt o . async (ArrowFunction (Params ( (Param b) )) => b)) (ExprStmt o . b => 1) <eof>)",
             "after `.` the word is a property name: no function expression and no lone-parameter arrow is read there (the `(` after `o.async` is its own token)"
         );
         assert_eq!(
@@ -633,7 +633,7 @@ mod tests {
         );
         assert_eq!(
             clean("if (x) {\n  function f() {}\n}"),
-            "(Module if ( x ) { (FunctionDecl function f (Params ( )) (Block { })) } <eof>)",
+            "(Module (IfStmt if ( x ) (Block { (FunctionDecl function f (Params ( )) (Block { })) })) <eof>)",
             "directly inside a raw block too"
         );
         assert_eq!(
@@ -685,22 +685,22 @@ mod tests {
         );
         assert_eq!(
             clean("for (const x of /a/v) {}\nconst y = of / 2\nfor (const z of [/b/v]) {}"),
-            "(Module for ( const x of /a/v ) { } (ConstDecl const y (Initializer = of / 2)) for ( const z of [ /b/v ] ) { } <eof>)",
+            "(Module (ForOfStmt for ( (ConstDecl const x) of /a/v ) (Block { })) (ConstDecl const y (Initializer = of / 2)) (ForOfStmt for ( (ConstDecl const z) of [ /b/v ] ) (Block { })) <eof>)",
             "a `/` after the contextual keyword `of` starts a regex; after a value named `of` it divides"
         );
         assert_eq!(
             clean("const a = await /x/v\nfunction* g() { yield /y/v }\nconst b = o.await / 2"),
-            "(Module (ConstDecl const a (Initializer = await /x/v)) (FunctionDecl function * g (Params ( )) (Block { yield /y/v })) (ConstDecl const b (Initializer = o . await / 2)) <eof>)",
+            "(Module (ConstDecl const a (Initializer = await /x/v)) (FunctionDecl function * g (Params ( )) (Block { (ExprStmt yield /y/v) })) (ConstDecl const b (Initializer = o . await / 2)) <eof>)",
             "an operand follows `await` and `yield`; after `.` they are property names"
         );
         assert_eq!(
             clean("const a = { b: 1 } / 2\nx = { c: [1] } / 3\nif (y) {}\n/z/v\nfunction f() {\n  return { d: 1 } / 4\n}\n{}\n/w/v"),
-            "(Module (ConstDecl const a (Initializer = { b : 1 } / 2)) x = { c : [ 1 ] } / 3 if ( y ) { } /z/v (FunctionDecl function f (Params ( )) (Block { return { d : 1 } / 4 })) { } /w/v <eof>)",
+            "(Module (ConstDecl const a (Initializer = { b : 1 } / 2)) (ExprStmt x = { c : [ 1 ] } / 3) (IfStmt if ( y ) (Block { })) (ExprStmt /z/v) (FunctionDecl function f (Params ( )) (Block { (ReturnStmt return { d : 1 } / 4) })) (Block { }) (ExprStmt /w/v) <eof>)",
             "a `}}` closing an object literal ends a value; one closing a block does not"
         );
         assert_eq!(
             clean("async function* g() {\n  yield {} / 2\n  const a = await {} / 3\n}"),
-            "(Module (FunctionDecl async function * g (Params ( )) (Block { yield { } / 2 (ConstDecl const a (Initializer = await { } / 3)) })) <eof>)",
+            "(Module (FunctionDecl async function * g (Params ( )) (Block { (ExprStmt yield { } / 2) (ConstDecl const a (Initializer = await { } / 3)) })) <eof>)",
             "an object literal after `yield` or `await` is a value too"
         );
         assert_eq!(

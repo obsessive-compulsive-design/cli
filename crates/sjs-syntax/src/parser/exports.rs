@@ -1,8 +1,8 @@
 //! Export declarations (SPEC.md §2 `ExportDecl`, §5.1, §8.4): `export` before a
 //! declaration, `export { a, b as c }` and `export { a } from "./x.js"`. Named exports
 //! only: every `export default` form is E202, `export *` is E161, and a name exported
-//! twice is E000 (an ES2025 early error). The declaration after `export` keeps its own
-//! grammar story: until then its tokens follow the `ExportDecl` node as module items.
+//! twice is E000 (an ES2025 early error). The declaration after `export` is parsed by
+//! its own module, inside the `ExportDecl` node.
 
 use std::collections::BTreeMap;
 
@@ -26,7 +26,10 @@ pub(super) fn export_decl(parser: &mut Parser<'_>, exported: &mut Exported) {
     parser.start_node(NodeKind::ExportDecl);
     parser.bump(false);
     match parser.peek(false).kind.clone() {
-        LBRACE => named_exports(parser, exported),
+        LBRACE => {
+            named_exports(parser, exported);
+            parser.eat(&TokenKind::Punct(Punct::Semicolon));
+        }
         TokenKind::Keyword(Keyword::Default) => {
             let span = parser.peek(false).span;
             parser.report(
@@ -461,8 +464,8 @@ export { a }"
         assert_eq!(diagnostics("{ export { a } }").len(), 1, "a bare block");
         assert_eq!(
             diagnostics("} export { a }"),
-            Vec::new(),
-            "a stray `}}` never puts the module inside a block"
+            vec![(Code::E000, 1, 1, "unmatched `}`".to_owned())],
+            "a stray `}}` is reported and never puts the module inside a block"
         );
     }
 

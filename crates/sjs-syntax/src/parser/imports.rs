@@ -7,7 +7,7 @@
 
 use sjs_diag::{Code, Span};
 
-use super::Parser;
+use super::{Parser, Scope};
 use crate::token::{Keyword, Punct, TokenKind};
 use crate::tree::NodeKind;
 
@@ -28,9 +28,14 @@ const COLON: TokenKind = TokenKind::Punct(Punct::Colon);
 /// an expression, so the section ends there).
 pub(super) fn import_section(parser: &mut Parser<'_>) {
     while parser.peek(false).kind == TokenKind::Keyword(Keyword::Import)
-        && parser.peek_second().kind != TokenKind::Punct(Punct::LParen)
+        && !matches!(
+            parser.peek_second().kind,
+            TokenKind::Punct(Punct::LParen | Punct::Dot)
+        )
     {
+        let reported = parser.diagnostics.len();
         import_decl(parser);
+        parser.recover(reported, Scope::Module);
     }
 }
 
@@ -85,6 +90,7 @@ pub(super) fn import_decl(parser: &mut Parser<'_>) {
     let attributes = (parser.peek(false).kind == TokenKind::Keyword(Keyword::With))
         .then(|| import_attributes(parser));
     check(parser, form, &path, path_span, attributes);
+    parser.eat(&TokenKind::Punct(Punct::Semicolon));
     parser.finish_node();
 }
 
@@ -615,16 +621,16 @@ mod tests {
         );
         assert_eq!(
             clean("import(\"./x.js\")"),
-            "(Module import ( \"./x.js\" ) <eof>)",
+            "(Module (ExprStmt import ( \"./x.js\" )) <eof>)",
             "even first"
         );
         assert_eq!(
             clean("a.import\na?.import"),
-            "(Module a . import a ?. import <eof>)"
+            "(Module (ExprStmt a . import) (ExprStmt a ?. import) <eof>)"
         );
         assert_eq!(
             clean("import { a } from \"./x.js\"\nx = a / 2 / 1"),
-            "(Module (ImportDecl import (NamedImports { (ImportSpecifier a) }) from \"./x.js\") x = a / 2 / 1 <eof>)",
+            "(Module (ImportDecl import (NamedImports { (ImportSpecifier a) }) from \"./x.js\") (ExprStmt x = a / 2 / 1) <eof>)",
             "the items keep the regex guess"
         );
     }
@@ -633,16 +639,17 @@ mod tests {
     fn a_malformed_import_leaves_the_rest_of_the_line_to_the_items() {
         assert_eq!(
             sexp("import { a } \"./x.js\"\nconst b = 1"),
-            "(Module (ImportDecl import (NamedImports { (ImportSpecifier a) })) \"./x.js\" (ConstDecl const b (Initializer = 1)) <eof>)"
+            "(Module (ImportDecl import (NamedImports { (ImportSpecifier a) })) (ExprStmt \"./x.js\") (ConstDecl const b (Initializer = 1)) <eof>)"
         );
         assert_eq!(
             sexp("import \"./x.js\"\nimport { a } from \"./y.js\""),
             "(Module (ImportDecl import) \"./x.js\" (ImportDecl import (NamedImports { (ImportSpecifier a) }) from \"./y.js\") <eof>)",
-            "a later import is still an import, reported as out of order"
+            "the rest of the malformed line is skipped, so the next import is still in the import section"
         );
         assert_eq!(
             diagnostics("import \"./x.js\"\nimport { a } from \"./y.js\"").len(),
-            2
+            1,
+            "only the side-effect import is reported, not the import after it"
         );
     }
 
