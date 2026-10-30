@@ -1,0 +1,41 @@
+--- source
+const x = a ? b : c
+--- formatted
+const x = a ? b : c
+
+--- source
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa + aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--- formatted
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  ? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa + aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+--- source
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--- formatted
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  ? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+--- source
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--- formatted
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  ? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  : aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+--- source
+f(a ? b : c, d)
+--- formatted
+f(a ? b : c, d)
+
+--- source
+const x = a.b().c().d() ? e : f
+--- formatted
+const x = a
+  .b()
+  .c()
+  .d()
+  ? e
+  : f
+

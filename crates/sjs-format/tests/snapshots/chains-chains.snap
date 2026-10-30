@@ -1,0 +1,137 @@
+--- source
+a.b().c()
+--- formatted
+a.b().c()
+
+--- source
+a.b().c().d()
+--- formatted
+a
+  .b()
+  .c()
+  .d()
+
+--- source
+f().a().b()
+--- formatted
+f().a().b()
+
+--- source
+a[0].b().c()
+--- formatted
+a[0].b().c()
+
+--- source
+a[0].b().c().d()
+--- formatted
+a[0]
+  .b()
+  .c()
+  .d()
+
+--- source
+a?.b()?.c().d()
+--- formatted
+a
+  ?.b()
+  ?.c()
+  .d()
+
+--- source
+new A().b().c().d()
+--- formatted
+new A()
+  .b()
+  .c()
+  .d()
+
+--- source
+(await a.b()).c().d()
+--- formatted
+(await a.b()).c().d()
+
+--- source
+(await a.b().c().d()).e().f()
+--- formatted
+(await a
+  .b()
+  .c()
+  .d())
+  .e()
+  .f()
+
+--- source
+a.b.c.d
+--- formatted
+a.b.c.d
+
+--- source
+this.x.y().z().w()
+--- formatted
+this
+  .x.y()
+  .z()
+  .w()
+
+--- source
+a.b().c().d().e
+--- formatted
+a
+  .b()
+  .c()
+  .d().e
+
+--- source
+a.b().c()[0].d()
+--- formatted
+a
+  .b()
+  .c()[0]
+  .d()
+
+--- source
+a.b(x).c(y, z).d({ k: 1 })
+--- formatted
+a
+  .b(x)
+  .c(y, z)
+  .d({ k: 1 })
+
+--- source
+const x = a.b((x) => x.c().d().e()).f()
+--- formatted
+const x = a
+  .b(
+    (x) => x
+      .c()
+      .d()
+      .e(),
+  )
+  .f()
+
+--- source
+a.b()`t`.c().d()
+--- formatted
+a
+  .b()`t`
+  .c()
+  .d()
+
+--- source
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa().c()
+--- formatted
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  .aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa()
+  .c()
+
+--- source
+const y = a
+  .b()
+  .c()
+  .d()
+--- formatted
+const y = a
+  .b()
+  .c()
+  .d()
+

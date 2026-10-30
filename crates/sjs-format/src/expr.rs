@@ -52,21 +52,21 @@ impl<'a> Formatter<'a> {
         match node.kind() {
             NodeKind::ParenExpr => self.paren(node),
             NodeKind::SequenceExpr => self.separated(node),
-            NodeKind::AssignExpr
-            | NodeKind::CondExpr
-            | NodeKind::BinaryExpr
-            | NodeKind::Initializer => self.spaced(node),
+            NodeKind::AssignExpr | NodeKind::Initializer => self.spaced(node),
+            NodeKind::CondExpr => self.conditional(node),
+            NodeKind::BinaryExpr => self.binary(node),
             NodeKind::UnaryExpr | NodeKind::AwaitExpr | NodeKind::YieldExpr => self.unary(node),
             NodeKind::UpdateExpr
-            | NodeKind::MemberExpr
-            | NodeKind::IndexExpr
-            | NodeKind::OptionalChain
             | NodeKind::MetaProperty
-            | NodeKind::TaggedTemplate
             | NodeKind::SpreadElement
             | NodeKind::RestElement
             | NodeKind::RestParam => self.glued(node),
-            NodeKind::CallExpr | NodeKind::NewExpr | NodeKind::ImportCall => self.call(node),
+            NodeKind::MemberExpr
+            | NodeKind::IndexExpr
+            | NodeKind::CallExpr
+            | NodeKind::OptionalChain
+            | NodeKind::TaggedTemplate => self.chain(node),
+            NodeKind::NewExpr | NodeKind::ImportCall => self.call(node),
             NodeKind::ArrayLit | NodeKind::ArrayPattern | NodeKind::Params => {
                 self.list(node, false)
             }
@@ -311,7 +311,78 @@ impl<'a> Formatter<'a> {
         Doc::Group(node.children().map(|child| self.element(child)).collect())
     }
 
-    /// Children with one space between them: `a = b`, `a ? b : c`, `a + b`.
+    /// `a + b + c`: the operands of one operator level in a group that breaks after each
+    /// operator, the continuation indented (§9.3). An operator of another level keeps its
+    /// own group, so only what does not fit breaks.
+    fn binary(&self, node: NodeRef<'_>) -> Doc {
+        let level = binary_level(self.operator(node));
+        let mut operands = Vec::new();
+        let mut operators = Vec::new();
+        self.flatten_binary(node, level, &mut operands, &mut operators);
+        let mut out = Vec::new();
+        let mut rest = Vec::new();
+        for (at, operand) in operands.iter().enumerate() {
+            match at.checked_sub(1).and_then(|before| operators.get(before)) {
+                None => out.push(self.element(*operand)),
+                Some(operator) => {
+                    rest.push(Doc::text(" "));
+                    rest.push(operator.clone());
+                    rest.push(Doc::Line);
+                    rest.push(self.element(*operand));
+                }
+            }
+        }
+        out.push(Doc::indent(rest));
+        Doc::Group(out)
+    }
+
+    /// The operands and operators of `node` and of the operands nested on its
+    /// associative side at the same `level`: the left for every operator but `**`.
+    fn flatten_binary<'t>(
+        &self,
+        node: NodeRef<'t>,
+        level: u8,
+        operands: &mut Vec<Element<'t>>,
+        operators: &mut Vec<Doc>,
+    ) {
+        for (at, child) in node.children().enumerate() {
+            let nested = matches!(
+                child,
+                Element::Node(inner)
+                    if inner.kind() == NodeKind::BinaryExpr
+                        && binary_level(self.operator(inner)) == level
+                        && (at == 0) != (level == EXPONENT)
+            );
+            match child {
+                Element::Node(inner) if nested => {
+                    self.flatten_binary(inner, level, operands, operators);
+                }
+                Element::Token(token) if at == 1 => operators.push(self.token(token.token())),
+                operand => operands.push(operand),
+            }
+        }
+    }
+
+    /// `a ? b : c`: breaks before `?` and before `:`, both branches indented (§9.3).
+    fn conditional(&self, node: NodeRef<'_>) -> Doc {
+        let mut out = Vec::new();
+        let mut rest = Vec::new();
+        for (at, child) in node.children().enumerate() {
+            match child {
+                Element::Token(token) if at == 1 || at == 3 => {
+                    rest.push(Doc::Line);
+                    rest.push(self.token(token.token()));
+                    rest.push(Doc::text(" "));
+                }
+                test if at == 0 => out.push(self.element(test)),
+                branch => rest.push(self.element(branch)),
+            }
+        }
+        out.push(Doc::indent(rest));
+        Doc::Group(out)
+    }
+
+    /// Children with one space between them: `a = b`, `= b`.
     pub(crate) fn spaced(&self, node: NodeRef<'_>) -> Doc {
         let mut out = Vec::new();
         for (at, child) in node.children().enumerate() {
@@ -374,12 +445,20 @@ impl<'a> Formatter<'a> {
         self.first_text(element).starts_with(sign)
     }
 
-    /// A call, `new` or `import(…)`: the callee glued to a parenthesised list.
+    /// `new` or `import(…)`: the callee glued to a parenthesised list. A plain call is a
+    /// chain's (US-044).
     fn call(&self, node: NodeRef<'_>) -> Doc {
+        let children: Vec<Element<'_>> = node.children().collect();
+        self.call_tail(&children)
+    }
+
+    /// Elements around a parenthesised argument list: `new`, a callee, `?.`, the list
+    /// itself as one group.
+    pub(crate) fn call_tail(&self, elements: &[Element<'_>]) -> Doc {
         let mut out = Vec::new();
         let mut items: Vec<Doc> = Vec::new();
         let mut in_list = false;
-        for child in node.children() {
+        for child in elements.iter().copied() {
             match child {
                 Element::Token(token) if token.token().kind == TokenKind::Punct(Punct::LParen) => {
                     in_list = true;

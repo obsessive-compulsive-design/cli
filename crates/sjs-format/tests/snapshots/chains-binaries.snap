@@ -1,0 +1,65 @@
+--- source
+const x = a + b + c
+--- formatted
+const x = a + b + c
+
+--- source
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa + aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa + aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa + aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--- formatted
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa +
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa +
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa +
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+--- source
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa * aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa + aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa * aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--- formatted
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa * aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa +
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa * aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+--- source
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ?? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ?? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ?? aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--- formatted
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ??
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ??
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ??
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+--- source
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa && aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa || aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa && aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--- formatted
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa && aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ||
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa && aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+--- source
+if (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa === aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa && aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa !== aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) {}
+--- formatted
+if (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa === aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa &&
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa !== aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) {}
+
+--- source
+const x = (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa + aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) * (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+--- formatted
+const x = (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa + aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) *
+  (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+
+--- source
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ** aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ** aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ** aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--- formatted
+const x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa **
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa **
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa **
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+--- source
+const x = a.b().c().d() + e.f().g().h()
+--- formatted
+const x = a
+  .b()
+  .c()
+  .d() +
+  e
+    .f()
+    .g()
+    .h()
+

@@ -1886,7 +1886,42 @@ keeps multi-line; an empty object across two lines collapses to `{}`; a rest par
 never gets a trailing comma (ES forbids it).
 
 #### US-044 Chains, binary breaking and ternaries
-§9.3, S010 · After: US-043 · Size: M · M0
+§9.3, S010 · After: US-043 · Size: M · M0 · **Status: complete** (2026-10-29)
+
+> Delivered in `sjs-format`: `chains.rs` flattens a member chain (a head, then links:
+> `.b`/`?.b` accesses, `[0]` indexes, `(x)` calls, tagged templates, through the
+> `OptionalChain` wrapper) into lines, the head with the links before the first access
+> and then one line per method call, each beginning with the `.` of the accesses that
+> lead to the call and holding what follows it up to the next call's access; the
+> accesses after the last call stay on its line, and a chain with no call is one line
+> whatever its width. A method call is a call right after an access, so the head's
+> call (`f()`), `new A()` and an index do not count; three or more break the lines with
+> hard breaks, fewer stay on one line when it fits and break the same way when it does
+> not. `Formatter::method_chains()` reports S010 for a chain of three or more method
+> calls whose line-starting `.`s do not all begin a source line, with the chain's
+> layout as the replacement (its lines after the first indented like the source line
+> the chain starts on); a chain inside another (an argument, an index) is its own. In
+> `expr.rs`, `binary` flattens the operands of one operator level (nested on the left,
+> on the right for `**`) into a group that breaks after each operator with the
+> continuation indented, an operator of another level keeping its own group; `conditional`
+> breaks before `?` and before `:` with both branches indented, a nested ternary being
+> its own group; `call` keeps `new` and `import()` and its argument list became
+> `call_tail`, which a chain's call link shares. Tests: unit tests for the count, the
+> grouping (`this.x.y().z().w()`, `.d().e`, `.c()[0]`, a tagged template, optional
+> links), a chain interrupted by `await`, a chain inside an argument, a too-wide
+> two-call chain, and S010's positions and replacement; `tests/snapshot_chains.rs`
+> with chains, binaries (same and mixed levels, `??`, `&&`/`||`, a comparison in an `if`,
+> parenthesised operands, `**`, two broken chains as operands) and ternaries (flat,
+> broken, nested in either branch, a broken chain as the test), each formatted twice to
+> the same text; fixtures under `tests/conformance/09-breaking/S010/` with near-misses.
+> **Decisions:** a chain of accesses alone never breaks (the story's `a.b.c.d`), and a
+> short chain too wide for its line breaks like a long one rather than overflowing; a
+> broken chain inside an argument breaks the list and the chain around it, as US-043
+> decided for every broken child, so `a.b((x) => x.c().d().e()).f()` opens its
+> argument list; the layout counts method calls, not calls, so `f().a().b()` and
+> `new A().b().c()` stay on one line; S010 carries the laid-out chain as its fix, with
+> the indentation of its first source line, the exact text in context being US-048's
+> diff. Verified: 100% lines and regions; 71 mutants on the diff (56 caught, 11 unviable, 4 missed: an index and a tagged template being told apart to no end, the method-call pairing, a chain that is a statement's whole expression, and the three-call threshold, which a no-op fix had hidden), then the 25 mutants of the chain module rerun after a simplification and a test for each: 25 caught, 0 missed; every §0.2 gate clean.
 
 **Done when**
 - A chain of three or more calls breaks before each `.`, one call per line, regardless of
