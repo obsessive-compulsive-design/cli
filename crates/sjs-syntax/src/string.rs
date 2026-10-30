@@ -83,9 +83,12 @@ pub(crate) fn scan_template(text: &str, start: usize) -> TemplateScan {
     }
 }
 
-/// The double-quoted spelling of a single-quoted literal `raw`, changing only what the
-/// quotes force: `\'` loses its backslash and a bare `"` gains one (SPEC.md §8.5).
-pub(crate) fn double_quoted(raw: &str) -> String {
+/// The double-quoted spelling of the string literal `raw` (either quote kind, as
+/// written, quotes included), changing only what the quotes force: `\'` loses its
+/// backslash and a bare `"` gains one (SPEC.md §8.5, §9.2). The lexer's S001 replacement
+/// and the formatter's output come from here alone, so they cannot disagree (US-041).
+#[must_use]
+pub fn double_quoted(raw: &str) -> String {
     let mut out = String::from("\"");
     let mut chars = raw[1..raw.len() - 1].chars();
     while let Some(ch) = chars.next() {

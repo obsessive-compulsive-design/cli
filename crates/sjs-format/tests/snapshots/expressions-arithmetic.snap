@@ -1,0 +1,24 @@
+x=a+b-c
+  => x = a + b - c
+x = a*b/c%d
+  => x = a * b / c % d
+x = a ** b ** c
+  => x = a ** b ** c
+x = (a + b) * c
+  => x = (a + b) * c
+x = (a * b) + c
+  => x = a * b + c
+x = a - (b - c)
+  => x = a - (b - c)
+x = (a - b) - c
+  => x = a - b - c
+x = (-a) ** 2
+  => x = (-a) ** 2
+x = -(a ** 2)
+  => x = -(a ** 2)
+x = a+-b
+  => x = a + -b
+x = a - -b
+  => x = a - -b
+x = a*(b+c)*d
+  => x = a * (b + c) * d

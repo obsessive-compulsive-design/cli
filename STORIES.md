@@ -1331,8 +1331,8 @@ as a body (`if (x) const y = 1`) is `E000`.
 > reinterpreted (`ArrayPattern`, `ObjectPattern`, `PatternProperty`, `RestElement`,
 > nested, with defaults), every target checked, and a shorthand default `{ a = 1 }` is
 > E000 unless the literal becomes a pattern; a compound assignment takes a name or a
-> property; `a + b = c` is E000; a parenthesised name or property is accepted and is S005
-> with the fix `(a)` → `a`. An arrow function or `yield` inside an operand is E000 asking
+> property; `a + b = c` is E000; a parenthesised name or property is accepted, its S005
+> being the formatter's (US-041). An arrow function or `yield` inside an operand is E000 asking
 > for parentheses. `await` outside an `async` function is E000, at the module's top level
 > accepted. The token-run extent and its heuristics are gone: a `/` is a regex or a
 > division by its grammatical position, and a simple statement ends at a `;` or where ASI
@@ -1353,8 +1353,8 @@ as a body (`if (x) const y = 1`) is `E000`.
 > `^=`) are accepted although §2's `AssignExpr` lists eight operators, since they are
 > ES2025, absent from the removed productions and §12, and their operators are permitted
 > (§4.1); the replacement named for `||=`/`&&=` follows §12's `||`/`&&` row, the spec's
-> own row being garbled; S005 is reported here only for a parenthesised assignment
-> target (US-041 owns S005 in general); `(a?.b).c` is a plain member, since the
+> own row being garbled; S005 is not reported here, a parenthesised assignment target
+> being accepted for the formatter to judge (US-041); `(a?.b).c` is a plain member, since the
 > parentheses end the chain. The precedence table test covers every adjacent pair of
 > levels in both orders plus each operator's associativity: over 110 cases. Verified:
 > 100% lines and regions; 354 mutants on the diff (285 caught, 35 unviable, 18 timeouts,
@@ -1690,7 +1690,61 @@ groups where only the inner breaks; empty document; indentation inside a broken 
 inside a flat parent.
 
 #### US-041 Expression formatting and punctuation
-§9.2, S001, S005 · After: US-040, US-030 · Size: M · M0
+§9.2, S001, S005 · After: US-040, US-030 · Size: M · M0 · **Status: complete** (2026-10-29)
+
+> Delivered in `sjs-format`: `expr.rs` holds `Formatter::new(&file, &tree)`, whose
+> `expression(node)`/`element(element)` give the document of an expression and whose
+> `redundant_parentheses()` gives one S005 per pair the layout drops (the pair's span;
+> fix: the pair as written → the text inside). `sjs-cli`'s pipeline runs it after the
+> parse of every file, so S005 has one source: the parser accepts a parenthesised
+> assignment target silently (US-030's own S005 moved here). Rules (§9.2): a binary,
+> assignment, conditional or initializer takes a space on each side of its operator and
+> of `? :`; `,` and `:` take a space after; `()` and `[]` have no inner spaces; `{ a }`
+> for an object or a destructuring pattern on one line, `{}` and `[]` when empty; a
+> call, `new`, `import()`, array, object, pattern or parameter list is a group whose
+> items sit on one line or one per line indented with a trailing comma (none after a
+> rest element or parameter, which ES forbids; a spread takes it); a prefix operator glues to its operand except a word (`typeof`,
+> `await`, `yield`, `yield*`) and a sign that would merge with the operand's own (`- -a`;
+> `-+a` merges); members, indexes, optional chains, updates, spreads and tagged templates
+> glue; a template literal is copied as written, substitutions included (§9.3); a string
+> goes through `sjs_syntax::double_quoted`, the function behind the lexer's S001
+> replacement, so `'"'` → `"\""` in both; a node this story does not format (a block, a
+> removed form) is copied as written. Parentheses: each slot wants a level of the
+> ES2025 table (a conditional's test a short-circuit expression and its branches values;
+> a left-associative operator its own level on the left and one tighter on the right;
+> `**` an update expression on the left; a member, call or tag a left-hand side; `new`
+> a member expression as its callee, a call there taking the arguments (the subset
+> accepts only a name, so this rule meets no clean program); `=`'s target a left-hand
+> side; a unary or `await` operand a unary; `yield`, arguments,
+> elements, properties, initializers, arrow bodies, spreads, for-of and for-update
+> values an assignment expression; an expression statement, a pair inside a pair,
+> statement heads, indexes, classic `for` clauses and an update's operand any
+> expression); a pair stays when what it holds is looser than its slot wants, when
+> `??` sits beside `&&`/`||` on either side, when an optional chain would otherwise
+> continue (`(a?.b).c`), when a sign would merge once the pairs inside are dropped
+> (`-(-a)`; `-((-a))` → `-(-a)`), when a statement or an arrow
+> body would otherwise begin with `{`, however deep on the left (`({}).x`,
+> `() => ({}).x`), and when it holds nothing (kept as written; a removed form keeps its
+> tokens bare, so it holds no pair to judge); every other pair is dropped and reported, nested
+> pairs one finding each (`((a))` → two). Tests: unit tests per rule;
+> `tests/snapshot_expressions.rs`, a snapshot per operator family (arithmetic, bitwise
+> and shift, comparison and logic, assignment and conditional, unary and update,
+> members, calls and `new`, literals, arrows and patterns); `tests/parens.rs`, the table
+> over every pair of the 22 binary operators on both sides (968 cases) checking that a
+> pair is kept exactly when removing it changes the parse (judged on trees stripped of
+> redundant pairs by `tests/common`, US-050's `strip`), that the output parses to the
+> same stripped tree and formats to itself, plus the story's edges; fixtures in
+> `tests/conformance/04-expressions/S005/` (nested pairs, left operand, argument, arrow
+> body, a near-miss list of every pair that stays), and four existing fixtures whose
+> pairs were redundant rewritten to need them. **Decisions:** S005 is computed by the
+> same `keeps` the layout uses, so `lint` and `format` cannot disagree; the tag of a
+> tagged template is a left-hand side (`(a.b)\`t\`` → `a.b\`t\``); `(yield)` as a whole
+> value is redundant (`x = yield` parses) where `(yield) + 1` is not; nothing inside a
+> template literal is judged, since §9.3 copies it whole; a sequence, a `for (;;)` and
+> other removed forms still get a verdict from the tree the parser builds, so the table
+> holds for them too; the level table ends at the member expression, a tighter
+> "primary" being indistinguishable from it since no slot wants more; chains, binaries
+> and ternaries stay on one line here (US-044 breaks them). Verified: 100% lines and regions; 177 mutants on the diff (154 caught, 17 unviable, 6 missed: the `first` guard of an assignment target, the update and left-hand-side levels, the sign look-through, the call's spread accounting and the arrow-body check), then the mutants of `keeps_under`, `inner_level`, `leads_with`, `same_sign`, `call`, `leftmost_of` and `bracketed` rerun after a test or a simplification for each, twice (59: 4 missed, two arms the wildcard had come to subsume, an `await` operand and a `new` argument; 57: 57 caught, 0 missed); the table clean over its 968 cases; every §0.2 gate clean.
 
 **Done when**
 - Spaces around binary operators and after `,` `:`; none inside `()` `[]`; `{ a }` for

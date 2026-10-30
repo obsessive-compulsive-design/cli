@@ -6,6 +6,10 @@ license.workspace = true
 publish.workspace = true
 description = "Canonical layout and S-code diffs."
 
+[dependencies]
+sjs-diag = { path = "../sjs-diag" }
+sjs-syntax = { path = "../sjs-syntax" }
+
 [dev-dependencies]
 sjs-testkit = { path = "../sjs-testkit" }
 

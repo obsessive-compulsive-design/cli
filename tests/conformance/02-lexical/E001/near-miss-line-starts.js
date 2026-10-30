@@ -1,16 +1,16 @@
 // Every line start that is no hazard: no diagnostic. The first line is never one.
-(first)
+(first + 1).x
 const o = {
 }
 const s = o
   .toString()
 class A {}
-(second)
+(second + 1).x
 {
-  (third)
+  (third + 1).x
 }
 const t = () => {}
-(fourth)
+(fourth + 1).x
 if (s) {
 }
 [a, b] = [b, a]

@@ -15,6 +15,7 @@ name = "sjs-cli"
 version = "0.1.0"
 dependencies = [
  "sjs-diag",
+ "sjs-format",
  "sjs-syntax",
  "sjs-testkit",
 ]
@@ -31,6 +32,8 @@ version = "0.1.0"
 name = "sjs-format"
 version = "0.1.0"
 dependencies = [
+ "sjs-diag",
+ "sjs-syntax",
  "sjs-testkit",
 ]
 

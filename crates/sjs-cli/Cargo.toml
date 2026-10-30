@@ -8,6 +8,7 @@ description = "The sjs command line: argv, dispatch, exit codes, help."
 
 [dependencies]
 sjs-diag = { path = "../sjs-diag" }
+sjs-format = { path = "../sjs-format" }
 sjs-syntax = { path = "../sjs-syntax" }
 
 [[bin]]

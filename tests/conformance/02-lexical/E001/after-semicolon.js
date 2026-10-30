@@ -3,4 +3,4 @@
 // A `;` does not exempt the line: semicolons are style (S002), and without this
 // one the lines would join.
 const a = b;
-(c)
+(c + d).e

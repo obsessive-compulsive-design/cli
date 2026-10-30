@@ -1,0 +1,28 @@
+x = - a
+  => x = -a
+x = + a
+  => x = +a
+x = ~ a
+  => x = ~a
+x = ! a
+  => x = !a
+x = typeof  a
+  => x = typeof a
+x = typeof (a + b)
+  => x = typeof (a + b)
+x = typeof typeof a
+  => x = typeof typeof a
+x = await  p
+  => x = await p
+x = (await p).then
+  => x = (await p).then
+x = -(-a)
+  => x = -(-a)
+x = - -a
+  => x = - -a
+i ++
+  => i++
+-- i
+  => --i
+x = a.b ++
+  => x = a.b++

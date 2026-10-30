@@ -1,0 +1,28 @@
+x = a . b . c
+  => x = a.b.c
+x = a [ b ] [ 0 ]
+  => x = a[b][0]
+x = a ?. b ?. [ c ] ?. ( d )
+  => x = a?.b?.[c]?.(d)
+x = (a?.b).c
+  => x = (a?.b).c
+x = f ( a , b )
+  => x = f(a, b)
+x = f ( )
+  => x = f()
+x = f ( ... xs , y )
+  => x = f(...xs, y)
+x = (a.b)()
+  => x = a.b()
+x = (() => 1)()
+  => x = (() => 1)()
+x = new  A ( )
+  => x = new A()
+x = new ns . A ( 1 , 2 )
+  => x = new ns.A(1, 2)
+x = new A ( ) . b
+  => x = new A().b
+x = import ( './a.js' )
+  => x = import("./a.js")
+x = this . a
+  => x = this.a

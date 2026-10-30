@@ -14,5 +14,5 @@ const e = `${b}`
 const g = new A()
 const h = new ns.B()
 const i = await import("./i.js")
-const j = (1)
+const j = (1 + 2) * 3
 f(c, d, e, g, h, i, j)

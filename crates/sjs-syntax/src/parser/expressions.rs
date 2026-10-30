@@ -22,7 +22,7 @@
 //! `i -= 1`) and E000 wherever else they are a value (§4.3). The left side of `=` is a
 //! name, a property or an array or object pattern (the literal is reinterpreted); of a
 //! compound assignment, a name or a property; a parenthesised name or property is
-//! accepted and is S005.
+//! accepted (its parentheses are the formatter's S005, US-041).
 
 use std::collections::BTreeMap;
 
@@ -239,7 +239,7 @@ fn assignment_kind(punct: Punct) -> Option<Assign> {
     }
 }
 
-/// The left side of an assignment: what the operator accepts, S005 for parentheses
+/// The left side of an assignment: what the operator accepts, parentheses accepted
 /// around a name or property, and a literal before `=` made a pattern.
 fn check_target(p: &mut Parser<'_>, target: Expr, kind: Assign, op: &Token, covers: usize) {
     let operator = p.text(op);
@@ -251,23 +251,9 @@ fn check_target(p: &mut Parser<'_>, target: Expr, kind: Assign, op: &Token, cove
         return;
     }
     match target.shape {
-        Shape::Name | Shape::Member => {}
-        Shape::ParenTarget => {
-            let current = p.file.slice(&target.span).unwrap_or("").to_owned();
-            let inner = current
-                .strip_prefix('(')
-                .and_then(|rest| rest.strip_suffix(')'))
-                .unwrap_or(&current)
-                .trim()
-                .to_owned();
-            p.report_with_fix(
-                Code::S005,
-                target.span,
-                "redundant parentheses around an assignment target",
-                current,
-                inner,
-            );
-        }
+        // A parenthesised name or property is accepted too; the parentheses are the
+        // formatter's S005 (US-041).
+        Shape::Name | Shape::Member | Shape::ParenTarget => {}
         Shape::Array(node) | Shape::Object(node) if kind == Assign::Plain => {
             // The literal is a pattern after all: its shorthand defaults are its own.
             p.covers.truncate(covers);
@@ -2127,20 +2113,13 @@ mod tests {
                 "`{ a = 1 }` is a pattern's default",
             ),
         ]);
-        let found = fixes("(a) = 1");
-        assert_eq!(
-            found,
-            vec![(Code::S005, Some("(a)".to_owned()), Some("a".to_owned()))],
-            "accepted, with redundant parentheses"
-        );
-        assert_eq!(
-            fixes("( a.b ) += 1"),
-            vec![(
-                Code::S005,
-                Some("( a.b )".to_owned()),
-                Some("a.b".to_owned())
-            )]
-        );
+        for text in ["(a) = 1", "( a.b ) += 1"] {
+            assert_eq!(
+                diagnostics(text),
+                Vec::new(),
+                "accepted: the redundant parentheses are the formatter's S005 (US-041): {text}"
+            );
+        }
         assert_eq!(
             diagnostics("[{ a = 1 }] = b"),
             Vec::new(),

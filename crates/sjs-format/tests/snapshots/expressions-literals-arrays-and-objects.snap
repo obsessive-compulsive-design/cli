@@ -1,0 +1,32 @@
+x = 'single'
+  => x = "single"
+x = 'it\'s "quoted"'
+  => x = "it's \"quoted\""
+x = "kept"
+  => x = "kept"
+x = '"'
+  => x = "\""
+x = `a ${ b } c`
+  => x = `a ${ b } c`
+x = `line
+break`
+  => x = `line
+break`
+x = String.raw`\n`
+  => x = String.raw`\n`
+x = /re/v
+  => x = /re/v
+x = 1_000n
+  => x = 1_000n
+x = [ 1 , 2 , 3 ]
+  => x = [1, 2, 3]
+x = [ ]
+  => x = []
+x = [ 1 , , 2 ]
+  => x = [1, , 2]
+x = { a , b : 1 , 'c' : 2 , [ d ] : 3 , ... e }
+  => x = { a, b: 1, "c": 2, [d]: 3, ...e }
+x = { }
+  => x = {}
+x = { a: { b: [ 1 ] } }
+  => x = { a: { b: [1] } }

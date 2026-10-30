@@ -30,6 +30,7 @@ mod unicode_property;
 
 pub use lexer::{lex, regex_allowed_after, Lexer};
 pub use parser::{parse, Parser};
+pub use string::double_quoted;
 pub use token::{
     Keyword, Number, Punct, Regex, Template, TemplatePart, Token, TokenKind, TokenStream, Trivia,
     TriviaKind,
