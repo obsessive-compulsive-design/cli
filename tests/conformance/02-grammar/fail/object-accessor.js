@@ -3,5 +3,5 @@
 const o = {
   get a() {
     return 1
-  }
+  },
 }

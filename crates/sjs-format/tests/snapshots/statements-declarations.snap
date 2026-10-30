@@ -28,7 +28,9 @@ const o = {
   a: 1,
 }
 --- formatted
-const o = { a: 1 }
+const o = {
+  a: 1,
+}
 
 --- source
 const t = `a

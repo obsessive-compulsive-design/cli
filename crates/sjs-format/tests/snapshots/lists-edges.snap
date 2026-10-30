@@ -1,0 +1,90 @@
+--- source
+const only = [aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]
+--- formatted
+const only = [
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
+]
+
+--- source
+f([aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa], b)
+--- formatted
+f(
+  [
+    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
+  ],
+  b,
+)
+
+--- source
+const kept = {
+  a: 1, b: 2 }
+--- formatted
+const kept = {
+  a: 1,
+  b: 2,
+}
+
+--- source
+const kept = { // why
+  a: 1 }
+--- formatted
+const kept = {
+  a: 1,
+}
+
+--- source
+const kept = { /* why */ a: 1 }
+--- formatted
+const kept = {
+  a: 1,
+}
+
+--- source
+f({
+  a: 1 }, b)
+--- formatted
+f(
+  {
+    a: 1,
+  },
+  b,
+)
+
+--- source
+const empty = {
+}
+--- formatted
+const empty = {}
+
+--- source
+const same = { a: 1,
+  b: 2 }
+--- formatted
+const same = { a: 1, b: 2 }
+
+--- source
+function f(a, ...rest) {}
+--- formatted
+function f(a, ...rest) {}
+
+--- source
+const f = () => { return a }
+--- formatted
+const f = () => a
+
+--- source
+const g = () => { return { a } }
+--- formatted
+const g = () => ({ a })
+
+--- source
+const h = () => {
+  f()
+  return a
+}
+--- formatted
+const h = () => {
+  f()
+  return a
+}
+

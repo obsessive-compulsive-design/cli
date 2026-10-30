@@ -1,0 +1,38 @@
+--- source
+import { first, second as alias, third, fourth, fifth, sixth, seventh, xxxxxxxxxxxxx } from "./a.js"
+--- at 99
+import {
+  first,
+  second as alias,
+  third,
+  fourth,
+  fifth,
+  sixth,
+  seventh,
+  xxxxxxxxxxxxx,
+} from "./a.js"
+--- at 100
+import { first, second as alias, third, fourth, fifth, sixth, seventh, xxxxxxxxxxxxx } from "./a.js"
+--- at 101
+import { first, second as alias, third, fourth, fifth, sixth, seventh, xxxxxxxxxxxxx } from "./a.js"
+
+--- source
+export { first, second as alias, third, fourth, fifth, sixth, seventh, eighth, ninth, xxxxxxxxxxxx }
+--- at 99
+export {
+  first,
+  second as alias,
+  third,
+  fourth,
+  fifth,
+  sixth,
+  seventh,
+  eighth,
+  ninth,
+  xxxxxxxxxxxx,
+}
+--- at 100
+export { first, second as alias, third, fourth, fifth, sixth, seventh, eighth, ninth, xxxxxxxxxxxx }
+--- at 101
+export { first, second as alias, third, fourth, fifth, sixth, seventh, eighth, ninth, xxxxxxxxxxxx }
+

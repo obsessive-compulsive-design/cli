@@ -1833,7 +1833,44 @@ trailing newline plus a trailing comment; an empty clause block; blank lines ins
 multi-line template untouched.
 
 #### US-043 Lists and breaking
-§9.3, S004, S011 · After: US-041 · Size: M · M0
+§9.3, S004, S011 · After: US-041 · Size: M · M0 · **Status: complete** (2026-10-29)
+
+> Delivered in `sjs-format`: the lists US-041 laid out (arrays, objects, arguments of a
+> call, `new` and `import()`, parameter lists, array and object patterns, import and
+> export lists) are one line when they fit in the width and one item per line
+> otherwise, with a trailing comma only then and never after a rest element or
+> parameter; `tests/snapshot_lists.rs` shows each kind at widths 99, 100 and 101 from a
+> source that is exactly 100 columns flat, so 99 breaks it and 100 and 101 do not. An
+> object literal with a line break or a comment between `{` and its first key stays one
+> key per line whatever its width (`list` sees it on the first key's trivia and
+> `bracketed` separates with hard breaks), and a broken list breaks every list around
+> it, since a hard break never fits; an empty object across two lines is `{}`. An arrow
+> whose block body is a single `return` with a value, and holds no comment, is laid out
+> with the value as its body, in parentheses when it begins with `{`
+> (`() => { return { a } }` → `() => ({ a })`); `lists.rs` holds that rule
+> (`single_return`) with `Formatter::arrow_returns()`, one S011 per such arrow with the
+> block as the current text and the value as the replacement, and
+> `Formatter::trailing_commas()`, one S004 per list whose trailing comma differs from
+> its canonical layout's: the canonical text is parsed again and its lists paired with
+> the source's in order, so a comma in a single-line list (fix: dropped) and none at the
+> end of a multi-line one (fix: one after the last item) are both found with no second
+> layout algorithm; a file the grammar rejects whose lists do not pair up after layout
+> gets nothing. `Formatter::module_at(width)` lays a file out at any width for the
+> tests. `sjs-cli`'s pipeline runs both. Tests: unit tests for S004 in each kind and
+> direction, for S011 and for every block that is not one `return`; the snapshots above
+> plus the story's edges (an over-long only element, a broken child forcing its parent,
+> the three ways an object stays expanded, the collapsing empty object, a rest
+> parameter); fixtures under `tests/conformance/09-breaking/` for S004 and S011 with
+> near-misses. Nine existing fixtures held trailing commas in single-line lists,
+> multi-line objects without one, or one-`return` arrows and were rewritten to the
+> canonical form or, for the array hole (a removed form), given the expectation.
+> **Decisions:** S004 is judged by the canonical text itself, formatted and parsed again,
+> rather than by instrumenting the layout: the lists of a file and of its layout pair
+> up one to one, and when they do not (a removed form read differently) S004 is
+> withheld; an object kept expanded expands every list around it (no "hugging"), the
+> story's "a broken child forces the parent"; a block body with a comment, a bare
+> `return` or more than one statement is left alone; a form copied as written is its
+> own layout, so its commas are never S004. Verified: 100% lines and regions; 55 mutants on the diff: 42 caught, 13 unviable, 0 missed; the width snapshots flip at 99 for every kind; every §0.2 gate clean.
 
 **Done when**
 - Objects, arrays, arguments, parameters and import lists are single-line when they fit

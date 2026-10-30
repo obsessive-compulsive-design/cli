@@ -1,0 +1,21 @@
+--- source
+const array = [first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth, xxxxxxxxx]
+--- at 99
+const array = [
+  first,
+  second,
+  third,
+  fourth,
+  fifth,
+  sixth,
+  seventh,
+  eighth,
+  ninth,
+  tenth,
+  xxxxxxxxx,
+]
+--- at 100
+const array = [first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth, xxxxxxxxx]
+--- at 101
+const array = [first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth, xxxxxxxxx]
+

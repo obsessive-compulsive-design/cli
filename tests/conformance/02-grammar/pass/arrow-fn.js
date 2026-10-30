@@ -4,6 +4,7 @@ const b = () => {}
 const c = (x, y = 1, ...z) => [x, y, z]
 const d = async (p) => await p
 const e = async () => {
-  return 1
+  const one = 1
+  return one
 }
 f(a, b, c, d, e)

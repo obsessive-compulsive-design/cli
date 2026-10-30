@@ -58,6 +58,13 @@ pub fn module(text: &str) -> String {
     Formatter::new(&f, &tree).module()
 }
 
+/// The whole file `text`, formatted at `width` columns (US-043).
+pub fn module_at(text: &str, width: usize) -> String {
+    let f = file(text);
+    let (tree, _) = parse(&f);
+    Formatter::new(&f, &tree).module_at(width)
+}
+
 /// The tree of `text` with redundant parentheses removed, as an s-expression, or
 /// `None` when it does not parse clean.
 pub fn stripped(text: &str) -> Option<String> {

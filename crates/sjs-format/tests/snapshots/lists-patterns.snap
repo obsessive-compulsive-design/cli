@@ -1,0 +1,39 @@
+--- source
+const [first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth, xxxxxxxxxxxxx] = x
+--- at 99
+const [
+  first,
+  second,
+  third,
+  fourth,
+  fifth,
+  sixth,
+  seventh,
+  eighth,
+  ninth,
+  tenth,
+  xxxxxxxxxxxxx,
+] = x
+--- at 100
+const [first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth, xxxxxxxxxxxxx] = x
+--- at 101
+const [first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth, xxxxxxxxxxxxx] = x
+
+--- source
+const { first, second: alias, third = 3, fourth, fifth, sixth, seventh, ...xxxxxxxxxxxxxxxxxxx } = x
+--- at 99
+const {
+  first,
+  second: alias,
+  third = 3,
+  fourth,
+  fifth,
+  sixth,
+  seventh,
+  ...xxxxxxxxxxxxxxxxxxx
+} = x
+--- at 100
+const { first, second: alias, third = 3, fourth, fifth, sixth, seventh, ...xxxxxxxxxxxxxxxxxxx } = x
+--- at 101
+const { first, second: alias, third = 3, fourth, fifth, sixth, seventh, ...xxxxxxxxxxxxxxxxxxx } = x
+

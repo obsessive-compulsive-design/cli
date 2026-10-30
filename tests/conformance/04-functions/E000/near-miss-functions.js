@@ -13,6 +13,7 @@ async function* i() {
 }
 const j = (a) => a
 const k = async (a, { b }, ...c) => {
+  g(b)
   return a
 }
 const l = () => ({})

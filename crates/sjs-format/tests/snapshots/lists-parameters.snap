@@ -1,0 +1,40 @@
+--- source
+function f(first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, ...xxxxxxxxxxxxxx) {}
+--- at 99
+function f(
+  first,
+  second,
+  third,
+  fourth,
+  fifth,
+  sixth,
+  seventh,
+  eighth,
+  ninth,
+  ...xxxxxxxxxxxxxx
+) {}
+--- at 100
+function f(first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, ...xxxxxxxxxxxxxx) {}
+--- at 101
+function f(first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, ...xxxxxxxxxxxxxx) {}
+
+--- source
+const f = (first, second, third = 3, fourth, fifth, sixth, seventh, eighth, ninth, xxxxxxxxxxx) => f
+--- at 99
+const f = (
+  first,
+  second,
+  third = 3,
+  fourth,
+  fifth,
+  sixth,
+  seventh,
+  eighth,
+  ninth,
+  xxxxxxxxxxx,
+) => f
+--- at 100
+const f = (first, second, third = 3, fourth, fifth, sixth, seventh, eighth, ninth, xxxxxxxxxxx) => f
+--- at 101
+const f = (first, second, third = 3, fourth, fifth, sixth, seventh, eighth, ninth, xxxxxxxxxxx) => f
+

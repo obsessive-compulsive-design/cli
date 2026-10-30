@@ -1,0 +1,41 @@
+--- source
+call(first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth, eleventh, xxxxxxxxx)
+--- at 99
+call(
+  first,
+  second,
+  third,
+  fourth,
+  fifth,
+  sixth,
+  seventh,
+  eighth,
+  ninth,
+  tenth,
+  eleventh,
+  xxxxxxxxx,
+)
+--- at 100
+call(first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth, eleventh, xxxxxxxxx)
+--- at 101
+call(first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth, eleventh, xxxxxxxxx)
+
+--- source
+const instance = new Thing(first, second, third, fourth, fifth, sixth, seventh, eighth, xxxxxxxxxxx)
+--- at 99
+const instance = new Thing(
+  first,
+  second,
+  third,
+  fourth,
+  fifth,
+  sixth,
+  seventh,
+  eighth,
+  xxxxxxxxxxx,
+)
+--- at 100
+const instance = new Thing(first, second, third, fourth, fifth, sixth, seventh, eighth, xxxxxxxxxxx)
+--- at 101
+const instance = new Thing(first, second, third, fourth, fifth, sixth, seventh, eighth, xxxxxxxxxxx)
+

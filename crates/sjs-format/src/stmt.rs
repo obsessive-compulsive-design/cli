@@ -9,7 +9,7 @@
 use sjs_diag::Span;
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct, Token, TokenKind, Trivia, TriviaKind};
 
-use crate::doc::{print, Doc};
+use crate::doc::{layout, Doc, WIDTH};
 use crate::expr::Formatter;
 
 /// Where a `*` glues: to the word before it (`function* g`) or to the name after it
@@ -32,11 +32,18 @@ impl Formatter<'_> {
     /// file with nothing in it.
     #[must_use]
     pub fn module(&self) -> String {
+        self.module_at(WIDTH)
+    }
+
+    /// [`Self::module`] at `width` columns instead of the canonical width, for tests
+    /// that show a layout flipping.
+    #[must_use]
+    pub fn module_at(&self, width: usize) -> String {
         let mut docs = self.items(self.tree.root(), true);
         if matches!(docs.first(), Some(Doc::HardLine)) {
             docs.remove(0);
         }
-        let text = print(&docs);
+        let text = layout(&docs, width);
         if text.is_empty() {
             text
         } else {

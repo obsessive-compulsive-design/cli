@@ -5,7 +5,7 @@
 //! what the pipeline can already find. Today that is US-004 (UTF-8 and BOM validation)
 //! the parser (US-010 to US-033: E000 for what the grammar rejects, E001 and E002, S001,
 //! S002 and S012, E201, E202 and E205) and the formatter's S005 (US-041), S007 and S008
-//! (US-042).
+//! (US-042), S004 and S011 (US-043).
 
 use sjs_diag::{Diagnostics, SourceFile};
 
@@ -30,10 +30,13 @@ pub fn check_files(files: &[InputFile]) -> Diagnostics {
                 let (tree, found) = sjs_syntax::parse(&source);
                 diagnostics.extend(found.iter().cloned());
                 // US-041: the formatter's S005 for every redundant pair of parentheses;
-                // US-042: its S007 and S008 for the text's whitespace.
+                // US-042: its S007 and S008 for the text's whitespace; US-043: its S004
+                // for trailing commas and S011 for arrow bodies.
                 let formatter = sjs_format::Formatter::new(&source, &tree);
                 diagnostics.extend(formatter.redundant_parentheses());
                 diagnostics.extend(formatter.whitespace());
+                diagnostics.extend(formatter.trailing_commas());
+                diagnostics.extend(formatter.arrow_returns());
             }
         }
     }

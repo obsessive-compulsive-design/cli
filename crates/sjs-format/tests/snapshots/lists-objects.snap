@@ -1,0 +1,17 @@
+--- source
+const object = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: xxxxxxxxxx }
+--- at 99
+const object = {
+  first: 1,
+  second: 2,
+  third: 3,
+  fourth: 4,
+  fifth: 5,
+  sixth: 6,
+  seventh: xxxxxxxxxx,
+}
+--- at 100
+const object = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: xxxxxxxxxx }
+--- at 101
+const object = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5, sixth: 6, seventh: xxxxxxxxxx }
+

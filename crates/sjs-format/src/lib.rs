@@ -6,7 +6,8 @@
 //! stay, the rest being S005. [`stmt`] maps statements, declarations and blank lines
 //! and prints a whole file (US-042); [`whitespace`] reports what the text gets wrong
 //! about indentation, line endings, trailing whitespace and the final newline (S007,
-//! S008).
+//! S008); [`lists`] reports a trailing comma at odds with a list's layout (S004) and an
+//! arrow whose block body is one `return` (S011, US-043).
 //!
 //! ```
 //! use sjs_format::{print, Doc};
@@ -21,6 +22,7 @@
 
 pub mod doc;
 pub mod expr;
+pub mod lists;
 pub mod stmt;
 pub mod whitespace;
 

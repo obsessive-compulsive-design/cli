@@ -11,9 +11,11 @@
 use sjs_diag::{Code, Diagnostic, SourceFile};
 use sjs_syntax::{
     double_quoted, Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, Token, TokenKind,
+    TriviaKind,
 };
 
 use crate::doc::Doc;
+use crate::lists::single_return;
 
 /// Precedence of an expression, higher binding tighter: ES2025's levels, with `?.`
 /// chains, calls and `import()` as left-hand sides and, above them, members, `new` with
@@ -384,7 +386,7 @@ impl<'a> Formatter<'a> {
                 }
                 Element::Token(token) if token.token().kind == TokenKind::Punct(Punct::RParen) => {
                     in_list = false;
-                    out.push(bracketed("(", ")", items, false, false));
+                    out.push(bracketed("(", ")", items, false, false, false));
                     items = Vec::new();
                 }
                 Element::Token(token) if in_list => {
@@ -406,8 +408,18 @@ impl<'a> Formatter<'a> {
 
     /// `[ … ]`, `{ … }` or `( … )` holding items separated by commas: one line with a
     /// space inside braces when it fits, one item per line with a trailing comma
-    /// otherwise, `{}`, `[]` and `()` when empty. A hole in an array stays a hole.
+    /// otherwise, `{}`, `[]` and `()` when empty. A hole in an array stays a hole. An
+    /// object literal with a line break or a comment between `{` and its first key
+    /// stays one item per line: the one layout intention honored (§9.3).
     pub(crate) fn list(&self, node: NodeRef<'_>, braces: bool) -> Doc {
+        let expanded = node.kind() == NodeKind::ObjectLit
+            && node.tokens().get(1).is_some_and(|first| {
+                first.has_newline_before
+                    || first
+                        .leading
+                        .iter()
+                        .any(|trivia| trivia.kind != TriviaKind::Whitespace)
+            });
         let mut items: Vec<Doc> = Vec::new();
         let mut open = "";
         let mut close = "";
@@ -444,7 +456,7 @@ impl<'a> Formatter<'a> {
                 }
             }
         }
-        bracketed(open, close, items, braces, rest_last)
+        bracketed(open, close, items, braces, rest_last, expanded)
     }
 
     /// A property, pattern property, pattern element or parameter: `key: value`,
@@ -474,7 +486,10 @@ impl<'a> Formatter<'a> {
 
     /// `[async] (params) => body`; an object-literal body keeps the parentheses that
     /// make it one.
+    /// `(params) => body`; a block body that is a single `return` with a value becomes
+    /// the value (S011, US-043), in parentheses when it begins with `{`.
     fn arrow(&self, node: NodeRef<'_>) -> Doc {
+        let returned = single_return(node).map(|(_, value)| value);
         let mut out = Vec::new();
         for child in node.children() {
             match child {
@@ -488,27 +503,54 @@ impl<'a> Formatter<'a> {
                         out.push(Doc::text(text));
                     }
                 }
-                Element::Node(child) => out.push(self.expression(child)),
+                Element::Node(child) => match returned {
+                    Some(value) if child.kind() == NodeKind::Block => {
+                        out.push(self.expression_body(value));
+                    }
+                    _ => out.push(self.expression(child)),
+                },
             }
         }
         Doc::Group(out)
+    }
+
+    /// An arrow's expression body: in parentheses when it would read as a block.
+    fn expression_body(&self, value: Element<'_>) -> Doc {
+        if begins_a_block_like(value) {
+            Doc::Group(vec![Doc::text("("), self.element(value), Doc::text(")")])
+        } else {
+            self.element(value)
+        }
     }
 }
 
 /// `open items close` as a group: flat with a space inside braces, one item per line
 /// with a trailing comma when broken, empty brackets for no items. A list ending in a
 /// rest element or parameter never gets the trailing comma (ES forbids it); a spread
-/// argument or element takes it.
-fn bracketed(open: &str, close: &str, items: Vec<Doc>, braces: bool, rest_last: bool) -> Doc {
+/// argument or element takes it. An `expanded` list is one item per line whatever its
+/// width, and so is every list around it.
+fn bracketed(
+    open: &str,
+    close: &str,
+    items: Vec<Doc>,
+    braces: bool,
+    rest_last: bool,
+    expanded: bool,
+) -> Doc {
     if items.is_empty() {
         return Doc::text(format!("{open}{close}"));
     }
-    let separator = if braces { Doc::Line } else { Doc::SoftLine };
+    let separator = match (expanded, braces) {
+        (true, _) => Doc::HardLine,
+        (false, true) => Doc::Line,
+        (false, false) => Doc::SoftLine,
+    };
+    let between = if expanded { Doc::HardLine } else { Doc::Line };
     let mut inner = vec![separator.clone()];
     for (at, item) in items.into_iter().enumerate() {
         if at > 0 {
             inner.push(Doc::text(","));
-            inner.push(Doc::Line);
+            inner.push(between.clone());
         }
         inner.push(item);
     }
@@ -536,7 +578,7 @@ fn inner_of(paren: NodeRef<'_>) -> Option<Element<'_>> {
 
 /// Whether `inner` begins with `{`, `function` or `class`: at the start of a
 /// statement or an arrow body it would read as a block or a declaration.
-fn begins_a_block_like(inner: Element<'_>) -> bool {
+pub(crate) fn begins_a_block_like(inner: Element<'_>) -> bool {
     match inner {
         Element::Node(node) => node.tokens().first().is_some_and(|token| {
             matches!(
@@ -717,8 +759,8 @@ mod tests {
         );
         assert_eq!(
             formatted("async ( a ) => { return a }"),
-            "async (a) => {\n  return a\n}",
-            "a block body is a statement's (US-042)"
+            "async (a) => a",
+            "a single return is the body (S011, US-043)"
         );
         assert_eq!(formatted("( ) => ( { a } )"), "() => ({ a })");
         assert_eq!(
