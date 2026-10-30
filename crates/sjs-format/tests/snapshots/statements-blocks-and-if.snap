@@ -1,0 +1,53 @@
+--- source
+{
+f()
+}
+--- formatted
+{
+  f()
+}
+
+--- source
+{}
+--- formatted
+{}
+
+--- source
+if(a){b()}
+--- formatted
+if (a) {
+  b()
+}
+
+--- source
+if (a) { b() } else { c() }
+--- formatted
+if (a) {
+  b()
+} else {
+  c()
+}
+
+--- source
+if (a) {
+  b()
+} else if (c) {
+  d()
+} else if (e) {} else {
+  g()
+}
+--- formatted
+if (a) {
+  b()
+} else if (c) {
+  d()
+} else if (e) {} else {
+  g()
+}
+
+--- source
+if (a) b()
+else c()
+--- formatted
+if (a) b() else c()
+

@@ -1,0 +1,55 @@
+--- source
+const a=1
+--- formatted
+const a = 1
+
+--- source
+let b = 2
+--- formatted
+let b = 2
+
+--- source
+const {x,y:[z]}=o
+--- formatted
+const { x, y: [z] } = o
+
+--- source
+let [a, b = 2, ...rest] = c
+--- formatted
+let [a, b = 2, ...rest] = c
+
+--- source
+const f=(a)=>a+1
+--- formatted
+const f = (a) => a + 1
+
+--- source
+const o = {
+  a: 1,
+}
+--- formatted
+const o = { a: 1 }
+
+--- source
+const t = `a
+  b
+
+  c`
+--- formatted
+const t = `a
+  b
+
+  c`
+
+--- source
+f()
+g();
+;
+h()
+--- formatted
+f()
+
+g()
+
+h()
+

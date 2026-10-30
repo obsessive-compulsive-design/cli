@@ -1,0 +1,35 @@
+--- source
+var v = 1
+--- formatted
+var v = 1
+
+--- source
+do {} while (a)
+--- formatted
+do {} while (a)
+
+--- source
+with (o) {}
+--- formatted
+with (o) {}
+
+--- source
+outer: for (const x of xs) {}
+--- formatted
+outer: for (const x of xs) {}
+
+--- source
+debugger
+--- formatted
+debugger
+
+--- source
+for (;;) {}
+--- formatted
+for (;;) {}
+
+--- source
+for (const k in o) {}
+--- formatted
+for (const k in o) {}
+

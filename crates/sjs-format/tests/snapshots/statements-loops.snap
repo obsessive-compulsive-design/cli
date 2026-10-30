@@ -1,0 +1,55 @@
+--- source
+while(a){b()}
+--- formatted
+while (a) {
+  b()
+}
+
+--- source
+while (true) {}
+--- formatted
+while (true) {}
+
+--- source
+for(const x of xs){f(x)}
+--- formatted
+for (const x of xs) {
+  f(x)
+}
+
+--- source
+for (let [k, v] of entries) {}
+--- formatted
+for (let [k, v] of entries) {}
+
+--- source
+for await (const chunk of stream) {
+  use(chunk)
+}
+--- formatted
+for await (const chunk of stream) {
+  use(chunk)
+}
+
+--- source
+for(let i=0;i<n;i++){f(i)}
+--- formatted
+for (let i = 0; i < n; i++) {
+  f(i)
+}
+
+--- source
+for (let i = n; i > 0; --i) {}
+--- formatted
+for (let i = n; i > 0; --i) {}
+
+--- source
+for (let i = 0; i < n; i += 2) {}
+--- formatted
+for (let i = 0; i < n; i += 2) {}
+
+--- source
+for (let i = 0; i < n; i -= 1) {}
+--- formatted
+for (let i = 0; i < n; i -= 1) {}
+

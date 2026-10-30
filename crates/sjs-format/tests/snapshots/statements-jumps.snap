@@ -1,0 +1,55 @@
+--- source
+function f() {
+  return
+}
+--- formatted
+function f() {
+  return
+}
+
+--- source
+function f() {
+  return a + b
+}
+--- formatted
+function f() {
+  return a + b
+}
+
+--- source
+function f() {
+  return;
+}
+--- formatted
+function f() {
+  return
+}
+
+--- source
+while (a) {
+  break
+}
+--- formatted
+while (a) {
+  break
+}
+
+--- source
+while (a) {
+  continue
+}
+--- formatted
+while (a) {
+  continue
+}
+
+--- source
+throw new Error("x")
+--- formatted
+throw new Error("x")
+
+--- source
+throw e;
+--- formatted
+throw e
+

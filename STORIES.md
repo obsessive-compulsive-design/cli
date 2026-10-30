@@ -1764,7 +1764,59 @@ operators checking keep/drop and parse-equivalence (US-050). Edge: `(a ?? b) || 
 replacement `"\""`.
 
 #### US-042 Statements, declarations and blank lines
-§9.1, §9.4, S007, S008 · After: US-041, US-027 · Size: M · M0
+§9.1, §9.4, S007, S008 · After: US-041, US-027 · Size: M · M0 · **Status: complete** (2026-10-29)
+
+> Delivered in `sjs-format`: `stmt.rs` gives `Formatter::module()`, the canonical text
+> of a whole file (every item on its own line, a block's items indented one level, the
+> text ending in exactly one `\n`, nothing for a file with nothing in it), and
+> `Formatter::statement(node)` for every statement, declaration, class member, clause
+> and module item of US-026/US-027 and the grammar's declarations: blocks (`{}` when
+> empty), `if`/`else if`/`else`, `while`, `for…of` and `for await…of`, the classic `for`
+> (`i++` glued, `i += 1` spaced), `return`/`break`/`continue`/`throw`, `switch` with
+> stacked labels one per line and the block after the last (`default: {}` when empty,
+> `case -1:`), `try`/`catch`/`finally`, `const`/`let` with patterns, `function`
+> (`async function* g()`), classes with every member kind (`static async *gen()`,
+> `#p = 2`, `get g()`, `static {}`, `[Symbol.iterator]()`, `extends ns.Base`), imports
+> and exports (`import { a as b } from "./a.js"`, `with { type: "json" }`), expression
+> statements through US-041; the `;` ending a statement is dropped (S002) and an empty
+> statement vanishes; a removed form (`var`, `do…while`, `with`, a label, `debugger`,
+> `for (;;)`, `for…in`) and tokens the recovery left bare are copied as written. Blank
+> lines: exactly one between two top-level items, none between two imports; inside a
+> block or a class body the source's, at most one in a row, none after `{` or before
+> `}`, and always one before a `function` declaration, above its comment. A comment
+> above an item stays above it (its own blank lines kept, at most one), a comment on an
+> item's line follows it after two spaces, comments before a closing brace or at the end
+> of the file keep their lines, and a comment beside a dropped `;` goes above what
+> follows; US-046 owns the comment text and every other position (a comment inside an
+> expression is dropped here). A template literal's lines are untouched. `expr.rs`
+> sends any node that is not an expression to `statement`, so an arrow's block body is
+> laid out too. `whitespace.rs` gives `Formatter::whitespace()`: S007 for an
+> indentation with a tab or of an odd width (no fix: the layout decides the depth) and
+> S008 for a line ending other than `\n` (`\r\n`, `\r`, U+2028, U+2029: one finding per
+> line, `\n` the fix), trailing whitespace (dropped), a missing final newline and blank
+> lines ending the file (one finding for the run); a line that begins inside a template
+> literal, a string continued over a line break or a block comment is content and keeps
+> its indentation, one that ends inside one keeps its end (the line terminators inside
+> such tokens are collected once, and a line is judged by whether the terminator before
+> it or its own is among them). `sjs-cli`'s pipeline runs it after S005. Tests: unit
+> tests per form and per S007/S008 case; `tests/snapshot_statements.rs`, a snapshot per
+> family (blocks and `if`, loops, jumps, `switch`, `try`, declarations, functions and
+> classes, modules, removed forms, comments and blank lines), each case formatted twice
+> to the same text when it parses clean; `tests/blank_lines.rs`, the matrix of 0–3 blank
+> lines between top-level items (and between imports), after `{`, before `}` (a block
+> and a `switch`) and between statements, plus a file of only comments, no final newline
+> with a trailing comment, empty clause blocks, blank lines inside a template and the
+> final newline of every output; fixtures under `tests/conformance/09-layout/` for S007
+> (a tab, an odd width, content lines as a near-miss) and S008 (`\r\n`, `\r`, trailing
+> whitespace, no final newline, blank lines at the end, template content as a
+> near-miss). **Decisions:** the top level is fully determined (one blank line between
+> any two items, imports forming one block), since §9.3 honors one layout intention
+> only; blank lines inside blocks follow the source, as §9.1's "at most one" allows; an
+> empty file formats to nothing rather than a lone `\n`, which would be a blank line;
+> S007 and S008 here are the text's own faults, found without the tree, the blank-line
+> and indentation deviations the layout corrects being US-048's diff; a removed form
+> keeps its text, since `--write` never touches a file with E000 (US-049). Verified:
+> 100% lines and regions; 142 mutants on the diff (115 caught, 20 unviable, 1 timeout, 6 missed: the boundary comparisons of the content ranges and the terminator predicate, all equivalent, since a token never starts at a line end or at a whitespace run), the content rule then rewritten as membership among the terminators inside tokens and the mutants of the whitespace pass rerun twice (24: 1 missed, a `> 0` guard that the no-op fix rejection made redundant, then written as a non-empty range; 20: 19 caught, 1 timeout, 0 missed); every §0.2 gate clean.
 
 **Done when**
 - One blank line between top-level declarations; at most one consecutive blank line; none

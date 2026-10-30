@@ -4,7 +4,8 @@
 //! (`tests/conformance.rs`) runs every fixture through it, so a fixture can only expect
 //! what the pipeline can already find. Today that is US-004 (UTF-8 and BOM validation)
 //! the parser (US-010 to US-033: E000 for what the grammar rejects, E001 and E002, S001,
-//! S002 and S012, E201, E202 and E205) and the formatter's S005 (US-041).
+//! S002 and S012, E201, E202 and E205) and the formatter's S005 (US-041), S007 and S008
+//! (US-042).
 
 use sjs_diag::{Diagnostics, SourceFile};
 
@@ -28,9 +29,11 @@ pub fn check_files(files: &[InputFile]) -> Diagnostics {
             Ok(source) => {
                 let (tree, found) = sjs_syntax::parse(&source);
                 diagnostics.extend(found.iter().cloned());
-                // US-041: the formatter's S005 for every redundant pair of parentheses.
+                // US-041: the formatter's S005 for every redundant pair of parentheses;
+                // US-042: its S007 and S008 for the text's whitespace.
                 let formatter = sjs_format::Formatter::new(&source, &tree);
                 diagnostics.extend(formatter.redundant_parentheses());
+                diagnostics.extend(formatter.whitespace());
             }
         }
     }
@@ -63,7 +66,7 @@ mod tests {
     fn each_invalid_file_reports_its_own_e000() {
         let diagnostics = check_files(&[
             file("bom.js", b"\xEF\xBB\xBFx"),
-            file("ok.js", b"x"),
+            file("ok.js", b"x\n"),
             file("bad.js", b"a\xFF"),
         ]);
         let found: Vec<(&str, Code, Position)> = diagnostics

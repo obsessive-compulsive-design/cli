@@ -1,0 +1,53 @@
+--- source
+import {a} from './a.js'
+--- formatted
+import { a } from "./a.js"
+
+--- source
+import {a as b,c} from "./a.js"
+--- formatted
+import { a as b, c } from "./a.js"
+
+--- source
+import * as ns from './n.js'
+--- formatted
+import * as ns from "./n.js"
+
+--- source
+import data from './d.json' with {type:'json'}
+--- formatted
+import data from "./d.json" with { type: "json" }
+
+--- source
+import {a} from './a.js'
+import {b} from './b.js'
+const c = a + b
+--- formatted
+import { a } from "./a.js"
+import { b } from "./b.js"
+
+const c = a + b
+
+--- source
+export const k = 1
+--- formatted
+export const k = 1
+
+--- source
+export {k as j}
+--- formatted
+export { k as j }
+
+--- source
+export {k} from './k.js'
+--- formatted
+export { k } from "./k.js"
+
+--- source
+export function f() {}
+export class C {}
+--- formatted
+export function f() {}
+
+export class C {}
+

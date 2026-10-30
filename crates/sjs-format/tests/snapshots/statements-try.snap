@@ -1,0 +1,57 @@
+--- source
+try{f()}catch(e){g(e)}
+--- formatted
+try {
+  f()
+} catch (e) {
+  g(e)
+}
+
+--- source
+try {
+  f()
+} catch {
+  g()
+}
+--- formatted
+try {
+  f()
+} catch {
+  g()
+}
+
+--- source
+try {
+  f()
+} finally {
+  h()
+}
+--- formatted
+try {
+  f()
+} finally {
+  h()
+}
+
+--- source
+try {
+  f()
+} catch (e) {
+  g(e)
+} finally {
+  h()
+}
+--- formatted
+try {
+  f()
+} catch (e) {
+  g(e)
+} finally {
+  h()
+}
+
+--- source
+try {} catch {}
+--- formatted
+try {} catch {}
+

@@ -51,6 +51,13 @@ fn first_paren(node: NodeRef<'_>) -> Option<sjs_diag::Span> {
     })
 }
 
+/// The whole file `text`, formatted (US-042).
+pub fn module(text: &str) -> String {
+    let f = file(text);
+    let (tree, _) = parse(&f);
+    Formatter::new(&f, &tree).module()
+}
+
 /// The tree of `text` with redundant parentheses removed, as an s-expression, or
 /// `None` when it does not parse clean.
 pub fn stripped(text: &str) -> Option<String> {

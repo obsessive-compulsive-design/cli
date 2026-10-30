@@ -1,0 +1,67 @@
+--- source
+switch(a){case 1:{f()}}
+--- formatted
+switch (a) {
+  case 1: {
+    f()
+  }
+}
+
+--- source
+switch (a) {
+  case 1:
+  case 2: {
+    f()
+  }
+  default: {
+    g()
+  }
+}
+--- formatted
+switch (a) {
+  case 1:
+  case 2: {
+    f()
+  }
+  default: {
+    g()
+  }
+}
+
+--- source
+switch (a) {
+  case "s": {
+    break
+  }
+  case -1: {
+  }
+}
+--- formatted
+switch (a) {
+  case "s": {
+    break
+  }
+  case -1: {}
+}
+
+--- source
+switch (a) {}
+--- formatted
+switch (a) {}
+
+--- source
+switch (a) {
+
+  case 1: {}
+
+
+  case 2: {}
+
+}
+--- formatted
+switch (a) {
+  case 1: {}
+
+  case 2: {}
+}
+

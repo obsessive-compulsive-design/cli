@@ -33,8 +33,8 @@ const MEMBER: u8 = 18;
 /// Formats the expressions of one file.
 #[derive(Debug, Clone, Copy)]
 pub struct Formatter<'a> {
-    file: &'a SourceFile,
-    tree: &'a SyntaxTree,
+    pub(crate) file: &'a SourceFile,
+    pub(crate) tree: &'a SyntaxTree,
 }
 
 impl<'a> Formatter<'a> {
@@ -44,8 +44,7 @@ impl<'a> Formatter<'a> {
         Formatter { file, tree }
     }
 
-    /// The document of an expression node. A node this story does not format (a block,
-    /// a removed form) is copied as written.
+    /// The document of an expression node; any other node is a statement's (US-042).
     #[must_use]
     pub fn expression(&self, node: NodeRef<'_>) -> Doc {
         match node.kind() {
@@ -75,7 +74,7 @@ impl<'a> Formatter<'a> {
             | NodeKind::PatternElement
             | NodeKind::Param => self.property(node),
             NodeKind::ArrowFunction => self.arrow(node),
-            _ => self.verbatim(node),
+            _ => self.statement(node),
         }
     }
 
@@ -277,13 +276,13 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    fn text(&self, span: sjs_diag::Span) -> &'a str {
+    pub(crate) fn text(&self, span: sjs_diag::Span) -> &'a str {
         self.file.slice(&span).unwrap_or("")
     }
 
     /// A token as the layout writes it: a string double-quoted with minimal escapes,
     /// anything else as written.
-    fn token(&self, token: &Token) -> Doc {
+    pub(crate) fn token(&self, token: &Token) -> Doc {
         let text = self.text(token.span);
         match token.kind {
             TokenKind::String(_) => Doc::text(double_quoted(text)),
@@ -292,7 +291,7 @@ impl<'a> Formatter<'a> {
     }
 
     /// `node` as written, line breaks and all.
-    fn verbatim(&self, node: NodeRef<'_>) -> Doc {
+    pub(crate) fn verbatim(&self, node: NodeRef<'_>) -> Doc {
         Doc::text(self.text(node.span()))
     }
 
@@ -306,12 +305,12 @@ impl<'a> Formatter<'a> {
 
     /// Children with no space between them: `a.b`, `a?.[b]`, `i++`, `...a`, a tagged
     /// template.
-    fn glued(&self, node: NodeRef<'_>) -> Doc {
+    pub(crate) fn glued(&self, node: NodeRef<'_>) -> Doc {
         Doc::Group(node.children().map(|child| self.element(child)).collect())
     }
 
     /// Children with one space between them: `a = b`, `a ? b : c`, `a + b`.
-    fn spaced(&self, node: NodeRef<'_>) -> Doc {
+    pub(crate) fn spaced(&self, node: NodeRef<'_>) -> Doc {
         let mut out = Vec::new();
         for (at, child) in node.children().enumerate() {
             if at > 0 {
@@ -408,7 +407,7 @@ impl<'a> Formatter<'a> {
     /// `[ … ]`, `{ … }` or `( … )` holding items separated by commas: one line with a
     /// space inside braces when it fits, one item per line with a trailing comma
     /// otherwise, `{}`, `[]` and `()` when empty. A hole in an array stays a hole.
-    fn list(&self, node: NodeRef<'_>, braces: bool) -> Doc {
+    pub(crate) fn list(&self, node: NodeRef<'_>, braces: bool) -> Doc {
         let mut items: Vec<Doc> = Vec::new();
         let mut open = "";
         let mut close = "";
@@ -718,13 +717,14 @@ mod tests {
         );
         assert_eq!(
             formatted("async ( a ) => { return a }"),
-            "async (a) => { return a }"
+            "async (a) => {\n  return a\n}",
+            "a block body is a statement's (US-042)"
         );
         assert_eq!(formatted("( ) => ( { a } )"), "() => ({ a })");
         assert_eq!(
             formatted("( ) => { }"),
-            "() => { }",
-            "a block body is copied as written (US-042)"
+            "() => {}",
+            "an empty block body (US-042)"
         );
         let long = "x".repeat(60);
         assert_eq!(

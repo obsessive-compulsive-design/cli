@@ -1,0 +1,80 @@
+--- source
+// header
+
+import {a} from './a.js'
+
+
+// about b
+const b = a // trailing
+/* block */
+function f() {} /* after */
+--- formatted
+// header
+
+import { a } from "./a.js"
+
+// about b
+const b = a  // trailing
+
+/* block */
+function f() {}  /* after */
+
+--- source
+function f() { // why
+  a()
+
+
+  b()
+  // end
+}
+--- formatted
+function f() {
+  // why
+  a()
+
+  b()
+  // end
+}
+
+--- source
+class A {
+  // first
+  a = 1
+
+  // second
+  b = 2
+}
+--- formatted
+class A {
+  // first
+  a = 1
+
+  // second
+  b = 2
+}
+
+--- source
+f()
+// only the end
+--- formatted
+f()
+// only the end
+
+--- source
+// nothing
+// but comments
+--- formatted
+// nothing
+// but comments
+
+--- source
+/**
+ * Doc.
+ */
+export function f() {}
+--- formatted
+/**
+ * Doc.
+ */
+export function f() {}
+

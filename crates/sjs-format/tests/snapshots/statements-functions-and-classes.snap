@@ -1,0 +1,79 @@
+--- source
+function f(a,b=1,...r){return a}
+--- formatted
+function f(a, b = 1, ...r) {
+  return a
+}
+
+--- source
+async function g() {
+  await h()
+}
+--- formatted
+async function g() {
+  await h()
+}
+
+--- source
+function*gen(){yield 1}
+--- formatted
+function* gen() {
+  yield 1
+}
+
+--- source
+async function * agen() {}
+--- formatted
+async function* agen() {}
+
+--- source
+class A {}
+--- formatted
+class A {}
+
+--- source
+class B extends A {
+  static s = 1
+  #p
+  constructor(x) {
+    super()
+    this.x = x
+  }
+  get g() {
+    return this.x
+  }
+  set g(v) {}
+  static m() {}
+  async *gen() {}
+  #q() {}
+  static {
+    f()
+  }
+  [Symbol.iterator]() {}
+}
+--- formatted
+class B extends A {
+  static s = 1
+  #p
+  constructor(x) {
+    super()
+    this.x = x
+  }
+  get g() {
+    return this.x
+  }
+  set g(v) {}
+  static m() {}
+  async *gen() {}
+  #q() {}
+  static {
+    f()
+  }
+  [Symbol.iterator]() {}
+}
+
+--- source
+class C extends ns.Base {}
+--- formatted
+class C extends ns.Base {}
+
