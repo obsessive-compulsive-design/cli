@@ -1,20 +1,29 @@
 --- source
-import { first, second as alias, third, fourth, fifth, sixth, seventh, xxxxxxxxxxxxx } from "./a.js"
+import { a, b as alias, c, d, e, f, g, h, i, j, k, l, m, n, o, p, xxxxxxxxxxxxxxxxxx } from "./a.js"
 --- at 99
 import {
-  first,
-  second as alias,
-  third,
-  fourth,
-  fifth,
-  sixth,
-  seventh,
-  xxxxxxxxxxxxx,
+  a,
+  b as alias,
+  c,
+  d,
+  e,
+  f,
+  g,
+  h,
+  i,
+  j,
+  k,
+  l,
+  m,
+  n,
+  o,
+  p,
+  xxxxxxxxxxxxxxxxxx,
 } from "./a.js"
 --- at 100
-import { first, second as alias, third, fourth, fifth, sixth, seventh, xxxxxxxxxxxxx } from "./a.js"
+import { a, b as alias, c, d, e, f, g, h, i, j, k, l, m, n, o, p, xxxxxxxxxxxxxxxxxx } from "./a.js"
 --- at 101
-import { first, second as alias, third, fourth, fifth, sixth, seventh, xxxxxxxxxxxxx } from "./a.js"
+import { a, b as alias, c, d, e, f, g, h, i, j, k, l, m, n, o, p, xxxxxxxxxxxxxxxxxx } from "./a.js"
 
 --- source
 export { first, second as alias, third, fourth, fifth, sixth, seventh, eighth, ninth, xxxxxxxxxxxx }

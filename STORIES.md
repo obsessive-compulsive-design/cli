@@ -1935,7 +1935,44 @@ ternaries; a binary whose operands are broken chains; `a.b.c.d` (property access
 calls) stays on one line.
 
 #### US-045 Import layout and ordering
-§9.1, S003 · After: US-043, US-021 · Size: S · M0
+§9.1, S003 · After: US-043, US-021 · Size: S · M0 · **Status: complete** (2026-10-29)
+
+> Delivered in `sjs-format`: `imports.rs` orders a run of imports (SPEC.md §9.1) by the
+> number of `../` segments in the path, most first, then by the path's bytes, and the
+> names of an import list by the imported name's bytes (`b as a` sorts as `b`); equal
+> keys keep their order, so two imports from one path stay two, and the JSON `with`
+> clause, a namespace import and a default import sort by their paths like any other.
+> `stmt.rs` now lays a block or the file out in two steps, `items_of` collecting each
+> item with the lines above it and the comments at the end of its line (an empty
+> statement's lines still move to what follows it, the bare tokens of a recovery are
+> still a run to a line) and `Formatter::lines` writing them, so that `sort_imports`
+> can move an import with its comments between the two: the comment at the end of its
+> line and the comments right above it, below any blank line, move with it, while the
+> lines above the first import of a run are the file's header and stay, as do the
+> lines above a blank line at any other position. `Formatter::import_order()` reports
+> one S003 per run whose imports or whose names are out of order, the run from its
+> first import to the end of its last import's line comment as the current text and
+> the run in order as the replacement; `list` sorts the names of a `NamedImports`
+> (`sorted_specifiers`), an export list being left as written. `sjs-cli`'s pipeline
+> runs it. Tests: unit tests for the order (the story's `./a.js`, `./a/b.js`,
+> `../a.js`; `./../e.js` counting one segment; a JSON and a namespace import among
+> named ones; one path twice; an import without a path, E000, sorting as the empty
+> path; a run after an item), for the names (`{ b as a, a as b }`, a trailing comma, a
+> broken list, an export list), for the comments that move and the header that stays,
+> and for S003's positions and text; the `imports` family of
+> `tests/snapshot_statements.rs`; `tests/snapshot_lists.rs` names its import list
+> alphabetically so that its snapshot shows widths alone; fixtures under
+> `tests/conformance/09-layout/S003/` with a near-miss file. Four fixtures
+> (`02-grammar/pass/import-decl.js`, `json-path.js`, `rel-path.js` and
+> `05-modules/E201/near-miss-paths.js`) held imports out of order and now hold them in
+> order. **Decisions:** the lines above the first import of a run stay where they are,
+> whatever they hold, since a header written right above the imports is the common
+> case and a comment about the first import the rare one; a run is a maximal sequence
+> of imports among the file's items, so imports after an item (E000) are a run of
+> their own; an import whose declaration has no path (E000) sorts as the empty path;
+> S003 is judged on order alone, so a run in order with other faults gets no S003, and
+> its replacement is the run as the formatter writes it, the exact text in context
+> being US-048's diff. Verified: 100% lines and regions; 91 mutants on the diff (59 caught, 29 unviable, 1 timeout, 2 missed: two equivalent boundaries in the scan for runs of imports, rewritten to extend or open a run per import), then the 13 mutants of that scan rerun: 6 caught, 7 unviable, 0 missed; every §0.2 gate clean.
 
 **Done when**
 - **Decision (order):** imports sort by depth (number of `../` segments descending, then

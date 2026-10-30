@@ -1,5 +1,6 @@
 //! STORIES.md US-042: a snapshot per family of statement forms (US-026, US-027) and
-//! declarations, each case a source file and, under it, its canonical form.
+//! declarations, each case a source file and, under it, its canonical form; US-045 adds
+//! the order of imports.
 
 mod common;
 
@@ -153,6 +154,21 @@ fn modules() {
             "export {k as j}",
             "export {k} from './k.js'",
             "export function f() {}\nexport class C {}",
+        ],
+    );
+}
+
+#[test]
+fn import_order() {
+    family(
+        "imports",
+        &[
+            "import {a} from './a.js'\nimport {b} from './a/b.js'\nimport {c} from '../a.js'\nimport {d} from '../../d.js'",
+            "import { b } from \"./a.js\"\nimport { a } from \"./a.js\"",
+            "import { b as a, a as b } from \"./x.js\"",
+            "import d from \"./d.json\" with { type: \"json\" }\nimport * as c from \"./c.js\"\nimport { e } from \"./e.js\"\nimport { b } from \"./b.js\"",
+            "// header\nimport { c } from \"./c.js\"\n// about b\nimport { b } from \"./b.js\" // b's line\n\nimport { a } from \"./a.js\"\n\nuse(a, b, c)",
+            "import {\n  zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz as z,\n  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa as a,\n} from \"./x.js\"",
         ],
     );
 }

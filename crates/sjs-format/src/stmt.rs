@@ -5,12 +5,14 @@
 //! before `}`, and one always precedes a `function` declaration, above its comment. A
 //! comment above an item stays above it and one at the end of its line stays there,
 //! as written (US-046 refines the text); a template literal keeps its lines (§9.3).
+//! Imports stand in order ([`crate::imports`], US-045).
 
 use sjs_diag::Span;
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct, Token, TokenKind, Trivia, TriviaKind};
 
 use crate::doc::{layout, Doc, WIDTH};
 use crate::expr::Formatter;
+use crate::imports::sort_imports;
 
 /// Where a `*` glues: to the word before it (`function* g`) or to the name after it
 /// (`async *gen()`).
@@ -22,9 +24,39 @@ enum Star {
 
 /// One line above an item: a blank line, or a comment on a line of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Above {
+pub(crate) enum Above {
     Blank,
     Comment(Span),
+}
+
+/// What stands on a line of its own among a block's or the file's items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Body<'t> {
+    /// An item.
+    Node(NodeRef<'t>),
+    /// A run of tokens the parser's recovery left bare (E000), copied as written: its
+    /// byte range.
+    Stray(usize, usize),
+    /// The closing brace or the end of the file: nothing but the comments before it.
+    End,
+}
+
+/// One item with the lines above it and the comments at the end of its line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Item<'t> {
+    pub(crate) body: Body<'t>,
+    pub(crate) above: Vec<Above>,
+    pub(crate) trailing: Vec<Span>,
+}
+
+impl<'t> Item<'t> {
+    fn new(body: Body<'t>, above: Vec<Above>) -> Self {
+        Item {
+            body,
+            above,
+            trailing: Vec::new(),
+        }
+    }
 }
 
 impl Formatter<'_> {
@@ -39,11 +71,7 @@ impl Formatter<'_> {
     /// that show a layout flipping.
     #[must_use]
     pub fn module_at(&self, width: usize) -> String {
-        let mut docs = self.items(self.tree.root(), true);
-        if matches!(docs.first(), Some(Doc::HardLine)) {
-            docs.remove(0);
-        }
-        let text = layout(&docs, width);
+        let text = joined(self.items(self.tree.root(), true), width);
         if text.is_empty() {
             text
         } else {
@@ -190,68 +218,40 @@ impl Formatter<'_> {
     }
 
     /// The lines of a block's or the file's items, each beginning with a line break:
-    /// blank lines placed, comments kept above or beside their item, and the comments
-    /// before the closing brace (or the end of the file) last. A block's items follow
-    /// its `{`; the file's are all of its children. Tokens left bare by the parser's
-    /// recovery (E000) are copied as written, a run of them to a line.
+    /// blank lines placed, comments kept above or beside their item, imports in order
+    /// (US-045), and the comments before the closing brace (or the end of the file)
+    /// last.
     fn items(&self, parent: NodeRef<'_>, top: bool) -> Vec<Doc> {
-        let children: Vec<Element<'_>> = parent.children().collect();
-        let start = if top {
-            0
-        } else {
-            children
-                .iter()
-                .position(|child| is_punct(*child, Punct::LBrace))
-                .map_or(children.len(), |brace| brace + 1)
-        };
+        let mut items = items_of(parent, top);
+        sort_imports(&mut items);
+        self.lines(&items, top)
+    }
+
+    /// `items` as lines, each beginning with a line break.
+    pub(crate) fn lines(&self, items: &[Item<'_>], top: bool) -> Vec<Doc> {
         let mut out = Vec::new();
         let mut previous: Option<NodeKind> = None;
-        // The lines above an empty statement (dropped) move to what follows it, and so
-        // does a comment on its line.
-        let mut carried: Vec<Above> = Vec::new();
-        let mut after_empty = false;
-        // The source range of the bare tokens seen since the last item.
-        let mut stray: Option<(usize, usize)> = None;
-        let last = children.len().saturating_sub(1);
-        for (at, element) in children.iter().enumerate().skip(start) {
-            if let Element::Token(token) = *element {
-                if at < last {
-                    let span = token.token().span;
-                    stray = Some((
-                        stray.map_or(span.byte_start, |(from, _)| from),
-                        span.byte_end,
-                    ));
-                    continue;
+        for item in items {
+            match item.body {
+                Body::Stray(from, to) => {
+                    out.push(Doc::HardLine);
+                    out.push(Doc::text(&self.file.text()[from..to]));
                 }
-            }
-            if let Some((from, to)) = stray.take() {
-                out.push(Doc::HardLine);
-                out.push(Doc::text(&self.file.text()[from..to]));
-            }
-            let leading = first_token(*element).map_or(&[][..], |token| &token.leading[..]);
-            let (trailing, mut above) = split_leading(leading, previous.is_some() && !after_empty);
-            for span in trailing {
-                out.push(Doc::text("  "));
-                out.push(Doc::text(self.text(span)));
-            }
-            above.splice(0..0, carried.drain(..));
-            after_empty = false;
-            match *element {
-                Element::Node(node) if node.kind() == NodeKind::EmptyStmt => {
-                    carried = above;
-                    after_empty = true;
-                }
-                Element::Node(node) => {
-                    let source = matches!(above.first(), Some(Above::Blank));
+                Body::Node(node) => {
+                    let source = matches!(item.above.first(), Some(Above::Blank));
                     out.push(Doc::HardLine);
                     if blank_line_before(top, previous, node.kind(), source) {
                         out.push(Doc::HardLine);
                     }
-                    self.push_above(&mut out, &above);
+                    self.push_above(&mut out, &item.above);
                     out.push(self.statement(node));
                     previous = Some(node.kind());
                 }
-                Element::Token(_) => self.push_dangling(&mut out, &above, previous.is_some()),
+                Body::End => self.push_dangling(&mut out, &item.above, previous.is_some()),
+            }
+            for span in &item.trailing {
+                out.push(Doc::text("  "));
+                out.push(Doc::text(self.text(*span)));
             }
         }
         out
@@ -293,6 +293,72 @@ impl Formatter<'_> {
             }
         }
     }
+}
+
+/// `docs`, each line beginning with a break, laid out at `width` with the first break
+/// dropped.
+pub(crate) fn joined(mut docs: Vec<Doc>, width: usize) -> String {
+    if matches!(docs.first(), Some(Doc::HardLine)) {
+        docs.remove(0);
+    }
+    layout(&docs, width)
+}
+
+/// The items of a block (those after its `{`) or of the file (all of its children), in
+/// source order, each with the lines above it and the comments at the end of its line.
+/// An empty statement is dropped, its lines and the comment on its line moving to what
+/// follows it; tokens left bare by the parser's recovery (E000) are an item per run.
+pub(crate) fn items_of(parent: NodeRef<'_>, top: bool) -> Vec<Item<'_>> {
+    let children: Vec<Element<'_>> = parent.children().collect();
+    let start = if top {
+        0
+    } else {
+        children
+            .iter()
+            .position(|child| is_punct(*child, Punct::LBrace))
+            .map_or(children.len(), |brace| brace + 1)
+    };
+    let mut items: Vec<Item<'_>> = Vec::new();
+    let mut has_node = false;
+    let mut carried: Vec<Above> = Vec::new();
+    let mut after_empty = false;
+    // The source range of the bare tokens seen since the last item.
+    let mut stray: Option<(usize, usize)> = None;
+    let last = children.len().saturating_sub(1);
+    for (at, element) in children.iter().enumerate().skip(start) {
+        if let Element::Token(token) = *element {
+            if at < last {
+                let span = token.token().span;
+                stray = Some((
+                    stray.map_or(span.byte_start, |(from, _)| from),
+                    span.byte_end,
+                ));
+                continue;
+            }
+        }
+        if let Some((from, to)) = stray.take() {
+            items.push(Item::new(Body::Stray(from, to), Vec::new()));
+        }
+        let leading = first_token(*element).map_or(&[][..], |token| &token.leading[..]);
+        let (trailing, mut above) = split_leading(leading, has_node && !after_empty);
+        if let Some(previous) = items.last_mut() {
+            previous.trailing.extend(trailing);
+        }
+        above.splice(0..0, carried.drain(..));
+        after_empty = false;
+        match *element {
+            Element::Node(node) if node.kind() == NodeKind::EmptyStmt => {
+                carried = above;
+                after_empty = true;
+            }
+            Element::Node(node) => {
+                items.push(Item::new(Body::Node(node), above));
+                has_node = true;
+            }
+            Element::Token(_) => items.push(Item::new(Body::End, above)),
+        }
+    }
+    items
 }
 
 /// Whether a blank line separates an item from the one before it (SPEC.md §9.1, §9.4):
@@ -406,7 +472,7 @@ mod tests {
     fn modules() {
         assert_eq!(
             module("import {a,b as c} from './a.js'\nimport * as ns from \"./n.js\"\nimport d from './d.json' with {type:'json'}\nexport const k = 1\nexport {k as j} from './k.js'\nexport function f(){}"),
-            "import { a, b as c } from \"./a.js\"\nimport * as ns from \"./n.js\"\nimport d from \"./d.json\" with { type: \"json\" }\n\nexport const k = 1\n\nexport { k as j } from \"./k.js\"\n\nexport function f() {}\n"
+            "import { a, b as c } from \"./a.js\"\nimport d from \"./d.json\" with { type: \"json\" }\nimport * as ns from \"./n.js\"\n\nexport const k = 1\n\nexport { k as j } from \"./k.js\"\n\nexport function f() {}\n"
         );
     }
 

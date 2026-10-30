@@ -489,7 +489,8 @@ impl<'a> Formatter<'a> {
     /// space inside braces when it fits, one item per line with a trailing comma
     /// otherwise, `{}`, `[]` and `()` when empty. A hole in an array stays a hole. An
     /// object literal with a line break or a comment between `{` and its first key
-    /// stays one item per line: the one layout intention honored (§9.3).
+    /// stays one item per line: the one layout intention honored (§9.3). An import
+    /// list's names are in order (US-045).
     pub(crate) fn list(&self, node: NodeRef<'_>, braces: bool) -> Doc {
         let expanded = node.kind() == NodeKind::ObjectLit
             && node.tokens().get(1).is_some_and(|first| {
@@ -504,7 +505,12 @@ impl<'a> Formatter<'a> {
         let mut close = "";
         let mut after_item = false;
         let mut rest_last = false;
-        for child in node.children() {
+        let children = if node.kind() == NodeKind::NamedImports {
+            self.sorted_specifiers(node)
+        } else {
+            node.children().collect()
+        };
+        for child in children {
             match child {
                 Element::Token(token) => {
                     let text = self.text(token.token().span);

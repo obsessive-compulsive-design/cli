@@ -1,0 +1,63 @@
+--- source
+import {a} from './a.js'
+import {b} from './a/b.js'
+import {c} from '../a.js'
+import {d} from '../../d.js'
+--- formatted
+import { d } from "../../d.js"
+import { c } from "../a.js"
+import { a } from "./a.js"
+import { b } from "./a/b.js"
+
+--- source
+import { b } from "./a.js"
+import { a } from "./a.js"
+--- formatted
+import { b } from "./a.js"
+import { a } from "./a.js"
+
+--- source
+import { b as a, a as b } from "./x.js"
+--- formatted
+import { a as b, b as a } from "./x.js"
+
+--- source
+import d from "./d.json" with { type: "json" }
+import * as c from "./c.js"
+import { e } from "./e.js"
+import { b } from "./b.js"
+--- formatted
+import { b } from "./b.js"
+import * as c from "./c.js"
+import d from "./d.json" with { type: "json" }
+import { e } from "./e.js"
+
+--- source
+// header
+import { c } from "./c.js"
+// about b
+import { b } from "./b.js" // b's line
+
+import { a } from "./a.js"
+
+use(a, b, c)
+--- formatted
+// header
+import { a } from "./a.js"
+// about b
+import { b } from "./b.js"  // b's line
+import { c } from "./c.js"
+
+use(a, b, c)
+
+--- source
+import {
+  zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz as z,
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa as a,
+} from "./x.js"
+--- formatted
+import {
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa as a,
+  zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz as z,
+} from "./x.js"
+

@@ -25,6 +25,7 @@
 pub mod chains;
 pub mod doc;
 pub mod expr;
+pub mod imports;
 pub mod lists;
 pub mod stmt;
 pub mod whitespace;

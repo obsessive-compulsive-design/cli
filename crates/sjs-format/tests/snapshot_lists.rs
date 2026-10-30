@@ -118,7 +118,7 @@ fn import_lists() {
         "imports",
         &[
             (
-                "import { first, second as alias, third, fourth, fifth, sixth, seventh, ",
+                "import { a, b as alias, c, d, e, f, g, h, i, j, k, l, m, n, o, p, ",
                 " } from \"./a.js\"",
             ),
             (
