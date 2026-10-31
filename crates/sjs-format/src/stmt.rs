@@ -5,8 +5,9 @@
 //! before `}`, and one always precedes a `function` declaration, above its comment. A
 //! comment above an item stays above it and one at the end of its line stays there,
 //! as written (US-046 refines the text); a template literal keeps its lines (§9.3).
-//! Imports stand in order ([`crate::imports`], US-045), and a comment is written as
-//! [`crate::comments`] says (US-046).
+//! Imports stand in order ([`crate::imports`], US-045), class members too
+//! ([`crate::members`], US-047), and a comment is written as [`crate::comments`] says
+//! (US-046).
 
 use sjs_diag::Span;
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct, Token, TokenKind, Trivia, TriviaKind};
@@ -252,14 +253,41 @@ impl Formatter<'_> {
     fn items(&self, parent: NodeRef<'_>, top: bool) -> Vec<Doc> {
         let mut items = items_of(parent, top);
         sort_imports(&mut items);
+        if parent.kind() == NodeKind::ClassBody {
+            self.sort_members(&mut items);
+        }
         self.lines(&items, top)
     }
 
-    /// `items` as lines, each beginning with a line break.
+    /// `laid_out`, its lines after the first indented like the source line `node` starts
+    /// on, as a replacement for the text of `node` where it stands; a blank line stays
+    /// blank.
+    pub(crate) fn indented_like(&self, node: NodeRef<'_>, laid_out: &str) -> String {
+        let line = self
+            .file
+            .line(node.span().start.line)
+            .map_or("", |line| line.text);
+        let indent = &line[..line.len() - line.trim_start().len()];
+        laid_out
+            .lines()
+            .enumerate()
+            .map(|(at, text)| {
+                if at == 0 || text.is_empty() {
+                    text.to_owned()
+                } else {
+                    format!("{indent}{text}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// `items` as lines, each beginning with a line break; a class field takes the `;`
+    /// ES needs when the member after it begins with `[` or `*` (US-047).
     pub(crate) fn lines(&self, items: &[Item<'_>], top: bool) -> Vec<Doc> {
         let mut out = Vec::new();
         let mut previous: Option<NodeKind> = None;
-        for item in items {
+        for (at, item) in items.iter().enumerate() {
             match item.body {
                 Body::Stray(from, to) => {
                     out.push(Doc::HardLine);
@@ -273,6 +301,9 @@ impl Formatter<'_> {
                     }
                     self.push_above(&mut out, &item.above);
                     out.push(self.statement(node));
+                    if needs_semicolon(node, items.get(at + 1)) {
+                        out.push(Doc::text(";"));
+                    }
                     previous = Some(node.kind());
                 }
                 Body::End => self.push_dangling(&mut out, &item.above, previous.is_some()),
@@ -320,6 +351,49 @@ impl Formatter<'_> {
             }
         }
     }
+}
+
+/// Whether a `;` must end `node`: a class field followed by a member that begins with
+/// `[` or `*`, which would otherwise continue the field (ES2025 ASI).
+fn needs_semicolon(node: NodeRef<'_>, next: Option<&Item<'_>>) -> bool {
+    node.kind() == NodeKind::ClassField
+        && matches!(next, Some(Item { body: Body::Node(member), .. })
+        if member.tokens().first().is_some_and(|token| {
+            matches!(token.kind, TokenKind::Punct(Punct::LBracket | Punct::Star))
+        }))
+}
+
+/// `items` with the item at `order[to]` moved to position `to`, for every `to`: it brings
+/// its body, the comments at the end of its line and the lines above it after the first
+/// `kept(above, from)` of them, while the kept lines of each position stay there.
+pub(crate) fn reorder(
+    items: &mut [Item<'_>],
+    order: &[usize],
+    kept: impl Fn(&[Above], usize) -> usize,
+) {
+    let moved: Vec<Item<'_>> = order
+        .iter()
+        .map(|&from| Item {
+            body: items[from].body,
+            above: items[from].above[kept(&items[from].above, from)..].to_vec(),
+            trailing: items[from].trailing.clone(),
+        })
+        .collect();
+    for (at, (item, moved)) in items.iter_mut().zip(moved).enumerate() {
+        item.above.truncate(kept(&item.above, at));
+        item.above.extend(moved.above);
+        item.body = moved.body;
+        item.trailing = moved.trailing;
+    }
+}
+
+/// How many of the lines above an item are not its own: those up to and including the
+/// last blank line, what follows being the item's comments.
+pub(crate) fn detached_len(above: &[Above]) -> usize {
+    above
+        .iter()
+        .rposition(|line| *line == Above::Blank)
+        .map_or(0, |blank| blank + 1)
 }
 
 /// `docs`, each line beginning with a break, laid out at `width` with the first break
@@ -490,7 +564,7 @@ mod tests {
         assert_eq!(module("function f(){}"), "function f() {}\n");
         assert_eq!(
             module("class C extends a.b { static s = 1\n #p = 2\n constructor(){ super() }\n get g(){ return 1 }\n set g(v){}\n static async * gen(){}\n #q(){}\n static { f() }\n [ Symbol . iterator ](){} }"),
-            "class C extends a.b {\n  static s = 1\n  #p = 2\n  constructor() {\n    super()\n  }\n  get g() {\n    return 1\n  }\n  set g(v) {}\n  static async *gen() {}\n  #q() {}\n  static {\n    f()\n  }\n  [Symbol.iterator]() {}\n}\n"
+            "class C extends a.b {\n  static s = 1\n  static async *gen() {}\n  static {\n    f()\n  }\n  #p = 2\n  constructor() {\n    super()\n  }\n  get g() {\n    return 1\n  }\n  set g(v) {}\n  [Symbol.iterator]() {}\n  #q() {}\n}\n"
         );
         assert_eq!(module("class A {}"), "class A {}\n");
     }

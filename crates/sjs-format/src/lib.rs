@@ -28,6 +28,7 @@ pub mod doc;
 pub mod expr;
 pub mod imports;
 pub mod lists;
+pub mod members;
 pub mod stmt;
 pub mod whitespace;
 

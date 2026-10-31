@@ -2054,7 +2054,43 @@ comment mid-expression; a comment after the last statement without newline; a do
 comment line that is only `*`.
 
 #### US-047 Class member ordering
-§9.4, S009 · After: US-042, US-025 · Size: S · M0
+§9.4, S009 · After: US-042, US-025 · Size: S · M0 · **Status: complete** (2026-10-30)
+
+> Delivered in `sjs-format`: `members.rs` lays a class body's members out in groups
+> (SPEC.md §9.4): static fields; static methods, with static accessors and `static {}`
+> blocks; fields, public then `#private`; the constructor; accessors; methods, public
+> then `#private`; within a group the source order stays, so a getter and setter
+> written together stay together and a `static {}` block keeps its place among the
+> static methods. A member's group comes from its kind, its `static` token and its key,
+> the child before its parameters, initializer, body or `;` (so `static static = 1` is
+> a static field and `static constructor() {}` a static method); a `[Symbol.…]` key
+> reads as no name. A member moves with the comments right above it, below any blank
+> line, and with the comment at the end of its line, while the lines above a blank line
+> stay at their position; the mechanics US-045 wrote for imports (`reorder`,
+> `detached_len`, now in `stmt.rs`) are shared. `Formatter::member_order()` reports one
+> S009 per class declaration whose members are out of order, the body as written being
+> the current text and the body in order, indented like its class, the replacement
+> (`indented_like`, which S010's chain text shares). A body holding tokens the parser
+> left bare (a `;`) or a token the lexer rejected is left as written, and a class
+> expression (removed, E000) too. The order exposed a hazard: a field directly before a
+> member beginning with `[` or `*` loses its `;` to the layout and the initializer runs
+> into the member; the layout now writes that `;` (`needs_semicolon` in `lines`), and
+> `sjs-syntax`'s `field` consumes it without S002, since there ES needs it (US-031's
+> rule amended for the one place a semicolon is grammar). `sjs-cli`'s pipeline runs
+> the pass, and the S006 pairing of comments (US-046) walks a class body's members in
+> their order. Tests: unit tests for every group, the pair of accessors, the static
+> block, a one-member class, a class in order, a class expression, a bare `;`, a lexer
+> error, comments that move and lines that stay, the `;` a field needs, and S009's
+> positions and text at the top level and nested; the `members` family of
+> `tests/snapshot_statements.rs`; a parser test for the `;` that is grammar; fixtures
+> under `tests/conformance/09-declarations/S009/` with a near-miss file. Six grammar
+> fixtures and `04-classes/E000/near-miss-classes.js` held members out of order and now
+> hold them in order. **Decisions:** static accessors stand with the static methods and
+> private accessors with the public ones, since §9.4 splits only fields and methods by
+> visibility; a bare `;` or a rejected token leaves the whole body as written rather
+> than ordering what the recovery produced; S009 is judged on order alone, its
+> replacement being the body as the formatter writes it, the exact text in context
+> being US-048's diff. Verified: 100% lines and regions; 93 mutants on the diff (85 caught, 5 unviable, 3 missed: the S006 walk's first-token bound and the `static` key bound had no test), then the 11 mutants of those two functions rerun with one: 11 caught, 0 missed; every §0.2 gate clean.
 
 **Done when**
 - Order: static fields, static methods, instance fields (public then `#private`),

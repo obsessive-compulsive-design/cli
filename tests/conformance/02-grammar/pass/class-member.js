@@ -1,13 +1,13 @@
 // ClassMember: a field, a method, an accessor and a static block.
 class A {
-  x = 1
-  m() {
-    return this.x
+  static {
+    A.count = 0
   }
+  x = 1
   get y() {
     return this.x
   }
-  static {
-    A.count = 0
+  m() {
+    return this.x
   }
 }

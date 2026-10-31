@@ -428,7 +428,16 @@ fn field(parser: &mut Parser<'_>, is_static: bool, key: &Key) {
         }
         parser.finish_node();
     }
-    if !parser.semicolon() {
+    if parser.peek(false).kind == TokenKind::Punct(Punct::Semicolon)
+        && matches!(
+            parser.peek_second().kind,
+            LBRACKET | TokenKind::Punct(Punct::Star)
+        )
+    {
+        // The `;` ES needs between a field and a member beginning with `[` or `*`, which
+        // would otherwise continue the field: grammar, not style (US-047).
+        parser.bump(false);
+    } else if !parser.semicolon() {
         let next = parser.peek(false).clone();
         if next.kind != RBRACE && !next.has_newline_before {
             parser.error(next.span, "expected `;` or a newline after a field");
@@ -1112,6 +1121,23 @@ mod tests {
         assert_eq!(
             found.iter().map(|d| (d.0, d.1, d.2)).collect::<Vec<_>>(),
             [(Code::S002, 2, 8), (Code::S002, 3, 3), (Code::S002, 5, 3)]
+        );
+    }
+
+    #[test]
+    fn the_semicolon_a_field_needs_before_a_bracket_or_star_member_is_grammar() {
+        let found = diagnostics(
+            "class A {\n  x = 1;\n  [Symbol.iterator]() {}\n  y;\n  *g() {}\n  z;\n  m() {}\n}",
+        );
+        assert_eq!(
+            found.iter().map(|d| (d.0, d.1, d.2)).collect::<Vec<_>>(),
+            [(Code::S002, 6, 4)],
+            "only the `;` nothing needs is S002"
+        );
+        assert_eq!(
+            sexp("class A {\n  x = 1;\n  *g() {}\n}"),
+            "(Module (ClassDecl class A (ClassBody { (ClassField x (Initializer = 1) ;) (ClassMethod * g (Params ( )) (Block { })) })) <eof>)",
+            "the `;` stays the field's"
         );
     }
 }

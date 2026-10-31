@@ -1,0 +1,140 @@
+--- source
+class A {
+  m() {}
+  [Symbol.iterator]() {}
+  #q() {}
+  set g(v) {}
+  get g() {}
+  constructor() {}
+  #p = 2
+  x = 1
+  static {
+    f()
+  }
+  static s() {}
+  static #r() {}
+  static get b() {}
+  static t = 1
+}
+--- formatted
+class A {
+  static t = 1
+  static {
+    f()
+  }
+  static s() {}
+  static #r() {}
+  static get b() {}
+  x = 1
+  #p = 2
+  constructor() {}
+  set g(v) {}
+  get g() {}
+  m() {}
+  [Symbol.iterator]() {}
+  #q() {}
+}
+
+--- source
+class A {
+  get a() {}
+  m() {}
+  set a(v) {}
+}
+--- formatted
+class A {
+  get a() {}
+  set a(v) {}
+  m() {}
+}
+
+--- source
+class A {
+  // about m
+  m() {} // m's
+  /** The field. */
+  a = 1
+}
+--- formatted
+class A {
+  /** The field. */
+  a = 1
+  // about m
+  m() {}  // m's
+}
+
+--- source
+class A {
+  m() {}
+  // group two
+
+  a = 1
+
+  b = 2
+}
+--- formatted
+class A {
+  a = 1
+  // group two
+
+  b = 2
+
+  m() {}
+}
+
+--- source
+class A {
+  static static = 1
+  static constructor() {}
+  constructor() {}
+}
+--- formatted
+class A {
+  static static = 1
+  static constructor() {}
+  constructor() {}
+}
+
+--- source
+class A {
+  a = 1
+}
+--- formatted
+class A {
+  a = 1
+}
+
+--- source
+function f() {
+  class A {
+    m() {}
+
+    a = 1
+  }
+}
+--- formatted
+function f() {
+  class A {
+    a = 1
+
+    m() {}
+  }
+}
+
+--- source
+class A {
+  [Symbol.iterator]() {}
+  *g() {}
+  x = 1
+  #y
+  m() {}
+}
+--- formatted
+class A {
+  x = 1
+  #y;
+  [Symbol.iterator]() {}
+  *g() {}
+  m() {}
+}
+

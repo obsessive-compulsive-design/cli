@@ -2,6 +2,13 @@
 class A extends ns.B {
   static count = 0
   static #registry
+  static async *h() {}
+  static s() {
+    return super.s
+  }
+  static {
+    A.count = 1
+  }
   x
   #y = 1
   constructor(x) {
@@ -23,15 +30,8 @@ class A extends ns.B {
   *g() {
     yield 1
   }
-  static async *h() {}
-  static s() {
-    return super.s
-  }
   [Symbol.iterator]() {
     return this.g()
-  }
-  static {
-    A.count = 1
   }
   #p() {}
 }

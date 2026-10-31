@@ -15,7 +15,7 @@ use sjs_syntax::{Element, NodeKind, NodeRef, TokenKind};
 
 use crate::doc::WIDTH;
 use crate::expr::Formatter;
-use crate::stmt::{items_of, joined, Above, Body, Item};
+use crate::stmt::{detached_len, items_of, joined, reorder, Above, Body, Item};
 
 const MESSAGE: &str = "imports out of order: by depth (`../` segments, most first) then by path, \
                        names by the imported name (SPEC.md §9.1)";
@@ -142,20 +142,7 @@ fn sort_run(run: &mut [Item<'_>]) {
     let imports: Vec<NodeRef<'_>> = run.iter().filter_map(import_of).collect();
     let mut order: Vec<usize> = (0..imports.len()).collect();
     order.sort_by_key(|&at| import_key(imports[at]));
-    let moved: Vec<Item<'_>> = order
-        .iter()
-        .map(|&at| Item {
-            body: run[at].body,
-            above: run[at].above[kept_len(&run[at].above, at)..].to_vec(),
-            trailing: run[at].trailing.clone(),
-        })
-        .collect();
-    for (at, (item, moved)) in run.iter_mut().zip(moved).enumerate() {
-        item.above.truncate(kept_len(&item.above, at));
-        item.above.extend(moved.above);
-        item.body = moved.body;
-        item.trailing = moved.trailing;
-    }
+    reorder(run, &order, kept_len);
 }
 
 /// What orders an import: the number of `../` segments in its path, most first, then
@@ -186,12 +173,10 @@ fn path_of(decl: NodeRef<'_>) -> &str {
 /// import's own comments.
 fn kept_len(above: &[Above], at: usize) -> usize {
     if at == 0 {
-        return above.len();
+        above.len()
+    } else {
+        detached_len(above)
     }
-    above
-        .iter()
-        .rposition(|line| *line == Above::Blank)
-        .map_or(0, |blank| blank + 1)
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 //! STORIES.md US-042: a snapshot per family of statement forms (US-026, US-027) and
 //! declarations, each case a source file and, under it, its canonical form; US-045 adds
-//! the order of imports.
+//! the order of imports and US-047 the order of class members.
 
 mod common;
 
@@ -169,6 +169,23 @@ fn import_order() {
             "import d from \"./d.json\" with { type: \"json\" }\nimport * as c from \"./c.js\"\nimport { e } from \"./e.js\"\nimport { b } from \"./b.js\"",
             "// header\nimport { c } from \"./c.js\"\n// about b\nimport { b } from \"./b.js\" // b's line\n\nimport { a } from \"./a.js\"\n\nuse(a, b, c)",
             "import {\n  zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz as z,\n  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa as a,\n} from \"./x.js\"",
+        ],
+    );
+}
+
+#[test]
+fn member_order() {
+    family(
+        "members",
+        &[
+            "class A {\n  m() {}\n  [Symbol.iterator]() {}\n  #q() {}\n  set g(v) {}\n  get g() {}\n  constructor() {}\n  #p = 2\n  x = 1\n  static {\n    f()\n  }\n  static s() {}\n  static #r() {}\n  static get b() {}\n  static t = 1\n}",
+            "class A {\n  get a() {}\n  m() {}\n  set a(v) {}\n}",
+            "class A {\n  // about m\n  m() {} // m's\n  /** The field. */\n  a = 1\n}",
+            "class A {\n  m() {}\n  // group two\n\n  a = 1\n\n  b = 2\n}",
+            "class A {\n  static static = 1\n  static constructor() {}\n  constructor() {}\n}",
+            "class A {\n  a = 1\n}",
+            "function f() {\n  class A {\n    m() {}\n\n    a = 1\n  }\n}",
+            "class A {\n  [Symbol.iterator]() {}\n  *g() {}\n  x = 1\n  #y\n  m() {}\n}",
         ],
     );
 }

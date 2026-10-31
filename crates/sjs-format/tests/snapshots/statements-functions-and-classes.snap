@@ -54,6 +54,10 @@ class B extends A {
 --- formatted
 class B extends A {
   static s = 1
+  static m() {}
+  static {
+    f()
+  }
   #p
   constructor(x) {
     super()
@@ -63,13 +67,9 @@ class B extends A {
     return this.x
   }
   set g(v) {}
-  static m() {}
   async *gen() {}
-  #q() {}
-  static {
-    f()
-  }
   [Symbol.iterator]() {}
+  #q() {}
 }
 
 --- source

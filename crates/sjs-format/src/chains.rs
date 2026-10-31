@@ -206,24 +206,7 @@ impl Formatter<'_> {
     /// The chain laid out on its own, its lines after the first indented like the
     /// source line the chain starts on.
     fn chain_text(&self, node: NodeRef<'_>) -> String {
-        let line = self
-            .file
-            .line(node.span().start.line)
-            .map_or("", |line| line.text);
-        let indent = &line[..line.len() - line.trim_start().len()];
-        let laid_out = print(&[self.chain(node)]);
-        laid_out
-            .lines()
-            .enumerate()
-            .map(|(at, text)| {
-                if at == 0 {
-                    text.to_owned()
-                } else {
-                    format!("{indent}{text}")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        self.indented_like(node, &print(&[self.chain(node)]))
     }
 }
 

@@ -15,7 +15,8 @@ use sjs_syntax::{parse, Element, NodeKind, NodeRef, Token, TokenRef, TriviaKind}
 use crate::doc::{Doc, WIDTH};
 use crate::expr::Formatter;
 use crate::imports::sort_imports;
-use crate::stmt::{items_of, Body};
+use crate::members::is_laid_out_body;
+use crate::stmt::{items_of, Body, Item};
 
 const MESSAGE: &str = "a comment on a line longer than 100 columns: the layout never breaks a \
                        comment (SPEC.md §9.1, §9.5)";
@@ -225,26 +226,54 @@ impl Formatter<'_> {
     fn written_comments(&self) -> Vec<Span> {
         let mut items = items_of(self.tree.root(), true);
         sort_imports(&mut items);
-        let tokens = self.tree.tokens();
         let mut spans = Vec::new();
-        for item in &items {
+        self.items_comments(&items, &mut spans);
+        spans
+    }
+
+    /// The comments of `items`, in the order the layout writes them.
+    fn items_comments(&self, items: &[Item<'_>], spans: &mut Vec<Span>) {
+        for item in items {
             spans.extend(item.above.iter().filter_map(|line| line.comment()));
             match item.body {
-                Body::Node(node) => {
-                    let inner = node.tokens().get(1..).unwrap_or(&[]);
-                    spans.extend(comments_of(inner.iter()));
-                }
+                Body::Node(node) => self.inner_comments(node, false, spans),
                 Body::Stray(from, to) => {
-                    let inner = tokens
-                        .iter()
-                        .filter(|token| token.span.byte_start > from && token.span.byte_end <= to);
+                    let inner =
+                        self.tree.tokens().iter().filter(|token| {
+                            token.span.byte_start > from && token.span.byte_end <= to
+                        });
                     spans.extend(comments_of(inner));
                 }
                 Body::End => {}
             }
             spans.extend(item.trailing.iter().copied());
         }
-        spans
+    }
+
+    /// The comments inside `node` in the order the layout writes them, those before its
+    /// first token included when `first`: a class body's members in their order
+    /// (US-047), everything else in the order of its tokens.
+    fn inner_comments(&self, node: NodeRef<'_>, first: bool, spans: &mut Vec<Span>) {
+        let members = is_laid_out_body(node);
+        for (at, child) in node.children().enumerate() {
+            let include = first || at > 0;
+            match child {
+                Element::Token(token) => {
+                    if include {
+                        spans.extend(comments_of(std::iter::once(token.token())));
+                    }
+                }
+                Element::Node(inner) => self.inner_comments(inner, include, spans),
+            }
+            if members {
+                break;
+            }
+        }
+        if members {
+            let mut items = items_of(node, false);
+            self.sort_members(&mut items);
+            self.items_comments(&items, spans);
+        }
     }
 }
 
@@ -696,7 +725,7 @@ mod tests {
         );
         assert_eq!(
             stable("class A {\n  m(/* c */ a) {} // trailing\n  static /* s */ f = 1\n}"),
-            "class A {\n  m(/* c */ a) {}  // trailing\n  static /* s */ f = 1\n}\n"
+            "class A {\n  static /* s */ f = 1\n  m(/* c */ a) {}  // trailing\n}\n"
         );
         assert_eq!(
             stable("const o = { a /* k */: 1, b: /* v */ 2 }\nconst { a /* p */: x } = o"),
@@ -829,6 +858,11 @@ mod tests {
             long(&format!("f() // {wide}")),
             vec![(1, 5, false)],
             "a trailing comment, counted with its line"
+        );
+        assert_eq!(
+            long(&format!("// short\nf() // {wide}")),
+            vec![(2, 5, false)],
+            "the comment above an item is paired once"
         );
         assert_eq!(
             long(&format!(
