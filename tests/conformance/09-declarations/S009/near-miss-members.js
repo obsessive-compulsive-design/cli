@@ -23,6 +23,7 @@ class A {
   [Symbol.iterator]() {}
   #p() {}
 }
+
 class B {
   m() {}
 }

@@ -8,6 +8,9 @@ use sjs_diag::{Code, Diagnostic, SourceFile};
 use sjs_syntax::{parse, Element, NodeKind, NodeRef, Punct, Token, TokenKind, TriviaKind};
 
 use crate::expr::{begins_a_block_like, Formatter};
+use crate::imports::sort_imports;
+use crate::members::is_laid_out_body;
+use crate::stmt::{items_of, Body};
 
 /// The nodes whose items a comma separates inside brackets.
 const LISTS: [NodeKind; 10] = [
@@ -36,7 +39,8 @@ impl Formatter<'_> {
 
     fn compare_lists(&self, formatted: &SourceFile) -> Vec<Diagnostic> {
         let (tree, _) = parse(formatted);
-        let before = lists_of(self.tree.root());
+        let mut before = Vec::new();
+        self.lists_in_order(self.tree.root(), &mut before);
         let after = lists_of(tree.root());
         // A file the grammar rejects may be read differently once laid out: then the
         // lists do not pair up and nothing is said.
@@ -55,6 +59,34 @@ impl Formatter<'_> {
                 self.comma_finding(*source, trailing_comma(*canonical).is_some())
             })
             .collect()
+    }
+
+    /// Every list under `node` in the order the layout writes them: the file's items with
+    /// imports in their order (US-045) and a class body's members in theirs (US-047),
+    /// which pairs each list with its own in the canonical text.
+    fn lists_in_order<'t>(&self, node: NodeRef<'t>, lists: &mut Vec<NodeRef<'t>>) {
+        if LISTS.contains(&node.kind()) {
+            lists.push(node);
+        }
+        let top = node.kind() == NodeKind::Module;
+        if top || is_laid_out_body(node) {
+            let mut items = items_of(node, top);
+            sort_imports(&mut items);
+            if !top {
+                self.sort_members(&mut items);
+            }
+            for item in &items {
+                if let Body::Node(child) = item.body {
+                    self.lists_in_order(child, lists);
+                }
+            }
+            return;
+        }
+        for child in node.children() {
+            if let Element::Node(child) = child {
+                self.lists_in_order(child, lists);
+            }
+        }
     }
 
     /// The S004 of one list, given whether its canonical layout ends in a comma.

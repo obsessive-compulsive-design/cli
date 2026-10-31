@@ -6,6 +6,7 @@
     b += 1
     f(b)
   }
+
   function g() {}
   class C {}
   g(new C())

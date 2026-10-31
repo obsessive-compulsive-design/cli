@@ -6,4 +6,5 @@ import { a, b as x } from "./a.js"
 import { a as y } from "./a.js"
 import cfg from "./a/cfg.json" with { type: "json" }
 import { e } from "./e.js"
+
 d(c, a, x, y, cfg, e)

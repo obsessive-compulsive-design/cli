@@ -1,5 +1,6 @@
-// A valid module exercising punctuators that need longest match: no diagnostic.
-// a?.5:1 is a ternary, not an optional chain.
+// expect: S008 layout @12:14 "?.5:" -> " ? .5 : "
+// A valid module exercising punctuators that need longest match; a?.5:1 is a ternary, not
+// an optional chain, which the layout spaces (S008).
 export const f = (a, b, ...rest) => {
   const c = a ** b >>> 1
   const d = c?.x ?? rest[0]

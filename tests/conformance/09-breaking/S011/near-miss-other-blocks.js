@@ -3,9 +3,11 @@ const f = () => {
   g()
   return a
 }
+
 const h = () => {
   return
 }
+
 const i = () => {
   // why
   return a

@@ -4,6 +4,7 @@ try {
 } catch {
   f(2)
 }
+
 try {
   f(3)
 } catch (e) {
@@ -11,6 +12,7 @@ try {
 } finally {
   f(4)
 }
+
 try {
   f(5)
 } finally {

@@ -1,5 +1,6 @@
 // SwitchStmt: clauses, a default, and an empty switch.
 const x = 1
+
 switch (x) {
   case 1: {
     f(1)
@@ -14,4 +15,5 @@ switch (x) {
     f(0)
   }
 }
+
 switch (x) {}

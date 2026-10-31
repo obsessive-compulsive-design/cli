@@ -1,5 +1,6 @@
 // Every permitted `switch` and `try` form: no diagnostic.
 switch (x) {}
+
 switch (x) {
   case 1n:
   case -1: {
@@ -11,11 +12,13 @@ switch (x) {
     f()
   }
 }
+
 try {
   f()
 } catch {
   g()
 }
+
 try {
   f()
 } catch (e) {

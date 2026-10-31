@@ -3,4 +3,5 @@ const t = `a
 
   b  
 `
+
 f(t)

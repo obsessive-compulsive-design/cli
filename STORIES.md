@@ -2103,7 +2103,44 @@ comment line that is only `*`.
 already in order yields nothing; a one-member class.
 
 #### US-048 S-code reporter
-§8.5, §9.6, §13.4 · After: US-041 … US-047, US-031 · Size: M · M0
+§8.5, §9.6, §13.4 · After: US-041 … US-047, US-031 · Size: M · M0 · **Status: complete** (2026-10-30)
+
+> Delivered in `sjs-format`: `report.rs` is the S-code reporter. `Formatter::report`
+> runs every pass (S003, S004, S005, S009, S010, S011, S006 for a comment too long,
+> S007 and S008 for the text's whitespace), takes the parser's S001, S002 and S012, then
+> diffs the source against the canonical text piece by piece (`diff.rs`: Myers'
+> shortest edit script over any sequence) and gives every change nobody claimed its
+> code: S006 on a line longer than the width, S007 for a line's indentation, S008 for
+> any other change of whitespace or of a comment, each with the text as written and the
+> text the layout writes, changes of whitespace on one line joined into one finding. A
+> piece is a token or a comment; a change is the stretch between two pieces both texts
+> share, and a known finding claims it when it touches every piece gone or new (a
+> reordering, S003 or S009, claims every stretch touching its span, since the diff of
+> reordered pieces aligns them freely); the pieces nobody claims are judged on their
+> own, so a comment reflowed beside a dropped `)` is its own S008 and a change two passes
+> claim is their two findings. A change of tokens nobody claims is a fault in a pass:
+> `Report::unclassified` lists it (reported as S008 all the same), and
+> `tests/report.rs` in `sjs-format` and `sjs-cli` fail on one over the generated
+> corpus and every fixture the grammar accepts; a file the grammar rejects gets the
+> passes' findings alone. `unified_diff` prints the diff of a file against its canonical
+> text with three lines of context and the `\ No newline at end of file` mark, as
+> `patch -p0` applies it, which the corpus test does. `sjs-cli`'s pipeline takes the
+> report. The diff found two faults: the S004 pass paired a source's lists with the
+> canonical text's by tree order, which the order of imports (US-045) and of members
+> (US-047) had broken, so `lists_in_order` now walks them as the layout does; and
+> US-046's reflow of a doc comment over the width is S006 with the reflow as its
+> replacement, which the near-miss fixture had called no diagnostic. Fixtures: S006 for a
+> long call and a reflowed doc comment, S007 for an indentation of the wrong depth, S008
+> for a missing blank line, an operator's spaces and a comment's space, so that every
+> code S001 to S012 has a fixture with its text before and after; fifty fixtures held
+> top-level items without a blank line between them and now hold the canonical blank
+> line, and five near-miss fixtures whose layout is their point declare the S008 or
+> S006 the layout would make. **Decisions:** the passes' findings stand in for the IR
+> tags the story foresaw, since every pass already spans what it changes; the layout's
+> text is the fixed point the corpus checks, the S006 of a comment too long being the
+> one finding that stays; a stretch ending at a line's start is not on that line, so a
+> blank line before a long line is S008, not S006; a change of comments is narrowed to
+> what differs. Verified: 100% lines and regions; 381 mutants on the diff (215 caught, 135 unviable, 31 missed: Myers' round-zero snake and two guards for the diagonal past the top, all three dead once the shared prefix is taken and the array sized to read past the top, the between-hunk line counts, the stretch test for a unit with one piece, the width's own boundary, the S007 stretches' start and the S006 and S007 messages), then the functions changed rerun: 180 mutants (176 caught, 2 unviable, 2 missed: the S007 start with a blank line above), then `placed` again: 13 caught, 0 missed; every §0.2 gate clean.
 
 As a programmer running `sjs lint` I want each formatting deviation reported as the right
 S-code with file, line, column, current text and replacement, and as a unified diff under

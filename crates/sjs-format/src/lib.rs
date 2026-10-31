@@ -24,13 +24,17 @@
 
 pub mod chains;
 pub mod comments;
+pub mod diff;
 pub mod doc;
 pub mod expr;
 pub mod imports;
 pub mod lists;
 pub mod members;
+pub mod report;
 pub mod stmt;
 pub mod whitespace;
 
+pub use diff::unified_diff;
 pub use doc::{layout, print, Doc, INDENT, WIDTH};
 pub use expr::Formatter;
+pub use report::Report;

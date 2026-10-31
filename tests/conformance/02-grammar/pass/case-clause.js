@@ -1,5 +1,6 @@
 // CaseClause: stacked labels of every literal kind, each clause a block.
 const x = 1
+
 switch (x) {
   case 1:
   case -1:

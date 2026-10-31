@@ -6,7 +6,8 @@
 //! the parser (US-010 to US-033: E000 for what the grammar rejects, E001 and E002, S001,
 //! S002 and S012, E201, E202 and E205) and the formatter's S005 (US-041), S007 and S008
 //! (US-042), S004 and S011 (US-043), S010 (US-044), S003 (US-045), S006 (US-046), S009
-//! (US-047).
+//! (US-047), and the S006, S007 and S008 of every other change the layout makes
+//! (US-048).
 
 use sjs_diag::{Diagnostics, SourceFile};
 
@@ -30,20 +31,10 @@ pub fn check_files(files: &[InputFile]) -> Diagnostics {
             Ok(source) => {
                 let (tree, found) = sjs_syntax::parse(&source);
                 diagnostics.extend(found.iter().cloned());
-                // US-041: the formatter's S005 for every redundant pair of parentheses;
-                // US-042: its S007 and S008 for the text's whitespace; US-043: its S004
-                // for trailing commas and S011 for arrow bodies; US-044: its S010 for
-                // method chains; US-045: its S003 for import order; US-046: its S006
-                // for a comment on a line too long; US-047: its S009 for member order.
+                // The formatter's S-codes (US-041 to US-048): its passes' findings and
+                // one for every other change its layout makes.
                 let formatter = sjs_format::Formatter::new(&source, &tree);
-                diagnostics.extend(formatter.redundant_parentheses());
-                diagnostics.extend(formatter.whitespace());
-                diagnostics.extend(formatter.trailing_commas());
-                diagnostics.extend(formatter.arrow_returns());
-                diagnostics.extend(formatter.method_chains());
-                diagnostics.extend(formatter.import_order());
-                diagnostics.extend(formatter.long_lines());
-                diagnostics.extend(formatter.member_order());
+                diagnostics.extend(formatter.report(&found).findings);
             }
         }
     }
