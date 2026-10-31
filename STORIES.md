@@ -1986,7 +1986,59 @@ two: merging is semantic, not formatting); `{ b as a, a as b }` sorts by importe
 a JSON import among `.js` ones; a namespace import among named ones.
 
 #### US-046 Comment placement
-§9.5, S006 · After: US-042 · Size: M · M0
+§9.5, S006 · After: US-042 · Size: M · M0 · **Status: complete** (2026-10-30)
+
+> Delivered in `sjs-format`: `comments.rs` places every comment the layout of items did
+> not (US-042 placed those above an item and at the end of its line): a comment lives in
+> the leading trivia of the token after it, and `placed` reads it as trailing (a `//` or
+> a block comment on the line of the token before, which goes to the end of that line),
+> inline (a block comment the token follows on its line, written where it is) or its
+> own (on a line of its own, which it keeps); `Formatter::token` writes the comments
+> before every token it prints, and the structural tokens the layout writes itself
+> (`,` and the brackets of a list, `{`, a dropped `;` or `)`, `:`, `=>`) hand theirs to
+> the item before, the item after or the bracket they hang in (`Items` in `expr.rs`,
+> `dangling` in `bracketed`). `doc.rs` gained what that needs: `LineSuffix`, text for
+> the end of its line that no group holding it keeps flat; `LineStart`, a break unless
+> the line is empty; `Paragraph`, words filled to the width behind a prefix; and
+> `HangSuffixes`/`HangEnd`, by which a block takes the comments waiting for its `{`
+> line onto lines of their own inside it, as US-042 placed a comment after `{`. The
+> printer never ends a line with two `//` comments: the second begins the next line of
+> text, indented like the line it could not end, which is where the item layout puts it
+> on a second pass. `//x` becomes `// x`, a `//` comment beginning with `/` or `*`
+> stays as written, a `//` comment at a line's end takes two spaces and a block comment
+> one (SPEC.md §9.5 gives the two to `//`; US-042's `function f() {}  /* after */` lost
+> a space), and a `/** */` doc comment on a line of its own is reflowed: one that fits
+> on one line stays one line, otherwise `/**`, ` * ` lines and ` */`, prose filled to
+> the width paragraph by paragraph (a word that would read as structure glued to the
+> word before it), blank lines collapsed and dropped at the ends, tag lines, fenced
+> blocks, list items, headings, table rows, quotes and indented lines as written.
+> `Formatter::long_lines()` reports S006, with no replacement, for every comment on a
+> line of the canonical text longer than 100 columns: the canonical text is parsed again
+> and its comments paired with the source's in the order the layout writes them.
+> `sjs-cli`'s pipeline runs it. `sjs_testkit::program` gained US-009's
+> comment-insertion mode: `Options::comments` inserts `//`, `//x`, ruler, block and doc
+> comments (a long paragraph, a tag, an example) above one rendered line in four and a
+> `//` comment at the end of one in five, kept on `Program::comments` so the items are
+> the program the seed gives without them. Tests: unit tests for every placement, the
+> normalizations, the reflow and S006; `tests/snapshot_comments.rs` with comments in
+> every syntactic position; `tests/comments_corpus.rs`, which lays out three hundred
+> generated programs with comments (`SJS_CORPUS_PROGRAMS` for more) and checks that
+> the result parses clean, is the same program as without the comments (`canonical` in
+> `tests/common`), holds every comment and is a fixed point; fixtures under
+> `tests/conformance/09-comments/S006/` with a near-miss file. The corpus found a
+> US-043 fault: a broken `import()` took a trailing comma, which the grammar rejects;
+> `call_tail` now never gives it one. The S003 fixtures' own `// expect:` lines are over
+> 100 columns and now declare the S006 that names them. **Decisions:** a `//` comment
+> inside an expression ends the line it is on and forces the groups around it to break,
+> so `f(a, // x\n b)` keeps the comment after `a,`; a `//` comment the layout cannot
+> end a line with (one before a dropped `)`, or one kept from the end of a line it would
+> break) goes to the end of the line, where no code can follow it; in a bracketed list a
+> comment after the opening bracket stays on the bracket's line, while in a block it
+> goes inside, as US-042 decided; a comment inside an empty block hangs inside it; only a
+> doc comment on a line of its own is reflowed, an inline or trailing one is written as
+> it is; a line of a doc comment indented by two spaces or beginning with a Markdown
+> marker is never reflowed; S006 names comments only, since a long string on its own
+> line is what §9.1 allows. Verified: 100% lines and regions; 264 mutants on the diff (205 caught, 44 unviable, 15 missed: a stray-range filter S006 never exercised, two equivalent mutants (an index past a comment that is never a line break, a dead edge check on doc comment lines), a fence toggle, a marker word glued where no line ended, a switch's brace, the generator's comment kinds, and an or-pattern llvm-cov misread), each fixed or removed and the functions changed rerun three times (25: 1 missed, 35: 2 missed, 2: 0 missed); every §0.2 gate clean.
 
 **Done when**
 - `//x` → `// x`; `a = 1 // x` → `a = 1  // x`; a comment between two statements stays

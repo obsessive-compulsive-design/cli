@@ -76,6 +76,21 @@ pub fn stripped(text: &str) -> Option<String> {
     Some(strip(&tree.to_sexp(&f)))
 }
 
+/// [`stripped`], and also without what the layout itself may change (US-046's corpus):
+/// a trailing comma before a closing bracket, and an arrow's block body that is a
+/// single `return` rendered as the value.
+pub fn canonical(text: &str) -> Option<String> {
+    let f = file(text);
+    let (tree, diagnostics) = parse(&f);
+    if diagnostics.iter().any(|d| d.code == Code::E000) {
+        return None;
+    }
+    let chars: Vec<char> = tree.to_sexp(&f).chars().collect();
+    let mut pos = 0;
+    let item = parse_item(&chars, &mut pos);
+    Some(render_with(&item, true))
+}
+
 enum Item {
     Node(String, Vec<Item>),
     Token(String),
@@ -136,14 +151,57 @@ fn parse_item(chars: &[char], pos: &mut usize) -> Item {
 }
 
 fn render(item: &Item) -> String {
+    render_with(item, false)
+}
+
+/// `item` with redundant parentheses removed and, when `canonical`, without a trailing
+/// comma before a closing bracket and with a single-`return` arrow body as its value.
+fn render_with(item: &Item, canonical: bool) -> String {
     match item {
         Item::Token(text) => text.clone(),
         Item::Node(kind, children) => {
             if kind == "ParenExpr" && children.len() == 3 {
-                return render(&children[1]);
+                return render_with(&children[1], canonical);
             }
-            let inner: Vec<String> = children.iter().map(render).collect();
+            if canonical && kind == "ArrowFunction" {
+                if let Some(value) = children.last().and_then(returned_value) {
+                    let head: Vec<String> = children[..children.len() - 1]
+                        .iter()
+                        .map(|child| render_with(child, canonical))
+                        .collect();
+                    return format!(
+                        "({kind} {} {})",
+                        head.join(" "),
+                        render_with(value, canonical)
+                    );
+                }
+            }
+            let mut inner: Vec<String> = Vec::new();
+            for (at, child) in children.iter().enumerate() {
+                let closer = matches!(children.get(at + 1), Some(Item::Token(t)) if t == ")" || t == "]" || t == "}");
+                if canonical && closer && matches!(child, Item::Token(t) if t == ",") {
+                    continue;
+                }
+                inner.push(render_with(child, canonical));
+            }
             format!("({kind} {})", inner.join(" "))
         }
     }
+}
+
+/// The value an arrow's block body returns when it is a single `return` with a value.
+fn returned_value(body: &Item) -> Option<&Item> {
+    let Item::Node(kind, children) = body else {
+        return None;
+    };
+    if kind != "Block" || children.len() != 3 {
+        return None;
+    }
+    let Item::Node(statement, parts) = &children[1] else {
+        return None;
+    };
+    if statement != "ReturnStmt" || parts.len() != 2 {
+        return None;
+    }
+    Some(&parts[1])
 }

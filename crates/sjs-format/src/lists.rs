@@ -310,6 +310,15 @@ mod tests {
             Vec::new(),
             "a rest parameter never takes the comma"
         );
+        assert_eq!(
+            module(&format!("const {{ a }} = import(\"./{LONG}.js\")\n")),
+            format!("const {{ a }} = import(\n  \"./{LONG}.js\"\n)\n"),
+            "an import() never takes the comma either"
+        );
+        assert_eq!(
+            commas(&format!("const {{ a }} = import(\"./{LONG}.js\")\n")),
+            Vec::new()
+        );
         assert_eq!(commas(""), Vec::new());
     }
 

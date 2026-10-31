@@ -537,7 +537,10 @@ fn everything() -> Program {
             false,
         ))),
     ];
-    Program { items }
+    Program {
+        items,
+        comments: Vec::new(),
+    }
 }
 
 #[test]
@@ -551,6 +554,7 @@ fn precedence_parenthesises_exactly_where_needed() {
     let render = |e: Expr| {
         Program {
             items: vec![Item::Stmt(Stmt::Expr(Expr::Assign(b(id("r")), "=", b(e))))],
+            comments: Vec::new(),
         }
         .to_string()
     };
@@ -746,6 +750,7 @@ fn an_arrow_body_that_begins_with_a_brace_is_parenthesised() {
     let render = |e: Expr| {
         Program {
             items: vec![Item::Stmt(Stmt::Expr(Expr::Assign(b(id("r")), "=", b(e))))],
+            comments: Vec::new(),
         }
         .to_string()
     };
@@ -792,6 +797,7 @@ fn an_arrow_body_that_begins_with_a_brace_is_parenthesised() {
 fn strings_escape_what_the_subset_needs() {
     let render = |text: &str| {
         Program {
+            comments: Vec::new(),
             items: vec![Item::Stmt(Stmt::Throw(Expr::Literal(Literal::Str(
                 text.to_owned(),
             ))))],
@@ -816,6 +822,7 @@ fn every_production_appears_in_the_generated_corpus() {
         max_depth: 5,
         max_items: 8,
         doubles: true,
+        comments: false,
     };
     for seed in 0..600 {
         seen.extend(generate(seed, options).1);
@@ -970,6 +977,7 @@ fn generated_programs_contain_no_removed_syntax() {
         max_depth: 5,
         max_items: 8,
         doubles: true,
+        comments: false,
     };
     for seed in 0..400 {
         let text = generate(seed, options).0.to_string();
@@ -1006,6 +1014,7 @@ fn generated_identifiers_never_collide_with_reserved_names() {
         max_depth: 4,
         max_items: 6,
         doubles: false,
+        comments: false,
     };
     let mut names_seen = BTreeSet::new();
     for seed in 0..300 {
@@ -1054,6 +1063,7 @@ fn numbers_stay_int32_unless_doubles_are_requested() {
                 max_depth: 5,
                 max_items: 8,
                 doubles: false,
+                comments: false,
             },
         )
         .0
@@ -1077,6 +1087,7 @@ fn numbers_stay_int32_unless_doubles_are_requested() {
                     max_depth: 5,
                     max_items: 8,
                     doubles: true,
+                    comments: false,
                 },
             )
             .1
@@ -1091,6 +1102,7 @@ fn numbers_stay_int32_unless_doubles_are_requested() {
                     max_depth: 5,
                     max_items: 8,
                     doubles: false,
+                    comments: false,
                 },
             )
             .1
@@ -1109,6 +1121,7 @@ fn regex_literals_always_carry_v_and_never_u() {
                 max_depth: 5,
                 max_items: 8,
                 doubles: false,
+                comments: false,
             },
         )
         .0
@@ -1136,6 +1149,7 @@ fn shrinking_removes_one_item_or_statement_at_a_time() {
         options: Options::default(),
     };
     let program = Program {
+        comments: Vec::new(),
         items: vec![
             Item::Stmt(Stmt::While(id("a"), vec![Stmt::Break, Stmt::Continue])),
             Item::Decl(Decl::Function {
@@ -1164,6 +1178,7 @@ fn shrinking_removes_one_item_or_statement_at_a_time() {
         .iter()
         .all(|c| c.items.len() == 4 || c.items.len() == 5));
     let exported = Program {
+        comments: Vec::new(),
         items: vec![Item::Export(Decl::Function {
             is_async: false,
             is_generator: false,
@@ -1175,8 +1190,12 @@ fn shrinking_removes_one_item_or_statement_at_a_time() {
     assert_eq!(
         gen.shrink(&exported),
         vec![
-            Program { items: vec![] },
             Program {
+                items: vec![],
+                comments: Vec::new()
+            },
+            Program {
+                comments: Vec::new(),
                 items: vec![Item::Export(Decl::Function {
                     is_async: false,
                     is_generator: false,
@@ -1189,7 +1208,10 @@ fn shrinking_removes_one_item_or_statement_at_a_time() {
         "an exported declaration stays exported when its body shrinks"
     );
     assert_eq!(
-        gen.shrink(&Program { items: vec![] }),
+        gen.shrink(&Program {
+            items: vec![],
+            comments: Vec::new()
+        }),
         Vec::<Program>::new()
     );
     assert!(gen.shrink(&everything()).len() > 50);
@@ -1202,6 +1224,7 @@ fn a_failing_property_shrinks_to_a_one_item_program() {
             max_depth: 4,
             max_items: 8,
             doubles: false,
+            comments: false,
         },
     };
     let failure = check_with(&Config::new(200), &gen, &|p: &Program| {
@@ -1400,4 +1423,67 @@ fn no_generated_class_member_continues_the_field_before_it() {
         params: Vec::new(),
         body: Vec::new(),
     }));
+}
+
+#[test]
+fn comments_are_inserted_only_when_asked_and_leave_the_code_in_place() {
+    let plain = ProgramGen {
+        options: Options::default(),
+    };
+    let with = ProgramGen {
+        options: Options {
+            comments: true,
+            ..Options::default()
+        },
+    };
+    for seed in 0..40 {
+        let program = with.generate(&mut Rng::from_seed(seed));
+        assert_eq!(
+            program.items,
+            plain.generate(&mut Rng::from_seed(seed)).items,
+            "seed {seed}: the same program, comments apart"
+        );
+        assert!(!program.comments.is_empty(), "seed {seed}: some comment");
+        let text = program.to_string();
+        let bare = Program {
+            items: program.items.clone(),
+            comments: Vec::new(),
+        }
+        .to_string();
+        let mut lines = text.lines();
+        for line in bare.lines() {
+            assert!(
+                lines.any(|with| {
+                    with == line
+                        || (!line.is_empty()
+                            && with.starts_with(line)
+                            && with[line.len()..].starts_with(" // "))
+                }),
+                "seed {seed}: {line:?} is not in\n{text}"
+            );
+        }
+    }
+    let text = with.generate(&mut Rng::from_seed(7)).to_string();
+    crate::snapshot!("program-with-comments", &text);
+    let above: Vec<String> = (0..40)
+        .flat_map(|seed| with.generate(&mut Rng::from_seed(seed)).comments)
+        .filter(|comment| !comment.trailing)
+        .map(|comment| comment.text)
+        .collect();
+    let some = |test: &dyn Fn(&str) -> bool| above.iter().any(|text| test(text));
+    assert!(
+        some(&|text| text.starts_with("//") && !text.starts_with("// ") && text != "//////"),
+        "a `//x`"
+    );
+    assert!(some(&|text| text == "//////"), "a ruler");
+    assert!(some(&|text| text.starts_with("/* ")), "a block comment");
+    assert!(
+        some(&|text| text.starts_with("// ")),
+        "a `// x` above a line"
+    );
+    assert!(
+        some(&|text| text.starts_with("/**\n") && text.contains("@param")),
+        "a doc comment with a tag"
+    );
+    assert!(some(&|text| text.contains("@example")), "an example");
 }

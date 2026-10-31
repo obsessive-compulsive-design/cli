@@ -12,8 +12,8 @@ macro_rules! push {
 }
 
 use super::tree::{
-    Decl, Else, Expr, ForUpdate, Import, Item, Literal, Member, MemberKey, Param, Pattern, Program,
-    Property, Stmt, TemplatePart,
+    Comment, Decl, Else, Expr, ForUpdate, Import, Item, Literal, Member, MemberKey, Param, Pattern,
+    Program, Property, Stmt, TemplatePart,
 };
 
 impl fmt::Display for Program {
@@ -25,8 +25,34 @@ impl fmt::Display for Program {
             }
             render_item(&mut out, item, 0);
         }
-        f.write_str(&out)
+        if self.comments.is_empty() {
+            return f.write_str(&out);
+        }
+        f.write_str(&with_comments(&out, &self.comments))
     }
+}
+
+/// `text` with `comments` inserted: each above the line at its index, indented like it,
+/// or at the end of that line after one space.
+fn with_comments(text: &str, comments: &[Comment]) -> String {
+    let mut out = String::new();
+    for (at, line) in text.lines().enumerate() {
+        let indent = &line[..line.len() - line.trim_start().len()];
+        for comment in comments.iter().filter(|c| c.line == at && !c.trailing) {
+            for text in comment.text.lines() {
+                out.push_str(indent);
+                out.push_str(text);
+                out.push('\n');
+            }
+        }
+        out.push_str(line);
+        for comment in comments.iter().filter(|c| c.line == at && c.trailing) {
+            out.push(' ');
+            out.push_str(&comment.text);
+        }
+        out.push('\n');
+    }
+    out
 }
 
 fn indent(out: &mut String, level: usize) {

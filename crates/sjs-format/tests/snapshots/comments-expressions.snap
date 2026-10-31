@@ -1,0 +1,186 @@
+--- source
+f(a, // x
+  b)
+--- formatted
+f(
+  a,  // x
+  b,
+)
+
+--- source
+f(
+  // about a
+  a,
+  b)
+--- formatted
+f(
+  // about a
+  a,
+  b,
+)
+
+--- source
+f(/* a */ a, b /* b */, /* c */ c)
+--- formatted
+f(/* a */ a, b /* b */, /* c */ c)
+
+--- source
+f(a /* last */)
+--- formatted
+f(a /* last */)
+
+--- source
+f(a, // last
+)
+--- formatted
+f(
+  a,  // last
+)
+
+--- source
+f(
+  a,
+  // dangling
+)
+--- formatted
+f(
+  a,
+  // dangling
+)
+
+--- source
+f( // none
+)
+--- formatted
+f(  // none
+)
+
+--- source
+const o = [
+  /* dangling */
+]
+--- formatted
+const o = [
+  /* dangling */
+]
+
+--- source
+const o = {
+  a: 1, // a
+  // b
+  b: 2,
+}
+--- formatted
+const o = {
+  a: 1,  // a
+  // b
+  b: 2,
+}
+
+--- source
+const o = { a /* k */: 1, b: /* v */ 2 }
+--- formatted
+const o = { a /* k */: 1, b: /* v */ 2 }
+
+--- source
+const { a /* a */, b } = o
+--- formatted
+const { a /* a */, b } = o
+
+--- source
+function f(a /* a */, b = /* d */ 1) {}
+--- formatted
+function f(a /* a */, b = /* d */ 1) {}
+
+--- source
+x = a + /* c */ b
+--- formatted
+x = a + /* c */ b
+
+--- source
+x = a + // c
+  b
+--- formatted
+x = a +  // c
+  b
+
+--- source
+x = a
+  // c
+  ? b : c
+--- formatted
+x = a
+  // c
+  ? b
+  : c
+
+--- source
+x = a.b() // c
+  .c()
+  .d()
+--- formatted
+x = a
+  .b()  // c
+  .c()
+  .d()
+
+--- source
+x = /* c */ -a
+--- formatted
+x = /* c */ -a
+
+--- source
+x = (a) /* c */ => a
+--- formatted
+x = (a) /* c */ => a
+
+--- source
+x = /* c */ (a)
+--- formatted
+x = /* c */ a
+
+--- source
+x = (a
+  // own
+) + 1
+--- formatted
+x = a +  // own
+  1
+
+--- source
+x = f(/** doc */ a)
+--- formatted
+x = f(/** doc */ a)
+
+--- source
+new A(a, // a
+  b)
+--- formatted
+new A(
+  a,  // a
+  b,
+)
+
+--- source
+x = a /* long
+  block */ + b
+--- formatted
+x = a /* long
+  block */ + b
+
+--- source
+import { a /* a */, b } from "./a.js"
+--- formatted
+import { a /* a */, b } from "./a.js"
+
+--- source
+const a = [1
+  // own before the comma
+  , 2]
+--- formatted
+const a = [
+  1,
+  // own before the comma
+  2,
+]
+

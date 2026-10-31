@@ -4,8 +4,8 @@
 use std::collections::BTreeSet;
 
 use super::tree::{
-    Decl, Else, Expr, ForUpdate, Import, Item, Literal, Member, MemberKey, Param, Pattern, Program,
-    Property, Stmt, TemplatePart,
+    Comment, Decl, Else, Expr, ForUpdate, Import, Item, Literal, Member, MemberKey, Param, Pattern,
+    Program, Property, Stmt, TemplatePart,
 };
 use crate::prng::Rng;
 use crate::prop::Gen;
@@ -477,6 +477,9 @@ pub struct Options {
     pub max_items: u8,
     /// Allow non-integer number literals (`0.5`); otherwise every number is an `int32`.
     pub doubles: bool,
+    /// Insert comments into the rendered text (US-046): above one line in four and at the
+    /// end of one in five, `//`, `/* */` and doc comments among them.
+    pub comments: bool,
 }
 
 impl Default for Options {
@@ -485,9 +488,38 @@ impl Default for Options {
             max_depth: 4,
             max_items: 6,
             doubles: false,
+            comments: false,
         }
     }
 }
+
+/// The words of generated comments.
+const COMMENT_WORDS: &[&str] = &[
+    "the",
+    "layout",
+    "keeps",
+    "every",
+    "comment",
+    "where",
+    "it",
+    "was",
+    "written",
+    "and",
+    "reflows",
+    "prose",
+    "to",
+    "width",
+    "while",
+    "a",
+    "tag",
+    "line",
+    "stays",
+    "whole",
+    "paragraphs",
+    "apart",
+    "fences",
+    "verbatim",
+];
 
 /// Where the generator is, so it only emits what the grammar allows there.
 #[derive(Debug, Clone, Copy, Default)]
@@ -620,7 +652,10 @@ impl Gen for ProgramGen {
     fn shrink(&self, value: &Program) -> Vec<Program> {
         shrink_items(&value.items)
             .into_iter()
-            .map(|items| Program { items })
+            .map(|items| Program {
+                items,
+                comments: value.comments.clone(),
+            })
             .collect()
     }
 }
@@ -836,7 +871,84 @@ impl Generator<'_> {
         for _ in 0..count {
             items.push(self.item(ctx));
         }
-        Program { items }
+        let comments = if self.options.comments {
+            self.comments(&items)
+        } else {
+            Vec::new()
+        };
+        Program { items, comments }
+    }
+
+    /// Comments for the rendered text of `items`: above one line in four and at the end
+    /// of one in five, a doc comment with a long paragraph, a tag and an example among
+    /// them, a `//x` without its space and a ruler too.
+    fn comments(&mut self, items: &[Item]) -> Vec<Comment> {
+        let text = Program {
+            items: items.to_vec(),
+            comments: Vec::new(),
+        }
+        .to_string();
+        let mut comments = Vec::new();
+        for (line, content) in text.lines().enumerate() {
+            if content.trim().is_empty() {
+                continue;
+            }
+            if self.chance(1, 4) {
+                let text = self.comment_above();
+                comments.push(Comment {
+                    line,
+                    text,
+                    trailing: false,
+                });
+            }
+            if self.chance(1, 5) {
+                let text = format!("// {}", self.words(1, 5));
+                comments.push(Comment {
+                    line,
+                    text,
+                    trailing: true,
+                });
+            }
+        }
+        comments
+    }
+
+    fn comment_above(&mut self) -> String {
+        match self.rng.below(6) {
+            0 => format!("//{}", self.words(1, 4)),
+            1 => "//////".to_owned(),
+            2 => format!("/* {} */", self.words(1, 6)),
+            3 => format!("// {}", self.words(1, 8)),
+            _ => self.doc_comment(),
+        }
+    }
+
+    fn doc_comment(&mut self) -> String {
+        let mut text = format!("/**\n * {}\n", self.words(3, 40));
+        if self.chance(1, 2) {
+            let name = self.name();
+            let prose = self.words(1, 10);
+            text.push_str(" *\n * @param ");
+            text.push_str(&name);
+            text.push_str("  ");
+            text.push_str(&prose);
+            text.push('\n');
+        }
+        if self.chance(1, 3) {
+            text.push_str(
+                " *\n * @example\n * ```js\n * const x = 1\n *\n * expect(x).toBe(1)\n * ```\n",
+            );
+        }
+        text.push_str(" */");
+        text
+    }
+
+    fn words(&mut self, lo: usize, hi: usize) -> String {
+        let count = lo + self.rng.index(hi - lo + 1);
+        (0..count)
+            .map(|_| self.pick(COMMENT_WORDS))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn import(&mut self) -> Import {

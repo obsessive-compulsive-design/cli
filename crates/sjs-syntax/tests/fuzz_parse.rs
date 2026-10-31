@@ -167,6 +167,7 @@ fn corpus_programs_with_one_token_deleted_parse_without_panic_and_round_trip() {
             max_depth: 4,
             max_items: 6,
             doubles: true,
+            comments: false,
         },
     };
     for seed in 0..1_000u64 {

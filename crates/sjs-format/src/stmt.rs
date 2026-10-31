@@ -5,7 +5,8 @@
 //! before `}`, and one always precedes a `function` declaration, above its comment. A
 //! comment above an item stays above it and one at the end of its line stays there,
 //! as written (US-046 refines the text); a template literal keeps its lines (§9.3).
-//! Imports stand in order ([`crate::imports`], US-045).
+//! Imports stand in order ([`crate::imports`], US-045), and a comment is written as
+//! [`crate::comments`] says (US-046).
 
 use sjs_diag::Span;
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct, Token, TokenKind, Trivia, TriviaKind};
@@ -27,6 +28,16 @@ enum Star {
 pub(crate) enum Above {
     Blank,
     Comment(Span),
+}
+
+impl Above {
+    /// The comment's span; `None` for a blank line.
+    pub(crate) fn comment(self) -> Option<Span> {
+        match self {
+            Above::Comment(span) => Some(span),
+            Above::Blank => None,
+        }
+    }
 }
 
 /// What stands on a line of its own among a block's or the file's items.
@@ -126,18 +137,32 @@ impl Formatter<'_> {
         }
     }
 
-    /// `{ … }` with one item per line, indented; `{}` with nothing inside.
+    /// `{ … }` with one item per line, indented; `{}` with nothing inside; the comments
+    /// before the `{` before it, and a comment after it on a line of its own inside.
     fn block(&self, node: NodeRef<'_>) -> Doc {
-        let inner = self.items(node, false);
+        let brace = node.children().find_map(|child| match child {
+            Element::Token(token) if is_punct(child, Punct::LBrace) => Some(token),
+            _ => None,
+        });
+        let mut out = brace.map_or_else(Vec::new, |token| self.before(token));
+        let mut inner = self.items(node, false);
         if inner.is_empty() {
-            return Doc::text("{}");
+            out.extend([
+                Doc::text("{"),
+                Doc::indent(vec![Doc::HangSuffixes]),
+                Doc::HangEnd,
+                Doc::text("}"),
+            ]);
+        } else {
+            inner.insert(0, Doc::HangSuffixes);
+            out.extend([
+                Doc::text("{"),
+                Doc::indent(inner),
+                Doc::HardLine,
+                Doc::text("}"),
+            ]);
         }
-        Doc::Group(vec![
-            Doc::text("{"),
-            Doc::indent(inner),
-            Doc::HardLine,
-            Doc::text("}"),
-        ])
+        Doc::Group(out)
     }
 
     /// `switch (x) {` with one clause per line.
@@ -190,7 +215,10 @@ impl Formatter<'_> {
         for (at, element) in elements.iter().enumerate() {
             let (before, after) = match *element {
                 Element::Token(token) => match token.token().kind {
-                    TokenKind::Punct(Punct::Semicolon) if at == last => break,
+                    TokenKind::Punct(Punct::Semicolon) if at == last => {
+                        out.extend(self.suffixes(token));
+                        break;
+                    }
                     TokenKind::Punct(
                         Punct::Semicolon
                         | Punct::RParen
@@ -250,8 +278,7 @@ impl Formatter<'_> {
                 Body::End => self.push_dangling(&mut out, &item.above, previous.is_some()),
             }
             for span in &item.trailing {
-                out.push(Doc::text("  "));
-                out.push(Doc::text(self.text(*span)));
+                out.push(Doc::LineSuffix(self.at_line_end(*span)));
             }
         }
         out
@@ -265,7 +292,7 @@ impl Formatter<'_> {
             match *entry {
                 Above::Blank => out.push(Doc::HardLine),
                 Above::Comment(span) => {
-                    out.push(Doc::text(self.text(span)));
+                    out.extend(self.comment_block(span));
                     out.push(Doc::HardLine);
                 }
             }
@@ -286,7 +313,7 @@ impl Formatter<'_> {
                         out.push(Doc::HardLine);
                     }
                     out.push(Doc::HardLine);
-                    out.push(Doc::text(self.text(span)));
+                    out.extend(self.comment_block(span));
                     blank = false;
                     separated = true;
                 }
@@ -562,7 +589,7 @@ mod tests {
     fn comments_stay_above_or_beside_their_item() {
         assert_eq!(
             module("// lead\nconst a = 1 // trail\n\n\n/** doc */\nfunction f() {} /* after */\n"),
-            "// lead\nconst a = 1  // trail\n\n/** doc */\nfunction f() {}  /* after */\n"
+            "// lead\nconst a = 1  // trail\n\n/** doc */\nfunction f() {} /* after */\n"
         );
         assert_eq!(
             module("const a = 1\n// between\n\nconst b = 2"),

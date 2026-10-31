@@ -28,7 +28,7 @@ const kept = {
 const kept = { // why
   a: 1 }
 --- formatted
-const kept = {
+const kept = {  // why
   a: 1,
 }
 
@@ -36,7 +36,7 @@ const kept = {
 const kept = { /* why */ a: 1 }
 --- formatted
 const kept = {
-  a: 1,
+  /* why */ a: 1,
 }
 
 --- source

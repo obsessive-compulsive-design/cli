@@ -1,0 +1,128 @@
+--- source
+//x
+f()
+--- formatted
+// x
+f()
+
+--- source
+f() //x
+--- formatted
+f()  // x
+
+--- source
+f() /* x */
+--- formatted
+f() /* x */
+
+--- source
+a()
+// between
+b()
+--- formatted
+a()
+
+// between
+b()
+
+--- source
+a() // first
+// above b
+b() // second
+--- formatted
+a()  // first
+
+// above b
+b()  // second
+
+--- source
+function f() {
+  a()
+  // end
+}
+--- formatted
+function f() {
+  a()
+  // end
+}
+
+--- source
+f() // no final newline
+--- formatted
+f()  // no final newline
+
+--- source
+/* a */ /* b */ f()
+--- formatted
+/* a */
+/* b */
+f()
+
+--- source
+if (a) /* c */ {
+  b()
+} // tail
+else {
+  c()
+}
+--- formatted
+if (a) /* c */ {
+  b()
+} else {
+  // tail
+  c()
+}
+
+--- source
+switch (a) {
+  case 1:
+  // between labels
+  case 2: {
+    f()
+  }
+}
+--- formatted
+switch (a) {
+  case 1:
+  // between labels
+  case 2: {
+    f()
+  }
+}
+
+--- source
+class A {
+  // first
+  a = 1 // trailing
+  /** m */
+  m() {}
+}
+--- formatted
+class A {
+  // first
+  a = 1  // trailing
+  /** m */
+  m() {}
+}
+
+--- source
+f(); // after a semicolon
+--- formatted
+f()  // after a semicolon
+
+--- source
+//////
+//***
+// ok
+f()
+--- formatted
+//////
+//***
+// ok
+f()
+
+--- source
+for (let i = 0; /* c */ i < n; i++) {}
+--- formatted
+for (let i = 0; /* c */ i < n; i++) {}
+

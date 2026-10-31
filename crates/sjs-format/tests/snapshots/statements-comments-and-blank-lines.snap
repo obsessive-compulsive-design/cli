@@ -17,7 +17,7 @@ import { a } from "./a.js"
 const b = a  // trailing
 
 /* block */
-function f() {}  /* after */
+function f() {} /* after */
 
 --- source
 function f() { // why

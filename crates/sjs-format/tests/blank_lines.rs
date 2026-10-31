@@ -109,7 +109,7 @@ fn a_file_that_is_only_comments() {
 #[test]
 fn no_trailing_newline_plus_a_trailing_comment() {
     assert_eq!(module("f() // x"), "f()  // x\n");
-    assert_eq!(module("f() /* x */"), "f()  /* x */\n");
+    assert_eq!(module("f() /* x */"), "f() /* x */\n");
     assert_eq!(module("f()\n// x"), "f()\n// x\n");
 }
 

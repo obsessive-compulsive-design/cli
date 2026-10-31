@@ -909,6 +909,7 @@ mod tests {
                 max_depth: 4,
                 max_items: 6,
                 doubles: true,
+                comments: false,
             },
         };
         for seed in 0..2000u64 {

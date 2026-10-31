@@ -1,0 +1,183 @@
+--- source
+/** Short. */
+export function f() {}
+--- formatted
+/** Short. */
+export function f() {}
+
+--- source
+/**Short.*/
+export function f() {}
+--- formatted
+/** Short. */
+export function f() {}
+
+--- source
+/** word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word */
+export function f() {}
+--- formatted
+/**
+ * word word word word word word word word word word word word word word word word word word word
+ * word word word word word word word word word word word
+ */
+export function f() {}
+
+--- source
+/**
+ * word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word 
+ *
+ * Second paragraph.
+ */
+export function f() {}
+--- formatted
+/**
+ * word word word word word word word word word word word word word word word word word word word
+ * word word word word word word word word word word word
+ *
+ * Second paragraph.
+ */
+export function f() {}
+
+--- source
+/**
+ * One
+ * two.
+ *
+ *
+ * @param a  the first
+ * @returns it
+ */
+export function f(a) {}
+--- formatted
+/**
+ * One two.
+ *
+ * @param a  the first
+ * @returns it
+ */
+export function f(a) {}
+
+--- source
+/**
+ * @example
+ * ```js
+ * const x = f()
+ *
+ *   expect(x).toBe(1)
+ * ```
+ * - item one
+ * - item two
+ * # Heading
+ * | a | b |
+ * > quote
+ * 1. first
+ *   indented
+ */
+export function f() {}
+--- formatted
+/**
+ * @example
+ * ```js
+ * const x = f()
+ *
+ *   expect(x).toBe(1)
+ * ```
+ * - item one
+ * - item two
+ * # Heading
+ * | a | b |
+ * > quote
+ * 1. first
+ *   indented
+ */
+export function f() {}
+
+--- source
+/**
+ *
+ * Doc.
+ *
+ */
+export function f() {}
+--- formatted
+/**
+ * Doc.
+ */
+export function f() {}
+
+--- source
+/**
+ Doc without stars.
+ */
+export function f() {}
+--- formatted
+/**
+ * Doc without stars.
+ */
+export function f() {}
+
+--- source
+/** Summary on the first line.
+ * More.
+ * **Bold** stays. */
+export function g() {}
+--- formatted
+/**
+ * Summary on the first line. More. **Bold** stays.
+ */
+export function g() {}
+
+--- source
+/**
+ * word word word word word word word word word word word word word word word word word word word ab
+ */
+export function f() {}
+class A {
+  /**
+   * word word word word word word word word word word word word word word word word word word word ab
+   */
+  m() {}
+}
+--- formatted
+/**
+ * word word word word word word word word word word word word word word word word word word word ab
+ */
+export function f() {}
+
+class A {
+  /**
+   * word word word word word word word word word word word word word word word word word word word
+   * ab
+   */
+  m() {}
+}
+
+--- source
+/***/
+f()
+--- formatted
+/** */
+f()
+
+--- source
+f()
+/**
+ * The end.
+ */
+--- formatted
+f()
+/**
+ * The end.
+ */
+
+--- source
+/**
+ * xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ */
+export function f() {}
+--- formatted
+/**
+ * xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+ */
+export function f() {}
+

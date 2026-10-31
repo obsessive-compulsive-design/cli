@@ -23,6 +23,7 @@
 //! ```
 
 pub mod chains;
+pub mod comments;
 pub mod doc;
 pub mod expr;
 pub mod imports;

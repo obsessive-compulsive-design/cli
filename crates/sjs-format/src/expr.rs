@@ -10,10 +10,11 @@
 
 use sjs_diag::{Code, Diagnostic, SourceFile};
 use sjs_syntax::{
-    double_quoted, Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, Token, TokenKind,
+    double_quoted, Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind, TokenRef,
     TriviaKind,
 };
 
+use crate::comments::{placed, Placed};
 use crate::doc::Doc;
 use crate::lists::single_return;
 
@@ -85,7 +86,7 @@ impl<'a> Formatter<'a> {
     pub fn element(&self, element: Element<'_>) -> Doc {
         match element {
             Element::Node(node) => self.expression(node),
-            Element::Token(token) => self.token(token.token()),
+            Element::Token(token) => self.token(token),
         }
     }
 
@@ -282,25 +283,46 @@ impl<'a> Formatter<'a> {
         self.file.slice(&span).unwrap_or("")
     }
 
-    /// A token as the layout writes it: a string double-quoted with minimal escapes,
-    /// anything else as written.
-    pub(crate) fn token(&self, token: &Token) -> Doc {
-        let text = self.text(token.span);
-        match token.kind {
+    /// A token as the layout writes it, after the comments before it (US-046): a string
+    /// double-quoted with minimal escapes, anything else as written.
+    pub(crate) fn token(&self, token: TokenRef<'_>) -> Doc {
+        let text = self.text(token.token().span);
+        let written = match token.token().kind {
             TokenKind::String(_) => Doc::text(double_quoted(text)),
             _ => Doc::text(text),
+        };
+        let mut docs = self.before(token);
+        if docs.is_empty() {
+            return written;
         }
+        docs.push(written);
+        Doc::Group(docs)
     }
 
-    /// `node` as written, line breaks and all.
+    /// `node` as written, line breaks and all, after the comments before it.
     pub(crate) fn verbatim(&self, node: NodeRef<'_>) -> Doc {
-        Doc::text(self.text(node.span()))
+        let mut docs = self.before_element(Element::Node(node));
+        docs.push(Doc::text(self.text(node.span())));
+        Doc::Group(docs)
     }
 
-    /// `( inner )`, or `inner` alone when the pair is redundant.
+    /// `( inner )`, or `inner` alone when the pair is redundant, the comments before its
+    /// `(` staying before the inner and those before its `)` going to the end of the
+    /// line, where no code can follow them.
     fn paren(&self, node: NodeRef<'_>) -> Doc {
         match inner_of(node) {
-            Some(inner) if !self.keeps(node, inner) => self.element(inner),
+            Some(inner) if !self.keeps(node, inner) => {
+                let children: Vec<Element<'_>> = node.children().collect();
+                let mut docs = Vec::new();
+                for (at, child) in children.iter().enumerate() {
+                    match *child {
+                        Element::Token(token) if at == 0 => docs.extend(self.before(token)),
+                        Element::Token(token) if at > 1 => docs.extend(self.suffixes(token)),
+                        _ => docs.push(self.element(inner)),
+                    }
+                }
+                Doc::Group(docs)
+            }
             _ => self.glued(node),
         }
     }
@@ -357,7 +379,7 @@ impl<'a> Formatter<'a> {
                 Element::Node(inner) if nested => {
                     self.flatten_binary(inner, level, operands, operators);
                 }
-                Element::Token(token) if at == 1 => operators.push(self.token(token.token())),
+                Element::Token(token) if at == 1 => operators.push(self.token(token)),
                 operand => operands.push(operand),
             }
         }
@@ -371,7 +393,7 @@ impl<'a> Formatter<'a> {
             match child {
                 Element::Token(token) if at == 1 || at == 3 => {
                     rest.push(Doc::Line);
-                    rest.push(self.token(token.token()));
+                    rest.push(self.token(token));
                     rest.push(Doc::text(" "));
                 }
                 test if at == 0 => out.push(self.element(test)),
@@ -400,7 +422,10 @@ impl<'a> Formatter<'a> {
         for child in node.children() {
             match child {
                 Element::Token(token) if token.token().kind == TokenKind::Punct(Punct::Comma) => {
+                    let (suffix, rest) = self.split(token);
+                    out.extend(suffix);
                     out.push(Doc::text(", "));
+                    out.extend(self.prefix(&rest));
                 }
                 _ => out.push(self.element(child)),
             }
@@ -421,6 +446,7 @@ impl<'a> Formatter<'a> {
                 break;
             }
             let text = self.first_text(*child);
+            out.extend(self.before_element(*child));
             out.push(Doc::text(text));
             let word = text.chars().all(char::is_alphabetic) || text == "*";
             let sign = (text == "-" || text == "+") && self.leads_with(children[operand], text);
@@ -453,30 +479,39 @@ impl<'a> Formatter<'a> {
     }
 
     /// Elements around a parenthesised argument list: `new`, a callee, `?.`, the list
-    /// itself as one group.
+    /// itself as one group. An `import()` never takes the trailing comma, which ES
+    /// forbids it.
     pub(crate) fn call_tail(&self, elements: &[Element<'_>]) -> Doc {
         let mut out = Vec::new();
-        let mut items: Vec<Doc> = Vec::new();
+        let mut items = Items::default();
         let mut in_list = false;
+        let import = elements.iter().any(|element| {
+            matches!(element, Element::Token(token)
+                if token.token().kind == TokenKind::Keyword(Keyword::Import))
+        });
         for child in elements.iter().copied() {
             match child {
                 Element::Token(token) if token.token().kind == TokenKind::Punct(Punct::LParen) => {
                     in_list = true;
+                    out.extend(self.before(token));
                 }
                 Element::Token(token) if token.token().kind == TokenKind::Punct(Punct::RParen) => {
                     in_list = false;
-                    out.push(bracketed("(", ")", items, false, false, false));
-                    items = Vec::new();
+                    let list = std::mem::take(&mut items).close(self, Some(token));
+                    out.push(bracketed("(", ")", list, false, import, false));
                 }
                 Element::Token(token) if in_list => {
-                    if token.token().kind != TokenKind::Punct(Punct::Comma) {
-                        items.push(self.token(token.token()));
+                    if token.token().kind == TokenKind::Punct(Punct::Comma) {
+                        items.comma(self, token);
+                    } else {
+                        items.push(self, self.token(token));
                     }
                 }
                 Element::Node(argument) if in_list => {
-                    items.push(self.expression(argument));
+                    items.push(self, self.expression(argument));
                 }
                 Element::Token(token) if token.token().kind == TokenKind::Keyword(Keyword::New) => {
+                    out.extend(self.before(token));
                     out.push(Doc::text("new "));
                 }
                 other => out.push(self.element(other)),
@@ -500,9 +535,11 @@ impl<'a> Formatter<'a> {
                         .iter()
                         .any(|trivia| trivia.kind != TriviaKind::Whitespace)
             });
-        let mut items: Vec<Doc> = Vec::new();
+        let mut items = Items::default();
+        let mut before_open = Vec::new();
         let mut open = "";
         let mut close = "";
+        let mut closer = None;
         let mut after_item = false;
         let mut rest_last = false;
         let children = if node.kind() == NodeKind::NamedImports {
@@ -517,31 +554,46 @@ impl<'a> Formatter<'a> {
                     match token.token().kind {
                         TokenKind::Punct(Punct::LBracket | Punct::LBrace | Punct::LParen) => {
                             open = text;
+                            before_open = self.before(token);
                         }
                         TokenKind::Punct(Punct::RBracket | Punct::RBrace | Punct::RParen) => {
                             close = text;
+                            closer = Some(token);
                         }
                         TokenKind::Punct(Punct::Comma) => {
                             if !after_item {
                                 // A hole: nothing between two commas.
-                                items.push(Doc::text(""));
+                                items.push(self, Doc::text(""));
                             }
+                            items.comma(self, token);
                             after_item = false;
                         }
                         _ => {
-                            items.push(self.token(token.token()));
+                            items.push(self, self.token(token));
                             after_item = true;
                         }
                     }
                 }
                 Element::Node(item) => {
                     rest_last = matches!(item.kind(), NodeKind::RestElement | NodeKind::RestParam);
-                    items.push(self.expression(item));
+                    items.push(self, self.expression(item));
                     after_item = true;
                 }
             }
         }
-        bracketed(open, close, items, braces, rest_last, expanded)
+        let list = bracketed(
+            open,
+            close,
+            items.close(self, closer),
+            braces,
+            rest_last,
+            expanded,
+        );
+        if before_open.is_empty() {
+            return list;
+        }
+        before_open.push(list);
+        Doc::Group(before_open)
     }
 
     /// A property, pattern property, pattern element or parameter: `key: value`,
@@ -557,7 +609,10 @@ impl<'a> Formatter<'a> {
         for child in node.children() {
             match child {
                 Element::Token(token) if token.token().kind == TokenKind::Punct(Punct::Colon) => {
+                    let (suffix, rest) = self.split(token);
+                    out.extend(suffix);
                     out.push(Doc::text(": "));
+                    out.extend(self.prefix(&rest));
                 }
                 Element::Node(initializer) if initializer.kind() == NodeKind::Initializer => {
                     out.push(Doc::text(" "));
@@ -581,11 +636,15 @@ impl<'a> Formatter<'a> {
                 Element::Token(token) => {
                     let text = self.text(token.token().span);
                     if text == "=>" {
+                        let (suffix, rest) = self.split(token);
+                        out.extend(suffix);
                         out.push(Doc::text(" => "));
+                        out.extend(self.prefix(&rest));
                     } else if text == "async" {
+                        out.extend(self.before(token));
                         out.push(Doc::text("async "));
                     } else {
-                        out.push(Doc::text(text));
+                        out.push(self.token(token));
                     }
                 }
                 Element::Node(child) => match returned {
@@ -609,21 +668,86 @@ impl<'a> Formatter<'a> {
     }
 }
 
+/// The items of a bracketed list as they are collected, with the comments around its
+/// commas (US-046): an inline comment before a comma ends the item before it, a comment
+/// on a line of its own before a comma begins the item after it.
+#[derive(Default)]
+struct Items {
+    docs: Vec<Doc>,
+    /// The comments that begin the next item.
+    carried: Vec<Placed>,
+}
+
+impl Items {
+    fn push(&mut self, f: &Formatter<'_>, doc: Doc) {
+        let mut docs = f.prefix(&std::mem::take(&mut self.carried));
+        if docs.is_empty() {
+            self.docs.push(doc);
+        } else {
+            docs.push(doc);
+            self.docs.push(Doc::Group(docs));
+        }
+    }
+
+    /// The comments before a comma: those on its line end the item before, the rest
+    /// begin the item after.
+    fn comma(&mut self, f: &Formatter<'_>, token: TokenRef<'_>) {
+        let (suffix, rest) = f.split(token);
+        self.attach(suffix);
+        self.carried.extend(rest);
+    }
+
+    /// `suffix` appended to the last item.
+    fn attach(&mut self, suffix: Vec<Doc>) {
+        if suffix.is_empty() {
+            return;
+        }
+        let item = self.docs.pop().unwrap_or(Doc::Text(String::new()));
+        self.docs
+            .push(Doc::Group(std::iter::once(item).chain(suffix).collect()));
+    }
+
+    /// The items and, apart, the comments hanging before the closing bracket `closer`:
+    /// an inline one on its line ends the last item, the rest hang; with no item, all
+    /// of them hang.
+    fn close(mut self, f: &Formatter<'_>, closer: Option<TokenRef<'_>>) -> (Vec<Doc>, Vec<Doc>) {
+        let placed = closer.map_or_else(Vec::new, placed);
+        if self.docs.is_empty() {
+            self.carried.extend(placed);
+        } else {
+            let (suffix, rest) = f.split_placed(&placed);
+            self.attach(suffix);
+            self.carried.extend(rest);
+        }
+        let dangling = f.dangling(&self.carried);
+        (self.docs, dangling)
+    }
+}
+
 /// `open items close` as a group: flat with a space inside braces, one item per line
-/// with a trailing comma when broken, empty brackets for no items. A list ending in a
-/// rest element or parameter never gets the trailing comma (ES forbids it); a spread
-/// argument or element takes it. An `expanded` list is one item per line whatever its
+/// with a trailing comma when broken, empty brackets for no items, the comments hanging
+/// before `close` inside it. A list ending in a
+/// rest element or parameter, and the path of an `import()`, never get the trailing
+/// comma (ES forbids it); a spread argument or element takes it. An `expanded` list is one item per line whatever its
 /// width, and so is every list around it.
 fn bracketed(
     open: &str,
     close: &str,
-    items: Vec<Doc>,
+    (items, dangling): (Vec<Doc>, Vec<Doc>),
     braces: bool,
-    rest_last: bool,
+    no_comma: bool,
     expanded: bool,
 ) -> Doc {
     if items.is_empty() {
-        return Doc::text(format!("{open}{close}"));
+        if dangling.is_empty() {
+            return Doc::text(format!("{open}{close}"));
+        }
+        return Doc::group(vec![
+            Doc::text(open),
+            Doc::indent(dangling),
+            Doc::HardLine,
+            Doc::text(close),
+        ]);
     }
     let separator = match (expanded, braces) {
         (true, _) => Doc::HardLine,
@@ -639,9 +763,10 @@ fn bracketed(
         }
         inner.push(item);
     }
-    if !rest_last {
+    if !no_comma {
         inner.push(Doc::if_break(vec![Doc::text(",")], Vec::new()));
     }
+    inner.extend(dangling);
     Doc::group(vec![
         Doc::text(open),
         Doc::indent(inner),

@@ -6,6 +6,20 @@
 pub struct Program {
     /// Imports first, then declarations and statements.
     pub items: Vec<Item>,
+    /// Comments the renderer inserts into the text (US-046's comment-insertion mode),
+    /// each above or at the end of the rendered line at its index.
+    pub comments: Vec<Comment>,
+}
+
+/// A comment inserted into a program's text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Comment {
+    /// The index of the rendered line it goes with.
+    pub line: usize,
+    /// Its text, one or more lines (a doc comment's), without indentation.
+    pub text: String,
+    /// At the end of the line, one space after the code, rather than above it.
+    pub trailing: bool,
 }
 
 /// A module item.

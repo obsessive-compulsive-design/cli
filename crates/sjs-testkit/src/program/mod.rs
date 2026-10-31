@@ -15,6 +15,6 @@ mod tree;
 
 pub use generate::{Options, Production, ProgramGen, RESERVED};
 pub use tree::{
-    Decl, Else, Expr, ForUpdate, Import, Item, Literal, Member, MemberKey, Param, Pattern, Program,
-    Property, Stmt, TemplatePart,
+    Comment, Decl, Else, Expr, ForUpdate, Import, Item, Literal, Member, MemberKey, Param, Pattern,
+    Program, Property, Stmt, TemplatePart,
 };
