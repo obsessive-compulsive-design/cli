@@ -4,11 +4,12 @@
 //! command honours `--help`, a malformed invocation is a usage error (exit 2) that prints
 //! the command's help, and an I/O failure is an internal failure (exit 70). Commands other
 //! than `help` are stubs that exit 70 until their own story lands. US-006 resolves the
-//! root and validates every flag value before a command runs.
+//! root and validates every flag value before a command runs. US-049 lands `sjs format`.
 
 mod args;
 mod commands;
 mod exit;
+mod format;
 mod options;
 pub mod pipeline;
 
@@ -94,12 +95,13 @@ fn try_run(
             return Ok(Outcome::Internal);
         }
     };
-    dispatch(&invocation, &options, stdout, stderr)
+    dispatch(&invocation, &options, cwd, stdout, stderr)
 }
 
 fn dispatch(
     invocation: &Invocation,
     options: &Options,
+    cwd: &Path,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> io::Result<Outcome> {
@@ -107,7 +109,7 @@ fn dispatch(
         Command::Help => run_help(invocation, stdout, stderr),
         Command::Build => not_implemented(stderr, Command::Build, "US-138"),
         Command::Lint => not_implemented(stderr, Command::Lint, "US-137"),
-        Command::Format => not_implemented(stderr, Command::Format, "US-049"),
+        Command::Format => format::run(options, cwd, stdout, stderr),
         Command::Test => not_implemented(stderr, Command::Test, "US-148"),
         Command::Map => not_implemented(stderr, Command::Map, "US-150"),
         Command::Docs => not_implemented(stderr, Command::Docs, "US-154"),
@@ -329,7 +331,6 @@ mod tests {
         for (command, story) in [
             (Command::Build, "US-138"),
             (Command::Lint, "US-137"),
-            (Command::Format, "US-049"),
             (Command::Test, "US-148"),
             (Command::Map, "US-150"),
             (Command::Docs, "US-154"),

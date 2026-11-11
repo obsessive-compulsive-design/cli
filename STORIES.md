@@ -2160,7 +2160,36 @@ findings and no diff; only a missing final newline produces one S008; a hunk mix
 codes is split into two findings.
 
 #### US-049 `sjs format` command
-§13.4, §13.1 · After: US-048, US-006 · Size: S · M0
+§13.4, §13.1 · After: US-048, US-006 · Size: S · M0 · **Status: complete** (2026-11-11)
+
+> Delivered in `sjs-cli`: `format.rs` is `sjs format`. For each root it prints the
+> unified diff of the file against its canonical layout on stdout (US-048's
+> `unified_diff`, the path relative to the working directory, so `sjs format | patch
+> -p0` applies it) and a summary line on stderr, and exits with the number of files
+> that would change, capped at 255; `--check` is the same run. `--write` replaces each
+> such file with its canonical text, written to a temporary file beside it that takes
+> the file's permissions and is renamed over it, prints no diff, and exits 0. A file
+> that is not UTF-8 or that the parser reports E000 or E001 for is reported
+> (`path:line:column: code message` on stderr), left as it is and counted, under
+> `--write` too, where the exit code is the number of files skipped. Before `--write`
+> writes anything, every file it would replace is checked: a read-only one is an
+> internal failure (exit 70) with nothing written; a file that cannot be read, or a
+> directory that refuses the temporary file, is exit 70 naming the path. `--quiet`
+> leaves the summary line alone. Tests on temporary trees: the diff and the count, a
+> file given twice, 256 files, a path outside the working directory, `--write` and its
+> second run, the mode kept, the three kinds of skipped file beside a style finding
+> that skips nothing, the read-only file, the unreadable file and the read-only
+> directory, failing streams, a file that is no root left untouched, and the test that
+> stays: a source with a freezable object, a wide signature and a deprecated call comes
+> out of `--write` with its layout alone changed. `tests/binary.rs` pipes the real
+> binary's diff into `patch -p0` and compares with `--write`. **Decisions:** the graph
+> is the roots until US-060 follows imports, so only the files named (or
+> `src/index.js`) are read or written; the summary goes to stderr so that stdout is the
+> diff alone; `--json` prints no diff, stdout being kept for the document US-136
+> defines; a read-only file already canonical is no obstacle to `--write`; only E000
+> and E001 skip a file, as the story says: any other E-code leaves it laid out.
+> Verified: 100% lines and regions; 26 mutants on the diff (22 caught, 4 unviable,
+> 0 missed); every §0.2 gate clean.
 
 **Done when**
 - Exit code equals changed-file count capped at 255; `--check` is the default spelled
