@@ -2243,7 +2243,33 @@ seed recorded; any shrunk counter-example is committed as a fixture.
 ### Epic 4 · Binder
 
 #### US-060 Module graph loader
-§5.1, §5.3 · After: US-021, US-006 · Size: M · M1
+§5.1, §5.3 · After: US-021, US-006 · Size: M · M1 · **Status: complete** (2026-11-14)
+
+> Delivered in `sjs-bind`: `ModuleGraph::load(host, base, roots)` reads the roots and
+> everything they name in `import … from`, `export … from` and `import("…")`, parses
+> each `.js` file once and keys every module by its canonical path (`graph.rs`);
+> modules come back in path order, each with its `Import`s (span, specifier, dynamic,
+> target). `E205` on the string for a path that names no file, a directory, a file that
+> cannot be read, a `.json` file that is not JSON (`json.rs`, an RFC 8259 validator
+> with no recursion) or a link to a file of the other kind. `Host` is the file system
+> the loader asks (`Disk` is the real one), so tests can refuse a read or count calls.
+> `graph.test_files(host)` is every `*.test.js` beside a module of the graph, and
+> `sjs-cli::options` now fills `test_files` with it for `sjs test` with explicit
+> entries. `sjs-syntax` exports `is_project_path`; `pipeline::check_graph` runs the
+> loader, and the conformance harness applies it to every directory fixture (six new
+> ones under `05-modules/E205/`).
+> **Decisions:** a path is followed segment by segment and each must be spelled exactly
+> as its directory entry, so a case mismatch is `E205` on every file system. A path
+> ending in `/` names a directory. A module's kind is its specifier's extension, and
+> the canonical file must have the same one. A `.js` file that is not UTF-8 is a module
+> of the graph carrying its `E000`. Paths the parser already reported (E201, the
+> `with` mismatches) are not resolved. A root that cannot be read is a `LoadError`
+> (exit 70 through `OptionsError::Io`), not `E205`. Test discovery looks beside the
+> modules of the entries' graph once; test files do not widen it. A single-file
+> fixture has no graph, so what it imports need not exist.
+> Verified: all §0.2 gates with 100 % lines and regions; mutation testing on the diff
+> with no survivor (ten mutants of the JSON scanner loop forever and time out); 10 000
+> modules load with one read each and one directory listing.
 
 As every whole-program pass I want the transitive closure of the root's imports loaded,
 parsed and keyed by canonical path, so the program is a closed world.

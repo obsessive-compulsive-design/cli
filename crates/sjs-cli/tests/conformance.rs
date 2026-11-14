@@ -4,7 +4,8 @@
 //! that adds its fixtures; a code without fixtures is "pending" until that story is
 //! marked complete in STORIES.md, and a failure afterwards.
 
-use sjs_cli::pipeline::{check_files, InputFile};
+use sjs_bind::Disk;
+use sjs_cli::pipeline::{check_files, check_graph, InputFile};
 use sjs_diag::{Code, Diagnostics};
 use sjs_testkit::conformance::{
     compare, discover, expectations_of, out_of_range, Finding, Fixture,
@@ -34,8 +35,11 @@ fn findings(diagnostics: &Diagnostics) -> Vec<Finding> {
         .collect()
 }
 
-/// Runs one fixture and returns its mismatches (empty when it conforms).
-fn run_fixture(fixture: &Fixture) -> Vec<String> {
+/// Runs one fixture found under `root` and returns its mismatches (empty when it
+/// conforms). Every file is checked on its own; a directory fixture is also a program on
+/// disk, whose graph from `entry.js` is checked (US-060). A fixture that is one file
+/// has no graph: what it imports need not exist.
+fn run_fixture(root: &Path, fixture: &Fixture) -> Vec<String> {
     let expected = match expectations_of(fixture) {
         Ok(expected) => expected,
         Err(error) => return vec![format!("{}: {error}", fixture.name)],
@@ -61,7 +65,13 @@ fn run_fixture(fixture: &Fixture) -> Vec<String> {
             bytes: f.bytes.clone(),
         })
         .collect();
-    compare(&expected, &findings(&check_files(&inputs)))
+    let mut diagnostics = check_files(&inputs);
+    let directory = root.join(&fixture.name);
+    if directory.is_dir() {
+        let graph = check_graph(&Disk, &directory, &[directory.join(&fixture.root)]);
+        diagnostics.extend(graph.expect("entry.js loads").iter().cloned());
+    }
+    compare(&expected, &findings(&diagnostics))
 }
 
 #[test]
@@ -70,7 +80,7 @@ fn every_fixture_produces_exactly_its_declared_diagnostics() {
     assert!(!fixtures.is_empty(), "no fixtures found");
     let mut failures = Vec::new();
     for fixture in &fixtures {
-        for problem in run_fixture(fixture) {
+        for problem in run_fixture(&conformance_root(), fixture) {
             failures.push(format!("{}: {problem}", fixture.name));
         }
     }
@@ -125,34 +135,40 @@ fn the_harness_reports_each_kind_of_mismatch() {
     };
 
     assert_eq!(
-        run_fixture(by_name("wrong-line.js")),
+        run_fixture(&root, by_name("wrong-line.js")),
         [
             "wrong-line.js:2: expected E000 syntax @2:1 not produced",
             "wrong-line.js: unexpected E000 syntax @1:1"
         ]
     );
     assert_eq!(
-        run_fixture(by_name("missing.js")),
+        run_fixture(&root, by_name("missing.js")),
         ["missing.js:1: expected E000 @1:1 not produced"]
     );
     assert_eq!(
-        run_fixture(by_name("unexpected.js")),
+        run_fixture(&root, by_name("unexpected.js")),
         ["unexpected.js: unexpected E000 syntax @1:1"]
     );
     assert_eq!(
-        run_fixture(by_name("past-end.js")),
+        run_fixture(&root, by_name("past-end.js")),
         ["past-end.js:1: expect E000 @99:1 is past the end of the file (2 lines)"]
     );
     assert_eq!(
-        run_fixture(by_name("declared-twice.js")),
+        run_fixture(&root, by_name("declared-twice.js")),
         ["declared-twice.js:2: expected E000 @1:1 not produced"]
     );
     assert_eq!(
-        run_fixture(by_name("malformed.js")),
+        run_fixture(&root, by_name("malformed.js")),
         ["malformed.js: malformed.js:1: missing @line:column"]
     );
-    assert_eq!(run_fixture(by_name("conforming.js")), Vec::<String>::new());
-    assert_eq!(run_fixture(by_name("directory")), Vec::<String>::new());
+    assert_eq!(
+        run_fixture(&root, by_name("conforming.js")),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        run_fixture(&root, by_name("directory")),
+        Vec::<String>::new()
+    );
     let directory = by_name("directory");
     assert_eq!(directory.root, "entry.js");
     let roots: Vec<&str> = directory

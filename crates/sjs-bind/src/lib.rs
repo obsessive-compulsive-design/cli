@@ -1,8 +1,13 @@
-//! Module graph, scopes and the ambient table.
+//! Module graph, scopes and the ambient table (SPEC.md §4, §5).
 //!
-//! Placeholder crate created by STORIES.md US-002; `US-060` replaces [`BindPlaceholder`] with the
-//! real implementation. Nothing here is called.
+//! US-060 ships the module graph: [`ModuleGraph::load`] reads the transitive closure of
+//! the root's imports through a [`Host`], parses each file once and keys it by its
+//! canonical path, so the program is a closed world for every whole-program pass.
 
-/// Placeholder type that US-060 replaces.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BindPlaceholder;
+mod graph;
+mod host;
+mod json;
+
+pub use graph::{Content, Import, LoadError, Module, ModuleGraph};
+pub use host::{Disk, Host};
+pub use json::is_json;

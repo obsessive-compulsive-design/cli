@@ -5,6 +5,11 @@ version = 4
 [[package]]
 name = "sjs-bind"
 version = "0.1.0"
+dependencies = [
+ "sjs-diag",
+ "sjs-syntax",
+ "sjs-testkit",
+]
 
 [[package]]
 name = "sjs-check"
@@ -14,6 +19,7 @@ version = "0.1.0"
 name = "sjs-cli"
 version = "0.1.0"
 dependencies = [
+ "sjs-bind",
  "sjs-diag",
  "sjs-format",
  "sjs-syntax",

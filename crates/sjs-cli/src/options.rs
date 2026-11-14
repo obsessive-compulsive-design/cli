@@ -6,6 +6,8 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use sjs_bind::{Disk, LoadError, ModuleGraph};
+
 use crate::args::{Invocation, UsageError};
 use crate::commands::Command;
 
@@ -98,9 +100,9 @@ pub struct Options {
     pub entries: Vec<PathBuf>,
     /// True when no entry was given and the default root was used.
     pub default_root: bool,
-    /// `*.test.js` roots for `sjs test` with the default root: every one beneath
-    /// `<cwd>/src`, sorted. With explicit entries this is empty here; US-060 adds the test
-    /// files beside each module of the graph once the graph exists.
+    /// `*.test.js` roots for `sjs test`, sorted: with the default root, every one
+    /// beneath `<cwd>/src`; with explicit entries, every one in the directory of each
+    /// module of the entries' graph (US-060).
     pub test_files: Vec<PathBuf>,
     /// `--out`, or the command's default, for the commands that write; `None` otherwise.
     pub out: Option<PathBuf>,
@@ -180,10 +182,14 @@ impl Options {
             }
             entries
         };
-        let test_files = if command == Command::Test && default_root {
+        let test_files = if command != Command::Test {
+            Vec::new()
+        } else if default_root {
             discover_tests(&cwd.join("src"))?
         } else {
-            Vec::new()
+            let (graph, _) = ModuleGraph::load(&Disk, cwd, &entries)
+                .map_err(|LoadError { path, error }| OptionsError::Io { path, error })?;
+            graph.test_files(&Disk)
         };
         let out = default_out(command).map(|default| {
             invocation
@@ -762,18 +768,50 @@ mod tests {
     }
 
     #[test]
-    fn test_discovery_is_empty_with_explicit_entries_or_without_src() {
+    fn explicit_entries_take_the_tests_beside_the_modules_of_their_graph() {
         let dir = project();
-        dir.write("src/b.test.js", "").expect("write");
+        let beside = dir.write("src/b.test.js", "").expect("write");
+        dir.write("src/deeper/c.test.js", "").expect("write");
         assert_eq!(
             ok(&["test", "src/index.js"], dir.path()).test_files,
-            Vec::<PathBuf>::new()
+            [canonical(&beside)],
+            "not those beneath: `src/deeper` holds no module of the graph"
         );
+        assert_eq!(
+            ok(&["lint", "src/index.js"], dir.path()).test_files,
+            Vec::<PathBuf>::new(),
+            "only `sjs test` has test files"
+        );
+        // An entry outside `./src`, importing a module in another directory.
         let bare = TempDir::new("options").expect("temp dir");
-        let entry = bare.write("app.js", "").expect("write");
+        let entry = bare
+            .write("app.js", "import { l } from \"./lib/l.js\"\n")
+            .expect("write");
+        bare.write("lib/l.js", "export const l = 1\n")
+            .expect("write");
+        let app = bare.write("app.test.js", "").expect("write");
+        let lib = bare.write("lib/l.test.js", "").expect("write");
+        bare.write("src/unrelated.test.js", "").expect("write");
         assert_eq!(
             ok(&["test", entry.to_str().expect("utf-8")], bare.path()).test_files,
-            Vec::<PathBuf>::new()
+            [canonical(&app), canonical(&lib)]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_that_cannot_be_read_is_an_io_error_for_sjs_test() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = project();
+        let index = dir.path().join("src/index.js");
+        std::fs::set_permissions(&index, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        let result = options(&["test", "src/index.js"], dir.path());
+        std::fs::set_permissions(&index, std::fs::Permissions::from_mode(0o644))
+            .expect("chmod back");
+        let error = result.expect_err("an I/O error was expected");
+        assert!(
+            matches!(&error, OptionsError::Io { path, .. } if *path == canonical(&index)),
+            "{error:?}"
         );
     }
 

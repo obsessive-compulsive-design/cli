@@ -104,6 +104,14 @@ pub(super) fn items_in(parser: &mut Parser<'_>, scope: Scope) {
     parser.leave();
 }
 
+/// Whether `path` is written as a path into the project: `./…` or `../…` with `/`
+/// between segments, none of them empty, ending in `.js`, `.json` or `/` (SPEC.md §5.1).
+/// Any other path is E201 where it is written, and names no module.
+#[must_use]
+pub fn is_project_path(path: &str) -> bool {
+    imports::foreign(path).is_none()
+}
+
 /// One item at its first token: a declaration or a statement. An import declaration
 /// here is E000 (SPEC.md §2: imports come first) and an export inside a block is E000
 /// (exports sit at the top level); both are then parsed anyway so the tree still
@@ -789,6 +797,13 @@ mod tests {
 
     fn file(text: &str) -> SourceFile {
         SourceFile::new("a.js", text.as_bytes().to_vec()).expect("valid UTF-8")
+    }
+
+    #[test]
+    fn a_project_path_is_one_the_parser_does_not_call_foreign() {
+        assert!(super::is_project_path("./a.js") && super::is_project_path("../b/c.json"));
+        assert!(super::is_project_path("./"));
+        assert!(!super::is_project_path("lodash") && !super::is_project_path("./a.ts"));
     }
 
     #[test]

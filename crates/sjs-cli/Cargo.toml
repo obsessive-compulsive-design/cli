@@ -7,6 +7,7 @@ publish.workspace = true
 description = "The sjs command line: argv, dispatch, exit codes, help."
 
 [dependencies]
+sjs-bind = { path = "../sjs-bind" }
 sjs-diag = { path = "../sjs-diag" }
 sjs-format = { path = "../sjs-format" }
 sjs-syntax = { path = "../sjs-syntax" }
