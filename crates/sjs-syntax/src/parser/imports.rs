@@ -33,7 +33,7 @@ pub(super) fn import_section(parser: &mut Parser<'_>) {
             TokenKind::Punct(Punct::LParen | Punct::Dot)
         )
     {
-        let reported = parser.diagnostics.len();
+        let reported = parser.errors;
         let outer = std::mem::replace(&mut parser.item_mark, reported);
         import_decl(parser);
         parser.recover(reported, Scope::Module);

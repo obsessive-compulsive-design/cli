@@ -2204,7 +2204,29 @@ before any write and exits 70 having written nothing; a file given twice; a file
 the graph is never touched.
 
 #### US-050 Idempotence and equivalence proof
-§11.2 M0, §9 · After: US-049 · Size: S · M0
+§11.2 M0, §9 · After: US-049 · Size: S · M0 · **Status: complete** (2026-11-14)
+
+> Delivered in `sjs-format/tests/equivalence.rs`: for every conformance fixture, every
+> generated program with comments, generated programs with one token deleted and the
+> fuzz target `fuzz_format`, the layout never panics and, where the source parses
+> clean, laying out twice gives the first result and the result means what the source
+> did (`essence` in `tests/common`: the tree without trivia, redundant parentheses,
+> `;`, trailing commas, with strings by value and reordered imports and members
+> sorted). Counter-examples found on the way are kept as named files under
+> `tests/fuzz-regressions/format/` and replayed on every run.
+> **Decisions:** a file holding tokens the grammar could place nowhere is left exactly
+> as written, since no layout of them is stable. A statement keeps its `;` when the
+> next one would otherwise join it (it starts with `(`, `[`, a template, `+`, `-`,
+> `/`). A comment that ends a line inside a list forces one item per line; a comment
+> just inside parentheses keeps the pair. A block comment spanning lines that ends a
+> line stands on its own. `LineSuffix` no longer breaks its group. The report compares
+> tokens only, with reordered import runs and class bodies cut out first. Parser fixes
+> the proof exposed: a style finding no longer hides a missing `;` (`async ++R`), and
+> `x.7` is no longer one name.
+> Verified: all §0.2 gates (fmt, both clippy passes, audit, tests, doc tests, 100 %
+> lines and regions); mutation testing on the diff with no survivor (one mutant, the
+> parser's `item` made empty, loops and times out); the corpus tests at 10 000
+> programs; a two-minute fuzz run.
 
 **Done when**
 - `fmt(fmt(x)) == fmt(x)` and `strip(parse(fmt(x))) == strip(parse(x))` (strip removes

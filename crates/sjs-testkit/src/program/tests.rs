@@ -864,6 +864,23 @@ fn the_corpus_manifest_matches() {
     crate::snapshot!("program-corpus-manifest", &manifest);
 }
 
+/// The corpus with comments (US-050): seeds `0..10 000` with [`Options::comments`] set
+/// and every other option at its default, pinned like the plain one.
+#[test]
+fn the_corpus_with_comments_manifest_matches() {
+    let options = Options {
+        comments: true,
+        ..Options::default()
+    };
+    let mut manifest = String::new();
+    for seed in 0..10_000u64 {
+        let text = generate(seed, options).0.to_string();
+        let line = format!("{seed} {}\n", fnv1a(text.as_bytes()));
+        manifest.push_str(&line);
+    }
+    crate::snapshot!("program-corpus-comments-manifest", &manifest);
+}
+
 fn fnv1a(bytes: &[u8]) -> String {
     let mut hash: u64 = 0xCBF2_9CE4_8422_2325;
     for byte in bytes {

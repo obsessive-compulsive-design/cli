@@ -83,12 +83,49 @@ impl Formatter<'_> {
     /// that show a layout flipping.
     #[must_use]
     pub fn module_at(&self, width: usize) -> String {
+        // Tokens the parser's recovery left bare belong to no item the layout knows: a
+        // file holding some is left exactly as written (US-050).
+        if self.has_bare_tokens(self.tree.root()) {
+            return self.file.text().to_owned();
+        }
         let text = joined(self.items(self.tree.root(), true), width);
         if text.is_empty() {
             text
         } else {
             text + "\n"
         }
+    }
+
+    /// Whether the `;` that ends `node` stays: the item after it, as the layout writes
+    /// it, begins with what would continue the statement (`(`, `[`, a template, `+`,
+    /// `-`, `/`). That is E001, which the `;` does not excuse, but dropping it would make
+    /// another program of the two lines.
+    fn keeps_semicolon(&self, node: NodeRef<'_>, next: Option<&Item<'_>>) -> bool {
+        let ended = node
+            .tokens()
+            .last()
+            .is_some_and(|token| token.kind == TokenKind::Punct(Punct::Semicolon));
+        ended
+            && matches!(next, Some(Item { body: Body::Node(follower), .. })
+                if self.first_written(*follower).starts_with(['(', '[', '`', '+', '-', '/']))
+    }
+
+    /// Whether the file, a block, a class body or a switch under `node` holds a token
+    /// that is no item's and no `;`.
+    pub(crate) fn has_bare_tokens(&self, node: NodeRef<'_>) -> bool {
+        let top = node.kind() == NodeKind::Module;
+        let holds_items = matches!(
+            node.kind(),
+            NodeKind::Module | NodeKind::Block | NodeKind::ClassBody | NodeKind::SwitchStmt
+        );
+        let bare = holds_items
+            && items_of(node, top).iter().any(|item| {
+                matches!(item.body, Body::Stray(from, to)
+                    if self.file.text()[from..to].chars().any(|ch| ch != ';' && !ch.is_whitespace()))
+            });
+        bare || node
+            .children()
+            .any(|child| matches!(child, Element::Node(inner) if self.has_bare_tokens(inner)))
     }
 
     /// The document of a statement, a declaration, a class member, a clause or a module
@@ -301,7 +338,9 @@ impl Formatter<'_> {
                     }
                     self.push_above(&mut out, &item.above);
                     out.push(self.statement(node));
-                    if needs_semicolon(node, items.get(at + 1)) {
+                    if needs_semicolon(node, items.get(at + 1))
+                        || self.keeps_semicolon(node, items.get(at + 1))
+                    {
                         out.push(Doc::text(";"));
                     }
                     previous = Some(node.kind());
@@ -446,6 +485,8 @@ pub(crate) fn items_of(parent: NodeRef<'_>, top: bool) -> Vec<Item<'_>> {
             previous.trailing.extend(trailing);
         }
         above.splice(0..0, carried.drain(..));
+        // The blank lines around a dropped `;` are one.
+        above.dedup_by(|line, before| *line == Above::Blank && *before == Above::Blank);
         after_empty = false;
         match *element {
             Element::Node(node) if node.kind() == NodeKind::EmptyStmt => {
@@ -547,9 +588,24 @@ mod tests {
         assert_eq!(module("const {x,y:[z]}=o"), "const { x, y: [z] } = o\n");
         assert_eq!(module("f( a );\n"), "f(a)\n");
         assert_eq!(
+            module("a = b;\n(c).d\ne = f;\n[g] = h;\n`t`\ni;\n-j;\n+k;\n/r/v.test(l);\nm()"),
+            "a = b\n\nc.d\n\ne = f;\n\n[g] = h;\n\n`t`\n\ni;\n\n-j;\n\n+k;\n\n/r/v.test(l)\n\nm()\n",
+            "a `;` stays before a line it keeps from joining the statement (E001)"
+        );
+        assert_eq!(
+            module("4;(a)\nb;((+c))\nd\n"),
+            "4\n\na\n\nb;\n\n+c\n\nd\n",
+            "judged by what the layout writes after it"
+        );
+        assert_eq!(
             module("x = 1 ;\n;\ny = 2"),
             "x = 1\n\ny = 2\n",
             "an empty statement is nothing"
+        );
+        assert_eq!(
+            module("\n ;\n\nL\n\n;\n\nM"),
+            "L\n\nM\n",
+            "nor are the blank lines around it more than one"
         );
         assert_eq!(module(""), "", "nothing in, nothing out");
         assert_eq!(module("\n\n"), "", "blank lines alone are nothing");
@@ -625,10 +681,15 @@ mod tests {
         );
         assert_eq!(
             module("export default (a)\nb()"),
-            "export default\n(a)\n\nb()\n",
-            "tokens the recovery left bare are kept, a run to a line"
+            "export default (a)\nb()",
+            "a file with tokens the recovery left bare is left as written"
         );
-        assert_eq!(module("let [a, , b] = c"), "let [a\n, b] = c\n");
+        assert_eq!(module("let [a, , b] = c"), "let [a, , b] = c");
+        assert_eq!(
+            module("function f() {\n  g( )\n  export default (a)\n}"),
+            "function f() {\n  g( )\n  export default (a)\n}",
+            "wherever they are"
+        );
         assert_eq!(
             module("if (a) ;"),
             "if (a)\n",

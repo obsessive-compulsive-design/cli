@@ -1550,14 +1550,20 @@ impl Parser<'_> {
     }
 
     /// Consumes the tokens glued to the last one without trivia between: the pieces of
-    /// one name the lexer split at a character it reported (`$a`, `café`).
+    /// one name the lexer split at a character it reported (`$a`, `café`). A number
+    /// that begins with its point (`x.7`) is no piece of a name.
     fn absorb_glued(&mut self) {
         loop {
             let next = self.peek(false).clone();
             let glued = self
                 .last
                 .is_some_and(|last| last.byte_end == next.span.byte_start);
+            let pointed = self
+                .file
+                .slice(&next.span)
+                .is_some_and(|text| text.starts_with('.'));
             if !glued
+                || pointed
                 || !matches!(
                     next.kind,
                     TokenKind::Ident | TokenKind::Error | TokenKind::Number(_)

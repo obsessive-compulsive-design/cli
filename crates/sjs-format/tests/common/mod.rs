@@ -5,7 +5,7 @@
 
 use sjs_diag::{Code, SourceFile};
 use sjs_format::{print, Formatter};
-use sjs_syntax::{parse, Element, NodeKind, NodeRef};
+use sjs_syntax::{parse, Element, NodeKind, NodeRef, Punct, Token, TokenKind};
 
 pub fn file(text: &str) -> SourceFile {
     SourceFile::new("a.js", text.as_bytes().to_vec()).expect("utf-8")
@@ -204,4 +204,99 @@ fn returned_value(body: &Item) -> Option<&Item> {
         return None;
     }
     Some(&parts[1])
+}
+
+/// What a file says, apart from how it is written (US-050): its tree without trivia,
+/// without parentheses, and without what the layout is free to change: semicolons,
+/// empty statements, a trailing comma, the quotes of a string, a single-`return` arrow
+/// body, the order of a run of imports, of an import's names and of a class's members.
+/// `None` when the file has an E000.
+pub fn essence(text: &str) -> Option<String> {
+    let f = file(text);
+    let (tree, diagnostics) = parse(&f);
+    if diagnostics.iter().any(|d| d.code == Code::E000) {
+        return None;
+    }
+    Some(node_essence(tree.root(), &f))
+}
+
+fn element_essence(element: Element<'_>, f: &SourceFile) -> String {
+    match element {
+        Element::Node(node) => node_essence(node, f),
+        Element::Token(token) => token_essence(token.token(), f),
+    }
+}
+
+fn token_essence(token: &Token, f: &SourceFile) -> String {
+    match &token.kind {
+        TokenKind::String(cooked) => format!("{cooked:?}"),
+        TokenKind::Eof => "<eof>".to_owned(),
+        _ => f.slice(&token.span).unwrap_or("").to_owned(),
+    }
+}
+
+fn is_punct(element: Option<&Element<'_>>, puncts: &[Punct]) -> bool {
+    matches!(element, Some(Element::Token(token))
+        if puncts.iter().any(|p| token.token().kind == TokenKind::Punct(*p)))
+}
+
+/// The value a block returns when it holds a single `return` with a value.
+fn returned(block: NodeRef<'_>) -> Option<Element<'_>> {
+    let children: Vec<Element<'_>> = block.children().collect();
+    let [_, Element::Node(statement), _] = children.as_slice() else {
+        return None;
+    };
+    if block.kind() != NodeKind::Block || statement.kind() != NodeKind::ReturnStmt {
+        return None;
+    }
+    statement
+        .children()
+        .nth(1)
+        .filter(|value| !is_punct(Some(value), &[Punct::Semicolon]))
+}
+
+fn node_essence(node: NodeRef<'_>, f: &SourceFile) -> String {
+    let kind = node.kind();
+    let children: Vec<Element<'_>> = node.children().collect();
+    if kind == NodeKind::ParenExpr && children.len() == 3 {
+        return element_essence(children[1], f);
+    }
+    let closers = [Punct::RParen, Punct::RBracket, Punct::RBrace];
+    // Each part with whether it is an import, for the order of a run of them.
+    let mut parts: Vec<(bool, String)> = Vec::new();
+    for (at, child) in children.iter().enumerate() {
+        let part = match *child {
+            Element::Token(_) if is_punct(Some(child), &[Punct::Semicolon]) => {
+                if kind != NodeKind::ForStmt {
+                    continue;
+                }
+                ";".to_owned()
+            }
+            Element::Token(_)
+                if is_punct(Some(child), &[Punct::Comma])
+                    && (kind == NodeKind::NamedImports
+                        || is_punct(children.get(at + 1), &closers)) =>
+            {
+                continue;
+            }
+            Element::Node(inner) if inner.kind() == NodeKind::EmptyStmt => continue,
+            Element::Node(inner) if kind == NodeKind::ArrowFunction => returned(inner)
+                .map_or_else(|| node_essence(inner, f), |value| element_essence(value, f)),
+            other => element_essence(other, f),
+        };
+        let import = matches!(child, Element::Node(n) if n.kind() == NodeKind::ImportDecl);
+        parts.push((import, part));
+    }
+    if matches!(kind, NodeKind::ClassBody | NodeKind::NamedImports) && parts.len() > 2 {
+        let end = parts.len() - 1;
+        parts[1..end].sort();
+    }
+    let mut at = 0;
+    while at < parts.len() {
+        let run = parts[at..].iter().take_while(|(import, _)| *import).count();
+        parts[at..at + run].sort();
+        at += run.max(1);
+    }
+    let texts: Vec<String> = parts.into_iter().map(|(_, text)| text).collect();
+    format!("({kind:?} {})", texts.join(" "))
 }

@@ -14,7 +14,7 @@ use sjs_syntax::{
     TriviaKind,
 };
 
-use crate::comments::{placed, Placed};
+use crate::comments::{ends_line_before, placed, Placed};
 use crate::doc::Doc;
 use crate::lists::single_return;
 
@@ -132,9 +132,22 @@ impl<'a> Formatter<'a> {
     /// a statement or an arrow body would otherwise begin with `{`). A pair with nothing
     /// inside never gets here: it is kept as written.
     fn keeps(&self, paren: NodeRef<'_>, inner: Element<'_>) -> bool {
-        paren
-            .parent()
-            .is_none_or(|parent| self.keeps_under(parent, paren, inner))
+        // A comment right inside the pair is placed by the pair: without it the comment
+        // would be another token's, or an item's, and placed otherwise (US-050).
+        let commented = |token: Option<&sjs_syntax::Token>| {
+            token.is_some_and(|token| {
+                token.leading.iter().any(|trivia| {
+                    trivia.kind != TriviaKind::Whitespace
+                        && !matches!(trivia.kind, TriviaKind::LineTerminator(_))
+                })
+            })
+        };
+        let tokens = paren.tokens();
+        commented(tokens.get(1))
+            || commented(tokens.last())
+            || paren
+                .parent()
+                .is_none_or(|parent| self.keeps_under(parent, paren, inner))
     }
 
     /// `keeps` for a pair that is a child of `parent`.
@@ -240,21 +253,13 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    /// The operator token of a binary or unary expression, as written.
+    /// The operator token of a binary or unary expression, as written: a binary's
+    /// stands second (its left operand may be a keyword, `this`), a unary's first.
     fn operator(&self, node: NodeRef<'_>) -> &'a str {
+        let at = usize::from(node.kind() == NodeKind::BinaryExpr);
         node.children()
-            .find_map(|child| match child {
-                Element::Token(token)
-                    if matches!(
-                        token.token().kind,
-                        TokenKind::Punct(_) | TokenKind::Keyword(_)
-                    ) =>
-                {
-                    Some(self.text(token.token().span))
-                }
-                _ => None,
-            })
-            .unwrap_or("")
+            .nth(at)
+            .map_or("", |operator| self.first_text(operator))
     }
 
     /// Whether the unary `parent`'s sign is the first character of `inner` once the
@@ -266,6 +271,19 @@ impl<'a> Formatter<'a> {
             return false;
         }
         self.leads_with(inner, sign)
+    }
+
+    /// The first token the layout writes for `node`: its first, past every pair of
+    /// parentheses the layout drops there.
+    pub(crate) fn first_written(&self, mut node: NodeRef<'_>) -> &'a str {
+        loop {
+            let dropped = inner_of(node)
+                .filter(|inner| node.kind() == NodeKind::ParenExpr && !self.keeps(node, *inner));
+            match dropped.or_else(|| node.children().next()) {
+                Some(Element::Node(inner)) => node = inner,
+                other => return other.map_or("", |first| self.first_text(first)),
+            }
+        }
     }
 
     /// The text of the first token of `element`.
@@ -307,24 +325,41 @@ impl<'a> Formatter<'a> {
     }
 
     /// `( inner )`, or `inner` alone when the pair is redundant, the comments before its
-    /// `(` staying before the inner and those before its `)` going to the end of the
-    /// line, where no code can follow them.
+    /// `(` staying before the inner. A pair that stays keeps the comments before its `)`
+    /// inside it: an inline one after the inner, any other ending the line, the `)` on
+    /// the next.
     fn paren(&self, node: NodeRef<'_>) -> Doc {
+        let mut docs = Vec::new();
         match inner_of(node) {
             Some(inner) if !self.keeps(node, inner) => {
-                let children: Vec<Element<'_>> = node.children().collect();
-                let mut docs = Vec::new();
-                for (at, child) in children.iter().enumerate() {
-                    match *child {
-                        Element::Token(token) if at == 0 => docs.extend(self.before(token)),
-                        Element::Token(token) if at > 1 => docs.extend(self.suffixes(token)),
-                        _ => docs.push(self.element(inner)),
+                let opening = node.children().next();
+                docs.extend(opening.map_or_else(Vec::new, |open| self.before_element(open)));
+                docs.push(self.element(inner));
+            }
+            _ => {
+                for child in node.children() {
+                    match child {
+                        Element::Token(token)
+                            if token.token().kind == TokenKind::Punct(Punct::RParen) =>
+                        {
+                            let (suffix, rest) = self.split(token);
+                            docs.extend(suffix);
+                            docs.extend(self.prefix(&rest));
+                            if !rest.is_empty() {
+                                docs.push(Doc::LineStart);
+                            }
+                            docs.push(Doc::text(")"));
+                        }
+                        other => docs.push(self.element(other)),
+                    }
+                    // A comment that ends the `(` line: the inner begins the next.
+                    if docs.len() == 1 && node.tokens().get(1).is_some_and(ends_line_before) {
+                        docs.push(Doc::HardLine);
                     }
                 }
-                Doc::Group(docs)
             }
-            _ => self.glued(node),
         }
+        Doc::Group(docs)
     }
 
     /// Children with no space between them: `a.b`, `a?.[b]`, `i++`, `...a`, a tagged
@@ -485,6 +520,7 @@ impl<'a> Formatter<'a> {
         let mut out = Vec::new();
         let mut items = Items::default();
         let mut in_list = false;
+        let mut forced = false;
         let import = elements.iter().any(|element| {
             matches!(element, Element::Token(token)
                 if token.token().kind == TokenKind::Keyword(Keyword::Import))
@@ -493,14 +529,17 @@ impl<'a> Formatter<'a> {
             match child {
                 Element::Token(token) if token.token().kind == TokenKind::Punct(Punct::LParen) => {
                     in_list = true;
+                    forced = false;
                     out.extend(self.before(token));
                 }
                 Element::Token(token) if token.token().kind == TokenKind::Punct(Punct::RParen) => {
                     in_list = false;
                     let list = std::mem::take(&mut items).close(self, Some(token));
-                    out.push(bracketed("(", ")", list, false, import, false));
+                    let forced = forced || ends_line(child);
+                    out.push(bracketed("(", ")", list, false, import, forced));
                 }
                 Element::Token(token) if in_list => {
+                    forced |= ends_line(child);
                     if token.token().kind == TokenKind::Punct(Punct::Comma) {
                         items.comma(self, token);
                     } else {
@@ -508,6 +547,7 @@ impl<'a> Formatter<'a> {
                     }
                 }
                 Element::Node(argument) if in_list => {
+                    forced |= ends_line(child);
                     items.push(self, self.expression(argument));
                 }
                 Element::Token(token) if token.token().kind == TokenKind::Keyword(Keyword::New) => {
@@ -547,6 +587,7 @@ impl<'a> Formatter<'a> {
         } else {
             node.children().collect()
         };
+        let forced = children.iter().skip(1).any(|child| ends_line(*child));
         for child in children {
             match child {
                 Element::Token(token) => {
@@ -587,7 +628,7 @@ impl<'a> Formatter<'a> {
             items.close(self, closer),
             braces,
             rest_last,
-            expanded,
+            expanded || forced,
         );
         if before_open.is_empty() {
             return list;
@@ -665,6 +706,15 @@ impl<'a> Formatter<'a> {
         } else {
             self.element(value)
         }
+    }
+}
+
+/// Whether the first comment before `element` ends the line before it: a list holding
+/// such an item is one item per line, so that the comment stays beside what it follows.
+fn ends_line(element: Element<'_>) -> bool {
+    match element {
+        Element::Token(token) => ends_line_before(token.token()),
+        Element::Node(node) => node.tokens().first().is_some_and(ends_line_before),
     }
 }
 
@@ -898,6 +948,23 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn an_argument_after_a_comment_that_ends_a_line_breaks_the_list() {
+        assert_eq!(
+            formatted("f(\n  a, // c\n  (b))"),
+            "f(\n  a,  // c\n  b,\n)",
+            "the comment stays beside `a`, though `b` loses the token it was before"
+        );
+    }
+
+    #[test]
+    fn a_keyword_operand_is_not_the_operator() {
+        assert_eq!(
+            formatted("x = (this === null) << a\ny = this + (a * b)\nz = (this + a) + b"),
+            "x = (this === null) << a\ny = this + a * b\nz = this + a + b"
+        );
     }
 
     #[test]

@@ -183,7 +183,7 @@ impl Formatter<'_> {
     /// [`Self::comment_text`].
     pub(crate) fn comment_block(&self, span: Span) -> Vec<Doc> {
         let text = self.text(span);
-        if text.starts_with("/**") && text.len() > 4 {
+        if text.starts_with("/**") && text.len() > 4 && text.ends_with("*/") {
             doc_comment(text)
         } else {
             vec![Doc::text(self.comment_text(span))]
@@ -224,6 +224,9 @@ impl Formatter<'_> {
     /// item, imports in their order, each item's comments above it, then those inside
     /// it, then those at the end of its line.
     fn written_comments(&self) -> Vec<Span> {
+        if self.has_bare_tokens(self.tree.root()) {
+            return comments_of(self.tree.tokens().iter());
+        }
         let mut items = items_of(self.tree.root(), true);
         sort_imports(&mut items);
         let mut spans = Vec::new();
@@ -235,16 +238,9 @@ impl Formatter<'_> {
     fn items_comments(&self, items: &[Item<'_>], spans: &mut Vec<Span>) {
         for item in items {
             spans.extend(item.above.iter().filter_map(|line| line.comment()));
-            match item.body {
-                Body::Node(node) => self.inner_comments(node, false, spans),
-                Body::Stray(from, to) => {
-                    let inner =
-                        self.tree.tokens().iter().filter(|token| {
-                            token.span.byte_start > from && token.span.byte_end <= to
-                        });
-                    spans.extend(comments_of(inner));
-                }
-                Body::End => {}
+            // A run of bare `;` holds no comment: with one, the file is left as written.
+            if let Body::Node(node) = item.body {
+                self.inner_comments(node, false, spans);
             }
             spans.extend(item.trailing.iter().copied());
         }
@@ -278,7 +274,7 @@ impl Formatter<'_> {
 }
 
 /// The spans of the comments before each of `tokens`, in order.
-fn comments_of<'t>(tokens: impl Iterator<Item = &'t Token>) -> Vec<Span> {
+pub(crate) fn comments_of<'t>(tokens: impl Iterator<Item = &'t Token>) -> Vec<Span> {
     tokens
         .flat_map(|token| token.leading.iter())
         .filter(|trivia| {
@@ -300,6 +296,13 @@ pub(crate) fn placed(token: TokenRef<'_>) -> Vec<Placed> {
         return Vec::new();
     }
     placed_in(token.token())
+}
+
+/// Whether the first comment before `token` ends the line of the token before it.
+pub(crate) fn ends_line_before(token: &Token) -> bool {
+    placed_in(token)
+        .first()
+        .is_some_and(|comment| comment.kind == Placement::Trailing)
 }
 
 /// The comments in `token`'s leading trivia, placed.
@@ -326,8 +329,9 @@ fn placed_in(token: &Token) -> Vec<Placed> {
                 placed.push(Placed {
                     span: trivia.span,
                     kind: match (after_break, break_follows) {
-                        (false, true) => Placement::Trailing,
-                        (true, true) => Placement::Own,
+                        // One that spans lines cannot end a line: it takes its own.
+                        (false, true) if !trivia.is_newline() => Placement::Trailing,
+                        (_, true) => Placement::Own,
                         (own_line, false) => Placement::Inline { own_line },
                     },
                 });
@@ -520,6 +524,20 @@ mod tests {
         Formatter::new(&f, &tree).module()
     }
 
+    #[test]
+    fn comments_before_a_dropped_token_end_the_line() {
+        assert_eq!(
+            module("f(a) /* c */;\n"),
+            "f(a) /* c */\n",
+            "beside the code"
+        );
+        assert_eq!(
+            module("f(a)\n/* c */;\n"),
+            "f(a) /* c */\n",
+            "on a line of its own"
+        );
+    }
+
     /// The S006 findings: line and column of each.
     fn long(text: &str) -> Vec<(u32, u32, bool)> {
         let f = SourceFile::new("a.js", text.as_bytes().to_vec()).expect("utf-8");
@@ -635,12 +653,12 @@ mod tests {
         assert_eq!(stable("x = a /* c */ + b"), "x = a /* c */ + b\n");
         assert_eq!(
             stable("x = a + // c\n  b"),
-            "x = a +  // c\n  b\n",
+            "x = a + b  // c\n",
             "a trailing comment after an operator"
         );
         assert_eq!(
             stable("x = a // c\n  + b"),
-            "x = a +  // c\n  b\n",
+            "x = a + b  // c\n",
             "a trailing comment before an operator goes to the end of its line"
         );
         assert_eq!(
@@ -668,8 +686,18 @@ mod tests {
         );
         assert_eq!(
             stable("x = /* c */ (a)\nx = (a /* c */)\nx = (a\n  // own\n) + 1\nx = ((a) /* in */)"),
-            "x = /* c */ a\n\nx = a /* c */\n\nx = a +  // own\n  1\n\nx = a /* in */\n",
-            "a dropped pair keeps its comments at the end of the line, a `//` one breaking the group"
+            "x = /* c */ a\n\nx = (a /* c */)\n\nx = (a\n// own\n) +\n  1\n\nx = (a /* in */)\n",
+            "a pair holding a comment at its edge stays, the comment inside it"
+        );
+        assert_eq!(
+            stable("x = ( // c\n  a)\ny = (/* d */\n  b)"),
+            "x = (  // c\na)\n\ny = ( /* d */\nb)\n",
+            "a comment ending the line of the `(` keeps the line it ends"
+        );
+        assert_eq!(
+            stable("f(a, /* one\n  two */\n  b)"),
+            "f(\n  a,\n  /* one\n  two */\n  b,\n)\n",
+            "a comment that spans lines takes lines of its own"
         );
         assert_eq!(
             stable("x = a // c\n  = b"),
@@ -678,17 +706,17 @@ mod tests {
         );
         assert_eq!(
             stable("x = a /* c */\n  + b"),
-            "x = a + /* c */\n  b\n",
+            "x = a + b /* c */\n",
             "a block comment ending a line trails like a `//` one"
         );
         assert_eq!(
             stable("x = (a\n  /* c */ ) + 1"),
-            "x = a + /* c */\n  1\n",
-            "a block comment on its own line before a dropped `)`"
+            "x = (a\n/* c */\n) +\n  1\n",
+            "a block comment on its own line before a `)`"
         );
         assert_eq!(
             stable("x = (a /* c */) + 1"),
-            "x = a /* c */ + 1\n",
+            "x = (a /* c */) + 1\n",
             "an inline one stays where it is"
         );
         assert_eq!(
@@ -744,7 +772,7 @@ mod tests {
         );
         assert_eq!(
             module("export default (a) // c\nb()"),
-            "export default\n(a)  // c\n\nb()\n",
+            "export default (a) // c\nb()",
             "a comment after what the recovery left bare"
         );
         assert_eq!(
@@ -754,8 +782,8 @@ mod tests {
         );
         assert_eq!(
             stable("x = (a // p\n) // y\nz()"),
-            "x = a  // p\n\n// y\nz()\n",
-            "two comments for one line's end: the second begins the next item's"
+            "x = (a  // p\n)  // y\n\nz()\n",
+            "a `//` comment before a `)` ends its line inside the pair"
         );
         assert_eq!(
             stable("f(a // p\n, // x\n b)"),
@@ -844,6 +872,11 @@ mod tests {
             "the smallest doc comments"
         );
         assert_eq!(
+            module("f()\n/** never closed"),
+            "f()\n/** never closed\n",
+            "a doc comment the file ends inside (E000) is written as it is"
+        );
+        assert_eq!(
             stable("f(/** inline */ a)\nf() /** trailing */"),
             "f(/** inline */ a)\n\nf() /** trailing */\n",
             "a doc comment not on a line of its own is left as written"
@@ -907,9 +940,14 @@ mod tests {
             "imports in their order"
         );
         assert_eq!(
-            long(&format!("export default /* lost */ (a) // {wide}\nb()")),
-            vec![(1, 31, false)],
-            "a comment the recovery drops is left out of the pairing"
+            long(&format!("export default /* kept */ (a) // {wide}\nb()")),
+            vec![(1, 16, false), (1, 31, false)],
+            "a file left as written keeps every comment where it was"
+        );
+        assert_eq!(
+            long(&format!("class A {{\n  ; /* {wide} */ ;\n}}")),
+            vec![(2, 5, false)],
+            "a comment among the bare `;` of a class body is copied with them"
         );
         assert_eq!(
             long(&format!("export default ( /* c */ a) // {wide}\nb()")),

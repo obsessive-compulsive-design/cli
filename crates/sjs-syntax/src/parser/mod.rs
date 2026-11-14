@@ -18,7 +18,7 @@ mod functions;
 mod imports;
 mod statements;
 
-use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
+use sjs_diag::{Code, Diagnostic, Diagnostics, Severity, SourceFile, Span};
 
 use crate::lexer::{Checkpoint, Lexer};
 use crate::token::{Keyword, Punct, TemplatePart, Token, TokenKind};
@@ -112,7 +112,7 @@ pub(super) fn items_in(parser: &mut Parser<'_>, scope: Scope) {
 /// A grammar that reports a syntax error stops at the offending token; the rest of
 /// that line is then skipped, so one fault is one diagnostic.
 pub(super) fn item(parser: &mut Parser<'_>, scope: Scope, exported: &mut exports::Exported) {
-    let reported = parser.diagnostics.len();
+    let reported = parser.errors;
     let outer = std::mem::replace(&mut parser.item_mark, reported);
     dispatch_item(parser, scope, exported);
     parser.recover(reported, scope);
@@ -268,6 +268,9 @@ pub struct Parser<'a> {
     /// The lexer's state before each lookahead token, so a `/` can be lexed again.
     checkpoints: Vec<Checkpoint>,
     diagnostics: Diagnostics,
+    /// How many of them are errors: a style finding (S002, S012) neither ends an item
+    /// early nor excuses what follows it.
+    errors: usize,
     /// The enclosing functions, innermost last; empty at the module's top level.
     contexts: Vec<FnContext>,
     /// The enclosing classes, innermost last.
@@ -308,6 +311,7 @@ impl<'a> Parser<'a> {
             lookahead: Vec::new(),
             checkpoints: Vec::new(),
             diagnostics: Diagnostics::new(),
+            errors: 0,
             contexts: Vec::new(),
             classes: Vec::new(),
             jumps: Vec::new(),
@@ -432,6 +436,11 @@ impl<'a> Parser<'a> {
         }
         let diagnostic =
             Diagnostic::new(code, self.file.path(), span, message).with_fix(current, replacement);
+        self.errors += usize::from(
+            diagnostic
+                .as_ref()
+                .is_ok_and(|d| d.severity() == Severity::Error),
+        );
         self.diagnostics.extend(diagnostic.ok());
     }
 
@@ -491,7 +500,7 @@ impl<'a> Parser<'a> {
             self.last,
             Some(span) if matches!(self.file.slice(&span), Some(";" | "}"))
         );
-        if self.diagnostics.len() > reported && !ended {
+        if self.errors > reported && !ended {
             self.skip_rest_of_line(scope);
         }
     }
@@ -625,6 +634,7 @@ impl<'a> Parser<'a> {
         if self.too_deep {
             return;
         }
+        self.errors += usize::from(diagnostic.severity() == Severity::Error);
         self.diagnostics.push(diagnostic);
     }
 
@@ -665,7 +675,7 @@ impl<'a> Parser<'a> {
             return;
         }
         if matches!(next.kind, TokenKind::Punct(Punct::RBrace) | TokenKind::Eof)
-            || self.diagnostics.len() > self.item_mark
+            || self.errors > self.item_mark
         {
             return;
         }
@@ -779,6 +789,17 @@ mod tests {
 
     fn file(text: &str) -> SourceFile {
         SourceFile::new("a.js", text.as_bytes().to_vec()).expect("valid UTF-8")
+    }
+
+    #[test]
+    fn an_error_that_carries_a_fix_ends_its_line_like_any_other() {
+        let (_, diagnostics) = parse(&file("a == b c\n"));
+        let codes: Vec<_> = diagnostics.iter().map(|d| d.code).collect();
+        assert_eq!(
+            codes,
+            vec![sjs_diag::Code::E000],
+            "no second fault on the line"
+        );
     }
 
     /// The tree prints back to the source and agrees with `lex` token for token; its

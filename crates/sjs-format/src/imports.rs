@@ -112,6 +112,26 @@ pub(crate) fn sort_imports(items: &mut [Item<'_>]) {
     }
 }
 
+/// The byte range of every run of imports among the file's items, in order: from the
+/// first import to the end of the last one's line comment, as S003 spans one.
+pub(crate) fn run_ranges(root: NodeRef<'_>) -> Vec<Range<usize>> {
+    let items = items_of(root, true);
+    import_runs(&items)
+        .into_iter()
+        .map(|run| {
+            let run = &items[run];
+            let imports: Vec<NodeRef<'_>> = run.iter().filter_map(import_of).collect();
+            let end = run[run.len() - 1]
+                .trailing
+                .last()
+                .map_or(imports[imports.len() - 1].span().byte_end, |span| {
+                    span.byte_end
+                });
+            imports[0].span().byte_start..end
+        })
+        .collect()
+}
+
 /// The maximal runs of imports among `items`, as ranges of positions.
 fn import_runs(items: &[Item<'_>]) -> Vec<Range<usize>> {
     let mut runs: Vec<Range<usize>> = Vec::new();

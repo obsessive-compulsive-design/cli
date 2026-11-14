@@ -101,8 +101,7 @@ x = a + /* c */ b
 x = a + // c
   b
 --- formatted
-x = a +  // c
-  b
+x = a + b  // c
 
 --- source
 x = a
@@ -144,7 +143,9 @@ x = (a
   // own
 ) + 1
 --- formatted
-x = a +  // own
+x = (a
+// own
+) +
   1
 
 --- source

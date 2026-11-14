@@ -35,7 +35,9 @@ pub enum Doc {
     IfBreak { broken: Vec<Doc>, flat: Vec<Doc> },
     /// Text written at the end of a line: the line before when nothing but indentation
     /// has been written on the current one, else the current line when it ends (a `//`
-    /// comment after what ends a line). No group holding one is flat.
+    /// comment after what ends a line). It counts toward the line it ends, and breaks
+    /// no group: a second layout finds the comment at its line's end, outside every
+    /// group, and must decide as the first did.
     LineSuffix(String),
     /// A line break, unless nothing but indentation has been written on the line (a
     /// comment that must begin a line). No group holding one is flat.
@@ -353,9 +355,7 @@ fn fits(content: &[Doc], rest: &[Cmd<'_>], remaining: usize) -> bool {
             }
             Doc::SoftLine if mode == Mode::Flat => {}
             Doc::HangSuffixes | Doc::HangEnd => {}
-            Doc::HardLine | Doc::LineStart | Doc::Paragraph { .. } | Doc::LineSuffix(_)
-                if mode == Mode::Flat =>
-            {
+            Doc::HardLine | Doc::LineStart | Doc::Paragraph { .. } if mode == Mode::Flat => {
                 return false;
             }
             Doc::Line | Doc::SoftLine | Doc::HardLine | Doc::LineStart | Doc::Paragraph { .. } => {
@@ -820,7 +820,7 @@ mod tests {
     }
 
     #[test]
-    fn a_line_suffix_ends_its_line_and_breaks_its_group() {
+    fn a_line_suffix_ends_its_line_and_breaks_no_group() {
         let list = Doc::group(vec![
             text("f("),
             Doc::indent(vec![
@@ -835,9 +835,14 @@ mod tests {
             text(")"),
         ]);
         assert_eq!(
-            print(&[list]),
+            layout(std::slice::from_ref(&list), 12),
             "f(\n  a,  // x\n  b\n)",
             "met at the start of a line, it ends the line before"
+        );
+        assert_eq!(
+            layout(&[list], 13),
+            "f(a, b)  // x",
+            "it breaks no group, and counts toward the line it ends"
         );
         assert_eq!(
             print(&[
@@ -863,8 +868,8 @@ mod tests {
         let short = Doc::group(vec![text("a"), Doc::Line, suffix("  // x"), text("b")]);
         assert_eq!(
             print(&[short]),
-            "a  // x\nb",
-            "no group holding one is flat"
+            "a b  // x",
+            "a group holding one may be flat"
         );
         let rest = [
             Doc::group(vec![text("aaaa"), Doc::Line, text("bbbb")]),

@@ -11,11 +11,14 @@
 use std::ops::Range;
 
 use sjs_diag::{Code, Diagnostic, Diagnostics, Severity, SourceFile, Span};
-use sjs_syntax::{parse, Token, TokenKind, TriviaKind};
+use sjs_syntax::{parse, NodeKind, NodeRef, Token, TokenKind};
 
+use crate::comments::comments_of;
 use crate::diff::{edits, Edit};
 use crate::doc::WIDTH;
 use crate::expr::Formatter;
+use crate::imports::run_ranges;
+use crate::lists::in_tree_order;
 
 /// What `sjs lint` reports for a file's layout: the findings, and among them those for
 /// a change of tokens no pass claims.
@@ -27,16 +30,17 @@ pub struct Report {
     pub unclassified: Vec<Diagnostic>,
 }
 
-/// A token or a comment, as the diff compares them: by text, with its place.
+/// A token, as the diff compares them: by text, with its place. Comments are not
+/// pieces: the layout moves one past a token (a `{`, a `,`) without the tokens changing,
+/// so a comment is part of what lies between two tokens, like whitespace.
 struct Piece<'a> {
     text: &'a str,
-    comment: bool,
     range: Range<usize>,
 }
 
 impl PartialEq for Piece<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.comment == other.comment && self.text == other.text
+        self.text == other.text
     }
 }
 
@@ -45,19 +49,20 @@ impl PartialEq for Piece<'_> {
 struct Unit {
     a: Range<usize>,
     b: Range<usize>,
-    /// The pieces of the source that are gone, each with whether it is a comment.
-    deleted: Vec<(Range<usize>, bool)>,
+    /// The pieces of the source that are gone: each with the run of pieces spelled like
+    /// it that it stands in (of `)))` the diff may drop any one, so a finding on one
+    /// claims whichever it chose).
+    deleted: Vec<(Range<usize>, Range<usize>)>,
     /// The pieces of the canonical text that are new: where each would stand in the
-    /// source, its place in the canonical text, and whether it is a comment.
-    inserted: Vec<(usize, Range<usize>, bool)>,
+    /// source, and its place in the canonical text.
+    inserted: Vec<(usize, Range<usize>)>,
 }
 
 /// What a unit comes to once the known findings have claimed their pieces.
 enum Verdict {
-    /// Every piece is claimed, or there is none: the whitespace of the stretches.
+    /// Every piece is claimed, or there is none: the whitespace and the comments of the
+    /// stretches.
     Whitespace(Range<usize>, Range<usize>),
-    /// Comments nobody claims, with the whitespace up to the claimed pieces beside them.
-    Comments(Range<usize>, Range<usize>),
     /// Tokens nobody claims: a fault in a pass.
     Tokens(Range<usize>, Range<usize>),
 }
@@ -72,41 +77,34 @@ impl Unit {
         at..self.a.end
     }
 
-    /// Whether a known finding claims the unit: a finding that reorders what it spans
-    /// (S003, S009) claims every unit touching its span, since the diff of reordered
-    /// pieces aligns them freely; any other claims the unit when it touches each piece
-    /// gone or new, or, for a change of whitespace alone, the stretch.
-    fn explained(&self, known: &[Span], reordered: &[Span]) -> bool {
-        if reordered.iter().any(|span| touches(span, &self.a)) {
-            return true;
-        }
+    /// Whether a known finding claims the unit: it touches each piece gone or new, or,
+    /// for a unit without pieces, the stretch.
+    fn explained(&self, known: &[Span]) -> bool {
         if !self.has_pieces() {
             return claimed(known, &self.a);
         }
-        self.deleted.iter().all(|(range, _)| claimed(known, range))
+        self.deleted.iter().all(|(_, run)| claimed(known, run))
             && self
                 .inserted
                 .iter()
-                .all(|(at, _, _)| claimed(known, &self.place_of(*at)))
+                .all(|(at, _)| claimed(known, &self.place_of(*at)))
     }
 
     /// The unit judged against the known findings.
     fn verdict(&self, known: &[Span]) -> Verdict {
-        let free_deleted: Vec<&(Range<usize>, bool)> = self
+        let free_deleted: Vec<&(Range<usize>, Range<usize>)> = self
             .deleted
             .iter()
-            .filter(|(range, _)| !claimed(known, range))
+            .filter(|(_, run)| !claimed(known, run))
             .collect();
-        let free_inserted: Vec<&(usize, Range<usize>, bool)> = self
+        let free_inserted: Vec<&(usize, Range<usize>)> = self
             .inserted
             .iter()
-            .filter(|(at, _, _)| !claimed(known, &self.place_of(*at)))
+            .filter(|(at, _)| !claimed(known, &self.place_of(*at)))
             .collect();
         if free_deleted.is_empty() && free_inserted.is_empty() {
             return Verdict::Whitespace(self.a.clone(), self.b.clone());
         }
-        let tokens = free_deleted.iter().any(|(_, comment)| !comment)
-            || free_inserted.iter().any(|(_, _, comment)| !comment);
         let a_extent = free_deleted.first().zip(free_deleted.last()).map_or_else(
             || {
                 let at = free_inserted[0].0;
@@ -117,30 +115,24 @@ impl Unit {
         let b_extent = free_inserted
             .first()
             .zip(free_inserted.last())
-            .map_or(self.b.clone(), |((_, first, _), (_, last, _))| {
+            .map_or(self.b.clone(), |((_, first), (_, last))| {
                 first.start..last.end
             });
-        let a = widen(
-            &a_extent,
-            &self.a,
-            self.deleted
-                .iter()
-                .filter(|(range, _)| claimed(known, range))
-                .map(|(range, _)| range.clone()),
-        );
-        let b = widen(
-            &b_extent,
-            &self.b,
-            self.inserted
-                .iter()
-                .filter(|(at, _, _)| claimed(known, &self.place_of(*at)))
-                .map(|(_, range, _)| range.clone()),
-        );
-        if tokens {
-            Verdict::Tokens(a, b)
-        } else {
-            Verdict::Comments(a, b)
-        }
+        let claimed_a: Vec<Range<usize>> = self
+            .deleted
+            .iter()
+            .filter(|(_, run)| claimed(known, run))
+            .map(|(range, _)| range.clone())
+            .collect();
+        let claimed_b: Vec<Range<usize>> = self
+            .inserted
+            .iter()
+            .filter(|(at, _)| claimed(known, &self.place_of(*at)))
+            .map(|(_, range)| range.clone())
+            .collect();
+        let a = widen(&a_extent, &self.a, &claimed_a);
+        let b = widen(&b_extent, &self.b, &claimed_b);
+        Verdict::Tokens(a, b)
     }
 }
 
@@ -152,12 +144,50 @@ fn claimed(known: &[Span], range: &Range<usize>) -> bool {
     known.iter().any(|span| touches(span, range))
 }
 
+/// The ranges of `all` that lie inside `stretch`.
+fn within(all: &[Range<usize>], stretch: &Range<usize>) -> Vec<Range<usize>> {
+    all.iter()
+        .filter(|range| stretch.start <= range.start && range.end <= stretch.end)
+        .cloned()
+        .collect()
+}
+
+/// The comments of a stretch of the source and of the canonical text, each given with
+/// its text and where it starts, that are not the same on both sides: from the first
+/// that differs to the last, the comments both begin and end with alike left out.
+/// `None` when every comment is as it was.
+fn changed_comments(
+    (in_a, text_a, start_a): (&[Range<usize>], &str, usize),
+    (in_b, text_b, start_b): (&[Range<usize>], &str, usize),
+) -> Option<(Range<usize>, Range<usize>)> {
+    let same =
+        |(x, y): &(&Range<usize>, &Range<usize>)| text_a[(*x).clone()] == text_b[(*y).clone()];
+    let front = in_a.iter().zip(in_b).take_while(same).count();
+    let back = in_a[front..]
+        .iter()
+        .rev()
+        .zip(in_b[front..].iter().rev())
+        .take_while(same)
+        .count();
+    let (rest_a, rest_b) = (
+        &in_a[front..in_a.len() - back],
+        &in_b[front..in_b.len() - back],
+    );
+    // The layout keeps every comment, so both sides hold as many.
+    if rest_a.is_empty() {
+        return None;
+    }
+    let extent = |all: &[Range<usize>], rest: &[Range<usize>], start: usize| {
+        let at = front.checked_sub(1).map_or(start, |before| all[before].end);
+        rest.first()
+            .zip(rest.last())
+            .map_or(at..at, |(first, last)| first.start..last.end)
+    };
+    Some((extent(in_a, rest_a, start_a), extent(in_b, rest_b, start_b)))
+}
+
 /// `extent` widened to `bounds`, but not past the `claimed` ranges beside it.
-fn widen(
-    extent: &Range<usize>,
-    bounds: &Range<usize>,
-    claimed: impl Iterator<Item = Range<usize>>,
-) -> Range<usize> {
+fn widen(extent: &Range<usize>, bounds: &Range<usize>, claimed: &[Range<usize>]) -> Range<usize> {
     let mut out = bounds.clone();
     for range in claimed {
         if range.end <= extent.start {
@@ -226,15 +256,78 @@ impl Formatter<'_> {
         reordered: &[Span],
     ) -> (Vec<Diagnostic>, Vec<Diagnostic>) {
         let (tree, _) = parse(formatted);
-        let a = pieces(self.tree.tokens(), self.file.text());
-        let b = pieces(tree.tokens(), formatted.text());
+        // What a reordering spans is cut from both texts before they are compared: its
+        // pieces, in another order, would match whatever is spelled like them nearby.
+        let mut source_bodies = Vec::new();
+        self.in_layout_order(self.tree.root(), &[NodeKind::ClassBody], &mut source_bodies);
+        let mut laid_bodies = Vec::new();
+        in_tree_order(tree.root(), &[NodeKind::ClassBody], &mut laid_bodies);
+        let range_of = |node: &NodeRef<'_>| node.span().byte_start..node.span().byte_end;
+        let pairs = source_bodies
+            .iter()
+            .map(range_of)
+            .zip(laid_bodies.iter().map(range_of))
+            .chain(
+                run_ranges(self.tree.root())
+                    .into_iter()
+                    .zip(run_ranges(tree.root())),
+            );
+        let (cut_a, cut_b): (Vec<Range<usize>>, Vec<Range<usize>>) = pairs
+            .filter(|(source, _)| {
+                reordered
+                    .iter()
+                    .any(|span| (span.byte_start..span.byte_end) == *source)
+            })
+            .unzip();
+        let outside = |cut: &[Range<usize>], piece: &Piece<'_>| {
+            !cut.iter()
+                .any(|range| range.start <= piece.range.start && piece.range.end <= range.end)
+        };
+        let mut a = pieces(self.tree.tokens(), self.file.text());
+        a.retain(|piece| outside(&cut_a, piece));
+        let mut b = pieces(tree.tokens(), formatted.text());
+        b.retain(|piece| outside(&cut_b, piece));
+        let ranges = |tokens: &[Token]| -> Vec<Range<usize>> {
+            comments_of(tokens.iter())
+                .iter()
+                .map(|span| span.byte_start..span.byte_end)
+                .collect()
+        };
+        let (comments_a, comments_b) = (ranges(self.tree.tokens()), ranges(tree.tokens()));
         let mut classified = Vec::new();
         let mut unclassified = Vec::new();
         // A change of whitespace joins the one before it when the same code names both
         // and, joined, they lie on one line of the source.
         let mut pending: Option<(Code, Range<usize>, Range<usize>)> = None;
         for unit in units(&a, &b, self.file.text(), formatted.text()) {
-            if unit.explained(known, reordered) {
+            // A finding that reorders what it spans (S003, S009) claims every unit that
+            // touches its span.
+            if reordered.iter().any(|span| touches(span, &unit.a)) {
+                continue;
+            }
+            // A comment the layout respaces or reflows is a change of its own, whatever
+            // else its stretch holds; a unit a finding claims says nothing more.
+            let comments = changed_comments(
+                (
+                    &within(&comments_a, &unit.a),
+                    self.file.text(),
+                    unit.a.start,
+                ),
+                (
+                    &within(&comments_b, &unit.b),
+                    formatted.text(),
+                    unit.b.start,
+                ),
+            );
+            if comments.is_some() || unit.explained(known) {
+                if let Some((a, b)) = comments {
+                    let (code, a, b) = self.placed(&a, &b, formatted.text());
+                    classified.extend(
+                        pending
+                            .replace((code, a, b))
+                            .and_then(|(c, a, b)| self.finding(c, &a, &b, formatted)),
+                    );
+                }
                 continue;
             }
             let (code, a, b) = match unit.verdict(known) {
@@ -250,8 +343,7 @@ impl Formatter<'_> {
                     unclassified.extend(finding);
                     continue;
                 }
-                Verdict::Comments(a, b) => self.placed(&a, &b, formatted.text(), true),
-                Verdict::Whitespace(a, b) => self.placed(&a, &b, formatted.text(), false),
+                Verdict::Whitespace(a, b) => self.placed(&a, &b, formatted.text()),
             };
             pending = Some(match pending.take() {
                 Some((before, a0, b0))
@@ -279,8 +371,10 @@ impl Formatter<'_> {
         a: &Range<usize>,
         b: &Range<usize>,
         formatted: &str,
-        comments: bool,
     ) -> (Code, Range<usize>, Range<usize>) {
+        let has_comment = |text: &str| text.contains("//") || text.contains("/*");
+        // The layout keeps every comment: what the source's stretch holds, the other does.
+        let comments = has_comment(&self.file.text()[a.clone()]);
         let (a, b) = if comments {
             self.narrowed(a, b, formatted)
         } else {
@@ -361,35 +455,19 @@ fn shared_whitespace(a: impl Iterator<Item = char>, b: impl Iterator<Item = char
         .sum()
 }
 
-/// The pieces of a token stream: every comment and every token but the end, in order.
+/// The pieces of a token stream: every token but the end, in order.
 fn pieces<'a>(tokens: &'a [Token], text: &'a str) -> Vec<Piece<'a>> {
-    let mut out = Vec::new();
-    for token in tokens {
-        for trivia in &token.leading {
-            if matches!(
-                trivia.kind,
-                TriviaKind::LineComment
-                    | TriviaKind::BlockComment { .. }
-                    | TriviaKind::DocComment { .. }
-            ) {
-                let range = trivia.span.byte_start..trivia.span.byte_end;
-                out.push(Piece {
-                    text: &text[range.clone()],
-                    comment: true,
-                    range,
-                });
-            }
-        }
-        if token.kind != TokenKind::Eof {
+    tokens
+        .iter()
+        .filter(|token| token.kind != TokenKind::Eof)
+        .map(|token| {
             let range = token.span.byte_start..token.span.byte_end;
-            out.push(Piece {
+            Piece {
                 text: &text[range.clone()],
-                comment: false,
                 range,
-            });
-        }
-    }
-    out
+            }
+        })
+        .collect()
 }
 
 /// The units of change between the pieces `a` of `source` and the pieces `b` of
@@ -404,8 +482,8 @@ fn units(a: &[Piece<'_>], b: &[Piece<'_>], source: &str, formatted: &str) -> Vec
     let mut inserted = Vec::new();
     let mut close = |a_range: Range<usize>,
                      b_range: Range<usize>,
-                     deleted: &mut Vec<(Range<usize>, bool)>,
-                     inserted: &mut Vec<(usize, Range<usize>, bool)>| {
+                     deleted: &mut Vec<(Range<usize>, Range<usize>)>,
+                     inserted: &mut Vec<(usize, Range<usize>)>| {
         if source[a_range.clone()] != formatted[b_range.clone()] {
             units.push(Unit {
                 a: a_range,
@@ -420,10 +498,14 @@ fn units(a: &[Piece<'_>], b: &[Piece<'_>], source: &str, formatted: &str) -> Vec
     for edit in edits(a, b) {
         match edit {
             Edit::Delete(i) => {
-                deleted.push((a[i].range.clone(), a[i].comment));
+                let alike = |other: &Piece<'_>| *other == a[i];
+                let before = a[..i].iter().rev().take_while(|p| alike(p)).count();
+                let after = a[i + 1..].iter().take_while(|p| alike(p)).count();
+                let run = a[i - before].range.start..a[i + after].range.end;
+                deleted.push((a[i].range.clone(), run));
                 cursor = a[i].range.end;
             }
-            Edit::Insert(j) => inserted.push((cursor, b[j].range.clone(), b[j].comment)),
+            Edit::Insert(j) => inserted.push((cursor, b[j].range.clone())),
             Edit::Equal(i, j) => {
                 close(
                     from_a..a[i].range.start,
@@ -536,7 +618,7 @@ mod tests {
             found("//x\nf() //y\n"),
             vec![
                 (Code::S008, 1, 1, Some(fix("//x", "// x"))),
-                (Code::S008, 2, 5, Some(fix("//y", " // y")))
+                (Code::S008, 2, 5, Some(fix("//y", "// y")))
             ],
             "comments as the layout writes them"
         );
@@ -602,9 +684,9 @@ mod tests {
             found("x = (a)\n//c\nf()\n"),
             vec![
                 (Code::S005, 1, 5, Some(fix("(a)", "a"))),
-                (Code::S008, 2, 1, Some(fix("//c", "\n// c")))
+                (Code::S008, 2, 1, Some(fix("//c", "// c")))
             ],
-            "a comment after a dropped pair, with the blank line the layout adds"
+            "a comment after a dropped pair"
         );
         assert_eq!(
             found("//c\n(a).b()\n"),
@@ -662,6 +744,34 @@ mod tests {
     }
 
     #[test]
+    fn an_unclaimed_piece_stops_at_the_claimed_ones_beside_it() {
+        let f = SourceFile::new("a.js", b"f(('a'),)\ng(('b'))\n".to_vec()).expect("utf-8");
+        let (tree, _) = parse(&f);
+        let spans: Vec<_> = [(2, 3), (7, 9), (13, 14)]
+            .iter()
+            .map(|&(from, to)| f.span(from, to).expect("a span"))
+            .collect();
+        let (_, unclassified) = Formatter::new(&f, &tree).changes(&spans, &[]);
+        assert_eq!(
+            unclassified.iter().map(view).collect::<Vec<_>>(),
+            vec![
+                (Code::S008, 1, 7, Some(fix("", "\"a\""))),
+                (Code::S008, 2, 7, Some(fix(")", "\"b\"")))
+            ],
+            "what is claimed (a span claims what it touches) bounds what is not"
+        );
+        let f = SourceFile::new("a.js", b"f('a' ,)\n".to_vec()).expect("utf-8");
+        let (tree, _) = parse(&f);
+        let comma = f.span(6, 7).expect("a span");
+        let (_, unclassified) = Formatter::new(&f, &tree).changes(&[comma], &[]);
+        assert_eq!(
+            unclassified.iter().map(view).collect::<Vec<_>>(),
+            vec![(Code::S008, 1, 3, Some(fix("'a' ", "\"a\"")))],
+            "a claimed piece after the unclaimed one ends it"
+        );
+    }
+
+    #[test]
     fn the_width_itself_is_not_too_long_and_messages_name_their_rule() {
         let exactly = format!("const {} = a+b\n", "x".repeat(88));
         assert_eq!(exactly.trim_end().chars().count(), 100);
@@ -690,6 +800,60 @@ mod tests {
         let (long, indentation) = (message(Code::S006), message(Code::S007));
         assert!(long.contains("longer than 100"), "{long}");
         assert!(indentation.contains("indentation"), "{indentation}");
+    }
+
+    #[test]
+    fn what_a_reordering_spans_is_not_matched_with_what_is_spelled_like_it() {
+        let text = "class A {\n  async m() {}\n  x = 1\n}\n\nasync function m() {}\n\nf( a )\n";
+        assert_eq!(
+            found(text),
+            vec![
+                (
+                    Code::S009,
+                    1,
+                    9,
+                    Some(fix(
+                        "{\n  async m() {}\n  x = 1\n}",
+                        "{\n  x = 1\n  async m() {}\n}"
+                    ))
+                ),
+                (Code::S008, 8, 3, Some(fix(" a ", "a")))
+            ],
+            "the function after the class is spelled like the method that moved"
+        );
+        let imports =
+            "import { b } from \"./b.js\"\nimport { a } from \"./a.js\"\n\nimport2( \"./b.js\")\n";
+        let out = found(imports);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert_eq!((out[0].0, out[1].0, out[1].1), (Code::S003, Code::S008, 4));
+    }
+
+    #[test]
+    fn a_reordered_run_of_imports_is_cut_from_what_is_compared() {
+        let text = "import { s as g, l } from \"./util.js\"\n\n//////\nimport r from \"./config.json\" with { type: \"json\" }\n\n{\n  while ((u)) {\n  }\n  f()\n}\n";
+        let out = found(text);
+        assert_eq!(
+            out.iter().map(|f| (f.0, f.1, f.2)).collect::<Vec<_>>(),
+            vec![(Code::S003, 1, 1), (Code::S005, 7, 10), (Code::S008, 7, 16)],
+            "{out:?}"
+        );
+    }
+
+    #[test]
+    fn a_comment_of_either_kind_is_narrowed_to_what_differs() {
+        assert_eq!(
+            found("count /= 1n // a\n"),
+            vec![(Code::S008, 1, 13, Some(fix("// a", " // a")))]
+        );
+    }
+
+    #[test]
+    fn a_dropped_token_among_its_like_is_claimed_by_a_finding_on_any() {
+        assert_eq!(
+            found("for (const x of f(1, (0))) {}\n"),
+            vec![(Code::S005, 1, 22, Some(fix("(0)", "0")))],
+            "of `)))` the diff drops the last, the finding names the first"
+        );
     }
 
     #[test]

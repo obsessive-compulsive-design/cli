@@ -123,6 +123,16 @@ impl Formatter<'_> {
         let chain = flatten(node);
         let starts = line_starts(&chain.links);
         let mut head = vec![self.element(chain.head)];
+        // `4 .x`: glued, the point would be the number's.
+        let digits = print(&head);
+        let integer =
+            !digits.is_empty() && digits.chars().all(|ch| ch.is_ascii_digit() || ch == '_');
+        let pointed = chain.links.first().is_some_and(|link| {
+            matches!(link.elements.first(), Some(Element::Token(token)) if self.text(token.token().span) == ".")
+        });
+        if integer && pointed {
+            head.push(Doc::text(" "));
+        }
         let mut lines: Vec<Vec<Doc>> = Vec::new();
         for (at, link) in chain.links.iter().enumerate() {
             if starts.contains(&at) {
@@ -239,6 +249,14 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn a_point_after_an_integer_keeps_its_space() {
+        assert_eq!(
+            module("(1_0).y()\n4  .x\n4?.z\n4[0]\n1.5.a\n0x1.b\n1n.c"),
+            "1_0 .y()\n\n4 .x\n\n4?.z\n\n4[0]\n\n1.5.a\n\n0x1.b\n\n1n.c\n"
+        );
     }
 
     #[test]

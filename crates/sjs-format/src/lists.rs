@@ -40,8 +40,9 @@ impl Formatter<'_> {
     fn compare_lists(&self, formatted: &SourceFile) -> Vec<Diagnostic> {
         let (tree, _) = parse(formatted);
         let mut before = Vec::new();
-        self.lists_in_order(self.tree.root(), &mut before);
-        let after = lists_of(tree.root());
+        self.in_layout_order(self.tree.root(), &LISTS, &mut before);
+        let mut after = Vec::new();
+        in_tree_order(tree.root(), &LISTS, &mut after);
         // A file the grammar rejects may be read differently once laid out: then the
         // lists do not pair up and nothing is said.
         let aligned = before.len() == after.len()
@@ -61,12 +62,17 @@ impl Formatter<'_> {
             .collect()
     }
 
-    /// Every list under `node` in the order the layout writes them: the file's items with
-    /// imports in their order (US-045) and a class body's members in theirs (US-047),
-    /// which pairs each list with its own in the canonical text.
-    fn lists_in_order<'t>(&self, node: NodeRef<'t>, lists: &mut Vec<NodeRef<'t>>) {
-        if LISTS.contains(&node.kind()) {
-            lists.push(node);
+    /// Every node of a kind in `wanted` under `node`, in the order the layout writes
+    /// them: the file's items with imports in their order (US-045) and a class body's
+    /// members in theirs (US-047), which pairs each with its own in the canonical text.
+    pub(crate) fn in_layout_order<'t>(
+        &self,
+        node: NodeRef<'t>,
+        wanted: &[NodeKind],
+        found: &mut Vec<NodeRef<'t>>,
+    ) {
+        if wanted.contains(&node.kind()) {
+            found.push(node);
         }
         let top = node.kind() == NodeKind::Module;
         if top || is_laid_out_body(node) {
@@ -77,14 +83,14 @@ impl Formatter<'_> {
             }
             for item in &items {
                 if let Body::Node(child) = item.body {
-                    self.lists_in_order(child, lists);
+                    self.in_layout_order(child, wanted, found);
                 }
             }
             return;
         }
         for child in node.children() {
             if let Element::Node(child) = child {
-                self.lists_in_order(child, lists);
+                self.in_layout_order(child, wanted, found);
             }
         }
     }
@@ -191,20 +197,18 @@ fn is_punct(element: Element<'_>, punct: Punct) -> bool {
     matches!(element, Element::Token(token) if token.token().kind == TokenKind::Punct(punct))
 }
 
-/// Every list under `node`, in source order.
-fn lists_of(node: NodeRef<'_>) -> Vec<NodeRef<'_>> {
-    let mut lists = Vec::new();
-    collect_lists(node, &mut lists);
-    lists
-}
-
-fn collect_lists<'t>(node: NodeRef<'t>, lists: &mut Vec<NodeRef<'t>>) {
-    if LISTS.contains(&node.kind()) {
-        lists.push(node);
+/// Every node of a kind in `wanted` under `node`, in the order of the text.
+pub(crate) fn in_tree_order<'t>(
+    node: NodeRef<'t>,
+    wanted: &[NodeKind],
+    found: &mut Vec<NodeRef<'t>>,
+) {
+    if wanted.contains(&node.kind()) {
+        found.push(node);
     }
     for child in node.children() {
         if let Element::Node(child) = child {
-            collect_lists(child, lists);
+            in_tree_order(child, wanted, found);
         }
     }
 }
