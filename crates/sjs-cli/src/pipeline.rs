@@ -8,7 +8,7 @@
 //! (US-042), S004 and S011 (US-043), S010 (US-044), S003 (US-045), S006 (US-046), S009
 //! (US-047), and the S006, S007 and S008 of every other change the layout makes
 //! (US-048). [`check_graph`] is the module graph's pass over a program on disk
-//! (US-060: E205 for a path that names no module).
+//! (US-060: E205 for a path that names no module; US-061: E203 for an import cycle).
 
 use sjs_bind::{Host, LoadError, ModuleGraph};
 use sjs_diag::{Diagnostics, SourceFile};
@@ -44,8 +44,9 @@ pub fn check_files(files: &[InputFile]) -> Diagnostics {
     diagnostics
 }
 
-/// What the module graph of the program at `roots` finds (US-060): E205 for each path
-/// that names no module. Files are named relative to `base`.
+/// What the module graph of the program at `roots` finds: E205 for each path that names
+/// no module (US-060) and E203 for each import cycle (US-061). Files are named relative
+/// to `base`.
 ///
 /// # Errors
 ///
@@ -55,7 +56,10 @@ pub fn check_graph(
     base: &Path,
     roots: &[PathBuf],
 ) -> Result<Diagnostics, LoadError> {
-    ModuleGraph::load(host, base, roots).map(|(_, diagnostics)| diagnostics)
+    ModuleGraph::load(host, base, roots).map(|(graph, mut diagnostics)| {
+        diagnostics.extend(graph.import_cycles().iter().cloned());
+        diagnostics
+    })
 }
 
 #[cfg(test)]
@@ -81,6 +85,15 @@ mod tests {
         assert!(check_graph(&Disk, dir.path(), &[entry])
             .expect("loads")
             .is_empty());
+        dir.write("a.js", "export { a } from \"./entry.js\"\n")
+            .expect("write");
+        let root = [dir.path().join("entry.js")];
+        let found = check_graph(&Disk, dir.path(), &root).expect("loads");
+        let found: Vec<_> = found
+            .iter()
+            .map(|d| (d.path.as_str(), d.code, d.span.start))
+            .collect();
+        assert_eq!(found, [("entry.js", Code::E203, Position::new(1, 19))]);
         let gone = dir.path().join("gone.js");
         let error =
             check_graph(&Disk, dir.path(), std::slice::from_ref(&gone)).expect_err("no root");

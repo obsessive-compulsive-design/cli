@@ -2290,7 +2290,25 @@ entry test discovery of §5.3 (every `*.test.js` in the directory of each graph 
 via `import()`; test discovery with an entry outside `./src`.
 
 #### US-061 Import cycles
-§5.1 · After: US-060 · Size: S · M1
+§5.1 · After: US-060 · Size: S · M1 · **Status: complete** (2026-11-15)
+
+> Delivered in `sjs-bind`: `ModuleGraph::import_cycles()` (`cycles.rs`) reports each
+> elementary cycle once as `E203`, on the import that returns to the module whose
+> canonical path sorts first, with the cycle listed from that module (`a.js → b.js →
+> a.js`). The cycles are found with Johnson's algorithm over Tarjan's components, both
+> without recursion, so a graph with no cycle costs one pass however many paths it has
+> and a cycle of 100 000 modules does not exhaust the stack. `pipeline::check_graph`
+> adds the findings, so directory fixtures see them: six under `05-modules/E203/`
+> (self-import, two modules, two cycles sharing an edge, a re-export, `import()`, and a
+> diamond that must stay silent).
+> **Decisions:** dynamic `import()` and `export … from` edges participate. Several
+> imports of one module are one edge; the finding sits on the first of them in the
+> closing module. An import that names no module (E205) is no edge. Every elementary
+> cycle is listed, so a program whose modules all import one another gets one finding
+> for each, which grows very fast; no cap is applied.
+> Verified: all §0.2 gates with 100 % lines and regions; the cycle finder agrees with
+> exhaustive enumeration on 2 000 random graphs; mutation testing on the diff with no
+> survivor (eight mutants loop forever and time out).
 
 **Done when**
 - Each elementary cycle is reported once as `E203` at the import that closes it, listing

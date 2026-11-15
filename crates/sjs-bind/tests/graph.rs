@@ -518,3 +518,115 @@ fn the_disk_lists_names_as_spelled_and_fails_on_what_is_no_directory() {
     assert_eq!(Disk.read(&base.join("Mixed.js")).expect("readable"), b"");
     assert!(Disk.canonical(&base.join("gone")).is_err());
 }
+
+/// The E203 findings of the program from `entry.js`: (file, line, column, message).
+fn cycles(files: &[(&str, &str)]) -> Vec<(String, u32, u32, String)> {
+    let (_dir, base) = project(files);
+    let (graph, found) = load(&Disk, &base);
+    assert_eq!(found, Vec::new());
+    graph
+        .import_cycles()
+        .iter()
+        .map(|d| {
+            assert_eq!(d.code, Code::E203);
+            let at = d.span.start;
+            (d.path.clone(), at.line, at.column, d.message.clone())
+        })
+        .collect()
+}
+
+fn cycle(file: &str, line: u32, column: u32, listed: &str) -> (String, u32, u32, String) {
+    let why = "modules import one another in one direction only (SPEC.md §5.1)";
+    let message = format!("import cycle: {listed}; {why}");
+    (file.to_owned(), line, column, message)
+}
+
+#[test]
+fn a_cycle_is_e203_once_on_the_import_that_closes_it() {
+    assert_eq!(
+        cycles(&[("entry.js", "import { e } from \"./entry.js\"\n")]),
+        [cycle("entry.js", 1, 19, "entry.js → entry.js")],
+        "a module that imports itself"
+    );
+    assert_eq!(
+        cycles(&[
+            ("entry.js", "import { z } from \"./a/z.js\"\n"),
+            (
+                "a/z.js",
+                "import { y } from \"./y.js\"\nimport { e } from \"../entry.js\"\n"
+            ),
+            ("a/y.js", "export const y = 1\n"),
+        ]),
+        [cycle("entry.js", 1, 19, "a/z.js → entry.js → a/z.js")],
+        "listed from the path that sorts first, reported where the cycle returns to it"
+    );
+    assert_eq!(
+        cycles(&[
+            (
+                "entry.js",
+                concat!(
+                    "import { a } from \"./lib.js\"\n",
+                    "import { b } from \"././lib.js\"\n\n",
+                    "export { c } from \"./lib.js\"\n",
+                ),
+            ),
+            (
+                "lib.js",
+                "export const a = 1\nexport { e } from \"./entry.js\"\nexport { f } from \"./entry.js\"\n"
+            ),
+        ]),
+        [cycle("lib.js", 2, 19, "entry.js → lib.js → entry.js")],
+        "through a re-export; several imports of one module close one cycle, at the first"
+    );
+    assert_eq!(
+        cycles(&[
+            ("entry.js", "const lazy = await import(\"./lazy.js\")\n"),
+            ("lazy.js", "import { e } from \"./entry.js\"\n"),
+        ]),
+        [cycle("lazy.js", 1, 19, "entry.js → lazy.js → entry.js")],
+        "`import()` is an edge of the graph"
+    );
+}
+
+#[test]
+fn cycles_that_share_an_edge_are_each_reported_and_a_dag_has_none() {
+    assert_eq!(
+        cycles(&[
+            ("entry.js", "import { a } from \"./a.js\"\n"),
+            ("a.js", "import { b } from \"./b.js\"\n"),
+            (
+                "b.js",
+                "import { a } from \"./a.js\"\nimport { e } from \"./entry.js\"\n"
+            ),
+        ]),
+        [
+            cycle("b.js", 1, 19, "a.js → b.js → a.js"),
+            cycle("entry.js", 1, 19, "a.js → b.js → entry.js → a.js"),
+        ],
+        "both go through a.js → b.js"
+    );
+    assert_eq!(
+        cycles(&[
+            (
+                "entry.js",
+                concat!(
+                    "import { a } from \"./a.js\"\n",
+                    "import { b } from \"./b.js\"\n",
+                    "import { g } from \"./gone.js\" with { type: \"json\" }\n",
+                ),
+            ),
+            ("a.js", "import { c } from \"./c.js\"\n"),
+            (
+                "b.js",
+                "import { c } from \"./c.js\"\nimport { a } from \"./a.js\"\n"
+            ),
+            (
+                "c.js",
+                "import j from \"./j.json\" with { type: \"json\" }\n"
+            ),
+            ("j.json", "1"),
+        ]),
+        Vec::new(),
+        "one module reached by several paths is no cycle; an import that names none is no edge"
+    );
+}
