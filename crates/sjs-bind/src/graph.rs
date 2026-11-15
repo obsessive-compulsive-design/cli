@@ -70,6 +70,8 @@ pub struct LoadError {
 pub struct ModuleGraph {
     /// The canonical paths of the roots, in the order given, each once.
     pub roots: Vec<PathBuf>,
+    /// The canonical directory files are named from: the project's.
+    pub(crate) base: PathBuf,
     modules: BTreeMap<PathBuf, Module>,
 }
 
@@ -113,6 +115,7 @@ impl ModuleGraph {
         }
         let graph = Self {
             roots: canonical_roots,
+            base: loader.base,
             modules: loader.modules,
         };
         Ok((graph, loader.diagnostics))
@@ -147,6 +150,21 @@ impl ModuleGraph {
     }
 }
 
+/// The path diagnostics print for the file at the canonical `path`: relative to `base`
+/// with `/`, or the whole path for a file outside it.
+pub(crate) fn name_of(base: &Path, path: &Path) -> String {
+    path.strip_prefix(base).map_or_else(
+        |_| path.display().to_string(),
+        |inside| {
+            let parts: Vec<_> = inside
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect();
+            parts.join("/")
+        },
+    )
+}
+
 struct Loader<'h> {
     host: &'h dyn Host,
     base: PathBuf,
@@ -162,16 +180,7 @@ struct Loader<'h> {
 
 impl Loader<'_> {
     fn name(&self, path: &Path) -> String {
-        path.strip_prefix(&self.base).map_or_else(
-            |_| path.display().to_string(),
-            |inside| {
-                let parts: Vec<_> = inside
-                    .components()
-                    .map(|part| part.as_os_str().to_string_lossy())
-                    .collect();
-                parts.join("/")
-            },
-        )
+        name_of(&self.base, path)
     }
 
     /// Parses a `.js` file and resolves the paths it names.

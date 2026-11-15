@@ -630,3 +630,111 @@ fn cycles_that_share_an_edge_are_each_reported_and_a_dag_has_none() {
         "one module reached by several paths is no cycle; an import that names none is no edge"
     );
 }
+
+/// The E207 findings of the program at `root`: (file, message), each checked to be at
+/// 1:1 with an empty span.
+fn unreachable(base: &Path, root: &str) -> Vec<(String, String)> {
+    let (graph, _) = ModuleGraph::load(&Disk, base, &[base.join(root)]).expect("loads");
+    graph
+        .unreachable(&Disk)
+        .iter()
+        .map(|d| {
+            assert_eq!(d.code, Code::E207);
+            let span = d.span;
+            assert_eq!((span.start, span.end), (span.start, span.start));
+            assert_eq!((span.start.line, span.start.column), (1, 1));
+            assert_eq!((span.byte_start, span.byte_end), (0, 0));
+            (d.path.clone(), d.message.clone())
+        })
+        .collect()
+}
+
+fn orphan(name: &str) -> (String, String) {
+    let why = "is not reached from the root: import it or delete it (SPEC.md §5.3)";
+    (name.to_owned(), format!("`{name}` {why}"))
+}
+
+#[test]
+fn a_js_file_beneath_src_the_root_does_not_reach_is_e207() {
+    let (_dir, base) = project(&[
+        (
+            "src/index.js",
+            "import { u } from \"./used.js\"\n\nconst lazy = await import(\"./lazy.js\")\n",
+        ),
+        ("src/used.js", "export const u = 1\n"),
+        ("src/lazy.js", "export const z = 1\n"),
+        ("src/orphan.js", "export const o = 1\n"),
+        ("src/deep/er/orphan.js", ""),
+        ("src/.hidden.js", ""),
+        ("src/node_modules/dep/index.js", ""),
+        ("src/dir.js/inner.js", ""),
+        ("src/a.test.js", "import { h } from \"./helper.js\"\n"),
+        ("src/helper.js", "export const h = 1\n"),
+        ("src/deep/b.test.js", ""),
+        ("src/data.json", "{}"),
+        ("src/notes.txt", ""),
+        ("src/module.mjs", ""),
+        ("src/js", ""),
+        ("outside/other.js", ""),
+        ("stray.js", ""),
+    ]);
+    assert_eq!(
+        unreachable(&base, "src/index.js"),
+        [
+            orphan("src/.hidden.js"),
+            orphan("src/deep/er/orphan.js"),
+            orphan("src/dir.js/inner.js"),
+            orphan("src/helper.js"),
+            orphan("src/node_modules/dep/index.js"),
+            orphan("src/orphan.js"),
+        ],
+        "nothing is ignored; tests and what is not `.js` are exempt; a test's imports are not the root's"
+    );
+}
+
+#[test]
+fn the_scan_is_of_src_wherever_the_entries_are_and_of_nothing_without_it() {
+    let (_dir, base) = project(&[
+        ("tools/entry.js", "import { u } from \"../src/used.js\"\n"),
+        ("tools/orphan.js", ""),
+        ("src/index.js", ""),
+        ("src/used.js", "export const u = 1\n"),
+    ]);
+    assert_eq!(
+        unreachable(&base, "tools/entry.js"),
+        [orphan("src/index.js")],
+        "an explicit entry outside `./src` leaves the default root unreached"
+    );
+    let (_dir, base) = project(&[("entry.js", ""), ("orphan.js", ""), ("lib/src/o.js", "")]);
+    assert_eq!(unreachable(&base, "entry.js"), Vec::new(), "no `./src`");
+}
+
+#[cfg(unix)]
+#[test]
+fn links_beneath_src_are_followed_once_to_what_they_name() {
+    let (dir, base) = project(&[
+        ("src/index.js", "import { u } from \"./used.js\"\n"),
+        ("src/used.js", "export const u = 1\n"),
+        ("src/sub/orphan.js", ""),
+        ("outside/other.js", ""),
+        ("outside/more/deep.js", ""),
+    ]);
+    let link = |target: &str, name: &str| {
+        std::os::unix::fs::symlink(base.join(target), dir.path().join(name)).expect("symlink");
+    };
+    link("src/used.js", "src/alias.js");
+    link("src", "src/sub/loop");
+    link("src/sub", "src/again");
+    link("outside/other.js", "src/out.js");
+    link("outside/more", "src/more");
+    link("nothing.js", "src/dangling.js");
+    assert_eq!(
+        unreachable(&base, "src/index.js"),
+        [
+            orphan("outside/more/deep.js"),
+            orphan("outside/other.js"),
+            orphan("src/sub/orphan.js"),
+        ],
+        "each file once, under its own path; a link to a module or to nothing adds none"
+    );
+}

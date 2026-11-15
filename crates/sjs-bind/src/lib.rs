@@ -4,11 +4,14 @@
 //! the root's imports through a [`Host`], parses each file once and keys it by its
 //! canonical path, so the program is a closed world for every whole-program pass.
 //! US-061 adds [`ModuleGraph::import_cycles`]: E203 for every elementary import cycle.
+//! US-062 adds [`ModuleGraph::unreachable`]: E207 for every `.js` file beneath `./src`
+//! that is no module of the graph.
 
 mod cycles;
 mod graph;
 mod host;
 mod json;
+mod unreachable;
 
 pub use graph::{Content, Import, LoadError, Module, ModuleGraph};
 pub use host::{Disk, Host};

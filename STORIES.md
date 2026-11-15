@@ -2320,7 +2320,24 @@ via `import()`; test discovery with an entry outside `./src`.
 false positive.
 
 #### US-062 Unreachable modules
-§5.3 · After: US-060 · Size: S · M1
+§5.3 · After: US-060 · Size: S · M1 · **Status: complete** (2026-11-15)
+
+> Delivered in `sjs-bind`: `ModuleGraph::unreachable(host)` (`unreachable.rs`) walks
+> `<base>/src` and reports `E207` at 1:1 of each `.js` file that is no module of the
+> graph; `*.test.js` files and everything that is not `.js` (JSON included) are exempt.
+> The graph now keeps its base directory, and `pipeline::check_graph` adds the
+> findings, so directory fixtures see them: five under `05-modules/E207/` (an orphan,
+> a file imported by a test alone, a dotfile, and two near-misses: everything reached
+> or exempt, and no `./src`).
+> **Decisions:** the scan root is `./src` when it exists, wherever the entries live,
+> and nothing is scanned without it. `sjs test` does not change E207: a file only a
+> test imports is unreachable. A file reached only through `import()` is reachable.
+> Nothing is ignored: dotfiles and a directory named `node_modules` are scanned.
+> Files and directories are identified by canonical path, so a link to a module adds
+> nothing, a loop of links ends, and a link out of `./src` reports the file it names
+> under that file's own path. A directory that cannot be listed is skipped.
+> Verified: all §0.2 gates with 100 % lines and regions; mutation testing on the diff
+> with no survivor and no timeout (11 caught, 1 unviable).
 
 As a programmer I want every `.js` file beneath `./src` that the root does not reach
 reported as `E207`, so what is on disk and what is the program never differ.
