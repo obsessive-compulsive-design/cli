@@ -1,7 +1,9 @@
 // Every permitted literal form: no diagnostic.
 const k = "key"
 
-const o = { a: 1, b: 2, "c-d": 3, [k]: 4, ...o }
+const base = { z: 0 }
+
+const o = { a: 1, b: 2, "c-d": 3, [k]: 4, ...base }
 
 const p = { a: 1, ...o, a: 2 }
 

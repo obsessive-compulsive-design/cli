@@ -1,0 +1,74 @@
+import { a, b as c } from "./x.js"
+import * as ns from "./y.js"
+import * as from from "./w.js"
+import cfg from "./c.json" with { type: "json" }
+
+export { a, c as d }
+export { e as f } from "./z.js"
+export const k = a
+let { p, q: r = k, ...rest } = cfg
+const [s, t = s, ...u] = [p]
+export function fn(x, { y, z: [w] } = {}, ...more) {
+  return x + y + w + more + fn + from
+}
+export async function* stream(n) {
+  yield n
+  yield* ns.all
+  await rest
+}
+const g = async (h = 1) => h
+const curried = (one) => (two) => one + two
+---
+0 Module
+1 Function <0
+2 Block <1
+3 Function <0
+4 Block <3
+5 Arrow <0
+6 Arrow <0
+7 Arrow <6
+Import a@1:10 in 0
+Import c@1:18 in 0
+Import ns@2:13 in 0
+Import from@3:13 in 0
+Import cfg@4:8 in 0
+Const k@8:14 in 0
+Let p@9:7 in 0
+Let r@9:13 in 0
+Let rest@9:23 in 0
+Const s@10:8 in 0
+Const t@10:11 in 0
+Const u@10:21 in 0
+Function fn@11:17 in 0
+Param x@11:20 in 1
+Param y@11:25 in 1
+Param w@11:32 in 1
+Param more@11:46 in 1
+Function stream@14:24 in 0
+Param n@14:31 in 3
+Const g@19:7 in 0
+Param h@19:18 in 5
+Const curried@20:7 in 0
+Param one@20:18 in 6
+Param two@20:27 in 7
+a@6:10 in 0 -> 1:10 export
+c@6:13 in 0 -> 1:18 export
+a@8:18 in 0 -> 1:10
+k@9:17 in 0 -> 8:14
+cfg@9:32 in 0 -> 4:8
+s@10:15 in 0 -> 10:8
+p@10:27 in 0 -> 9:7
+x@12:10 in 2 -> 11:20
+y@12:14 in 2 -> 11:25
+w@12:18 in 2 -> 11:32
+more@12:22 in 2 -> 11:46
+fn@12:29 in 2 -> 11:17
+from@12:34 in 2 -> 3:13
+n@15:9 in 4 -> 14:31
+ns@16:10 in 4 -> 2:13
+rest@17:9 in 4 -> 9:23
+h@19:28 in 5 -> 19:18
+one@20:35 in 7 -> 20:18
+two@20:41 in 7 -> 20:27
+---
+

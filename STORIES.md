@@ -2354,7 +2354,36 @@ for `sjs test`, and §5.3 says the *root's* imports; tested and recorded as a
 `import()` (reachable); a dotfile `.hidden.js` (scanned: no ignore rule).
 
 #### US-063 Scopes, declarations, hoisting and TDZ
-§4.2, §4.4, §8.1 E135 · After: US-023 … US-027 · Size: M · M1
+§4.2, §4.4, §8.1 E135 · After: US-023 … US-027 · Size: M · M1 · **Status: complete** (2026-11-15)
+
+> Delivered in `sjs-bind`: `bind(source, tree)` (`scopes.rs`) returns the `Bindings` of
+> a file (its scopes, declarations and references) and two findings. Scopes: module,
+> function (methods, accessors and instance-field initializers included), arrow, block,
+> `for`, `for…of`, `switch`, `catch` and class; parameters live in the function's scope
+> and its body in a block inside it. Declarations: imports, `const`, `let`, functions
+> (hoisted to their block), classes, parameters and `catch` bindings, with the names of
+> every pattern. Each reference carries its declaration (or none: a global, for
+> US-068), whether it is a callee and whether it is an export-list name.
+> `E000` for a name declared twice in one scope, or declared in a body when a parameter
+> or `catch` binding has it. `E135` on a use that comes before its declaration has run,
+> and on a call of a function that uses, directly or through the functions it calls, a
+> binding not yet declared. `pipeline::check_files` runs the binder on every file the
+> grammar accepts; nine fixtures under `04-bindings/`.
+> **Decisions:** a binding holds a value from the end of its own element (so a default
+> may name an earlier element, not itself or a later one); the initializer of a
+> destructuring declaration and the iterable of a `for…of` come before all of its
+> names; a class holds its name from its body on, so `extends` is too early and a
+> static initializer is not. What runs later is exempt: function and arrow bodies,
+> methods, instance fields; an `export { … }` list evaluates nothing. The call check is
+> reported at the call, follows only calls written `name(…)` to functions and
+> `const`/`let` arrows of the file, ignores closures inside the callee and values
+> passed as callbacks, and skips bindings a call makes anew (recursion). Private names
+> and duplicates within one pattern or parameter list stay the parser's (US-023 to
+> US-025). The binder's findings are dropped for a file with E000, E001 or E002, whose
+> tree is a recovery. One existing fixture spread an object into its own initializer;
+> it now spreads another.
+> Verified: all §0.2 gates with 100 % lines and regions; mutation testing on the diff
+> with no survivor (120 caught, 2 unviable).
 
 **Scope.** Module, function, arrow, block, `for`, `for…of`, `switch`, `catch` and class
 scopes (class name binding, private names); function hoisting to its block; parameter

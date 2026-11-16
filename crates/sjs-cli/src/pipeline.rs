@@ -11,7 +11,7 @@
 //! (US-060: E205 for a path that names no module; US-061: E203 for an import cycle; US-062: E207 for an unreachable module).
 
 use sjs_bind::{Host, LoadError, ModuleGraph};
-use sjs_diag::{Diagnostics, SourceFile};
+use sjs_diag::{Code, Diagnostics, SourceFile};
 use std::path::{Path, PathBuf};
 
 /// A file of the program as the harness or a command hands it over: the path the
@@ -38,6 +38,16 @@ pub fn check_files(files: &[InputFile]) -> Diagnostics {
                 // one for every other change its layout makes.
                 let formatter = sjs_format::Formatter::new(&source, &tree);
                 diagnostics.extend(formatter.report(&found).findings);
+                // The binder's findings (US-063: E000 for a name declared twice, E135
+                // for a use before its declaration), for a file the grammar accepts:
+                // the names of a tree that was recovered are a guess.
+                let rejected = found
+                    .iter()
+                    .any(|d| matches!(d.code, Code::E000 | Code::E001 | Code::E002));
+                if !rejected {
+                    let (_, bound) = sjs_bind::bind(&source, &tree);
+                    diagnostics.extend(bound.iter().cloned());
+                }
             }
         }
     }
@@ -66,9 +76,10 @@ pub fn check_graph(
 
 #[cfg(test)]
 mod tests {
+    use super::Code;
     use super::{check_files, check_graph, InputFile};
     use sjs_bind::Disk;
-    use sjs_diag::{Code, Position};
+    use sjs_diag::Position;
     use sjs_testkit::fs::TempDir;
 
     #[test]
