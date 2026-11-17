@@ -2401,7 +2401,22 @@ its own static initializer (fine) and in its own `extends` (E135); each `case` b
 its own scope; a function declared in a block is invisible outside it.
 
 #### US-064 Block shadowing
-§4.2 · After: US-063 · Size: S · M1
+§4.2 · After: US-063 · Size: S · M1 · **Status: complete** (2026-11-16)
+
+> Delivered in `sjs-bind::scopes`: after the names of a file are bound, each
+> declaration that is the first of its name in its scope is looked up from the scope
+> around it; when the binding found belongs to the same function (no function or
+> arrow between the two scopes) it is `E107` on the inner name, naming the line of the
+> outer one. Five fixtures under `04-bindings/E107/`.
+> **Decisions:** the outer binding may be declared below the block (names are hoisted
+> to their scope). Every kind of declaration counts on both sides: imports,
+> parameters, loop variables, `catch` bindings, pattern names, and functions and
+> classes declared in a block. A `static { … }` block is a block, not a function. A
+> name declared in a body over its own parameter stays the single `E000` of US-063.
+> A global such as `fetch` is no binding, so declaring it shadows nothing here
+> (US-068). Blocks side by side share nothing.
+> Verified: all §0.2 gates with 100 % lines and regions; mutation testing on the diff
+> with no survivor (3 caught).
 
 **Done when**
 - `const x = 1; { const x = 2 }` is `E107`; a nested function or arrow may shadow; a

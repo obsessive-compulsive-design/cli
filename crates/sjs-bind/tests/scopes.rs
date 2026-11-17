@@ -327,18 +327,58 @@ fn a_name_declared_twice_in_one_scope_is_e000() {
     );
     assert_eq!(
         findings("const f = (p, q) => {\n  const p = 1\n  {\n    const q = 2\n  }\n}\nfunction g(r) {\n  function r() {}\n}\ntry {\n} catch (e) {\n  const e = 1\n}\n"),
-        [twice(2, 9, "p", 1), twice(8, 12, "r", 7), twice(12, 9, "e", 11)],
-        "a body may not declare a parameter's name; a block inside it shadows (US-064)"
+        [
+            twice(2, 9, "p", 1),
+            shadow(4, 11, "q", 1),
+            twice(8, 12, "r", 7),
+            twice(12, 9, "e", 11)
+        ],
+        "a body may not declare a parameter's name, once; a block inside it shadows"
     );
     assert_eq!(
         findings("for (const i of xs) {\n  const i = 1\n}\n{\n  const a = 3\n  function dup() {}\n  function dup() {}\n}\nconst a = 1\nconst same = (a) => a\nclass K {\n  m(a) {\n    const K = a\n  }\n}\n"),
-        [twice(7, 12, "dup", 6)],
-        "other scopes are other names"
+        [shadow(2, 9, "i", 1), shadow(5, 9, "a", 9), twice(7, 12, "dup", 6)],
+        "other scopes are other names: in a block E107, in a function none"
     );
     assert_eq!(
         findings("const f = (p, p) => p\nconst [d, d] = []\n"),
         Vec::<String>::new(),
         "two names of one parameter list or one pattern are the parser's E000"
+    );
+}
+
+fn shadow(line: u32, column: u32, name: &str, outer: u32) -> String {
+    format!("E107 @{line}:{column} `{name}` shadows the binding declared on line {outer}: only a nested function may reuse an outer name (SPEC.md §4.2)")
+}
+
+#[test]
+fn a_block_that_declares_a_name_of_its_function_is_e107() {
+    assert_eq!(
+        findings("const x = 1\n{\n  const x = 2\n  {\n    let x = 3\n  }\n}\n"),
+        [shadow(3, 9, "x", 1), shadow(5, 9, "x", 3)],
+        "each against the nearest binding around it"
+    );
+    assert_eq!(
+        findings(concat!(
+            "import { i } from \"./i.js\"\n\nconst f = (x, e) => {\n  for (const x of i) {\n    x\n  }\n",
+            "  for (let i = 0; i < 1; i += 1) {\n  }\n  try {\n  } catch (e) {\n  }\n  if (x) {\n    const [f, { k: e }] = x\n  }\n}\n",
+        )),
+        [shadow(4, 14, "x", 3), shadow(10, 12, "e", 3), shadow(13, 20, "e", 3)],
+        "a loop variable, a `catch` binding and a pattern's name over a parameter; `i` and `f` belong to the module, outside the function"
+    );
+    assert_eq!(
+        findings("{\n  function late() {}\n  class Late {}\n}\nfunction late() {}\nclass Late {\n  static {\n    const late = 1\n  }\n}\n"),
+        [shadow(2, 12, "late", 5), shadow(3, 9, "Late", 6), shadow(8, 11, "late", 5)],
+        "a function and a class in a block, over names declared below; a `static` block is a block"
+    );
+    assert_eq!(
+        findings(concat!(
+            "import { i } from \"./i.js\"\n\nconst x = 1\nconst f = (x) => {\n  const i = x\n  return (i) => i\n}\n",
+            "function g(f) {\n  function x() {}\n}\nclass K {\n  x = (f) => f\n  g(x, i) {\n    const K = 1\n  }\n}\n",
+            "{\n  const fetch = 1\n  const own = fetch\n}\n{\n  const own = 2\n}\n",
+        )),
+        Vec::<String>::new(),
+        "a nested function may shadow: a parameter, a body, a method; a global is no binding; blocks side by side share nothing"
     );
 }
 

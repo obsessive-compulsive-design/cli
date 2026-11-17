@@ -1,6 +1,7 @@
-//! Scopes, declarations and references of one file (SPEC.md §4.2, §4.4), with the two
-//! findings that need nothing else: a name declared twice in one scope (E000) and a
-//! binding used before its declaration has run (E135, the temporal dead zone).
+//! Scopes, declarations and references of one file (SPEC.md §4.2, §4.4), with the
+//! findings that need nothing else: a name declared twice in one scope (E000), a block
+//! that declares a name of the function it is in (E107) and a binding used before its
+//! declaration has run (E135, the temporal dead zone).
 
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
@@ -147,7 +148,8 @@ impl Bindings {
 }
 
 /// Binds the names of a file: its scopes, declarations and references, with E000 for a
-/// name declared twice in one scope and E135 for a binding used, or reached through a
+/// name declared twice in one scope, E107 for a name of the enclosing function declared
+/// again in a block and E135 for a binding used, or reached through a
 /// call, before its declaration has run.
 #[must_use]
 pub fn bind(source: &SourceFile, tree: &SyntaxTree) -> (Bindings, Diagnostics) {
@@ -553,6 +555,23 @@ impl Binder<'_> {
             at < declaration.ready || declaration.dead.contains(&at)
         };
         let mut found = Vec::new();
+        // A name of the function a block is in may not be declared again in the block
+        // (E107); a nested function has its own names.
+        for (id, declaration) in out.declarations.iter().enumerate() {
+            let scope = &out.scopes[declaration.scope];
+            let is_first = scope.names.get(&declaration.name) == Some(&id);
+            let around = scope.parent.filter(|_| is_first);
+            let outer = around.and_then(|parent| out.lookup(parent, &declaration.name));
+            let outer = outer.map(|outer| &out.declarations[outer]);
+            if outer.is_some_and(|outer| runs_in[outer.scope] == runs_in[declaration.scope]) {
+                let line = outer.map_or(0, |outer| outer.span.start.line);
+                let message = format!(
+                    "`{}` shadows the binding declared on line {line}: only a nested function may reuse an outer name (SPEC.md §4.2)",
+                    declaration.name
+                );
+                found.push((Code::E107, declaration.span, message));
+            }
+        }
         for reference in out.references.iter().filter(|reference| !reference.export) {
             let Some(declaration) = reference.declaration.map(|at| &out.declarations[at]) else {
                 continue;
@@ -563,7 +582,7 @@ impl Binder<'_> {
                     "`{}` is used before its declaration on line {} has run (SPEC.md §8.1)",
                     reference.name, declaration.span.start.line
                 );
-                found.push((reference.span, message));
+                found.push((Code::E135, reference.span, message));
             }
             // A call runs the function now: what the function reads, and what the
             // functions it calls read, must be declared by now too.
@@ -596,7 +615,7 @@ impl Binder<'_> {
                         "`{}` is called before `{}` is declared on line {}: line {} uses it (SPEC.md §8.1)",
                         reference.name, read.name, read.span.start.line, inner.span.start.line
                     );
-                    found.push((reference.span, message));
+                    found.push((Code::E135, reference.span, message));
                 }
             }
         }
@@ -604,7 +623,7 @@ impl Binder<'_> {
         self.diagnostics.extend(
             found
                 .into_iter()
-                .map(|(span, message)| Diagnostic::new(Code::E135, path, span, message)),
+                .map(|(code, span, message)| Diagnostic::new(code, path, span, message)),
         );
     }
 }
