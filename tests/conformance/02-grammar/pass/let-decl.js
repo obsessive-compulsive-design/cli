@@ -11,4 +11,8 @@ let [c] = xs
 
 a += b + c
 
+b += 1
+
+c += 1
+
 export { a }

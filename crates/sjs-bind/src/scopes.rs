@@ -1,7 +1,9 @@
 //! Scopes, declarations and references of one file (SPEC.md §4.2, §4.4), with the
 //! findings that need nothing else: a name declared twice in one scope (E000), a block
 //! that declares a name of the function it is in (E107) and a binding used before its
-//! declaration has run (E135, the temporal dead zone).
+//! declaration has run (E135, the temporal dead zone); and those about what is assigned:
+//! a `let` nothing assigns (E106), a loop variable its loop's body assigns (E123), a
+//! binding that may not be assigned at all (E138).
 
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
@@ -47,6 +49,8 @@ pub struct Scope {
     /// For the block that is the body of a function, arrow or `catch`: the scope of
     /// the parameters, whose names the body may not declare again.
     head: Option<usize>,
+    /// Where the last node inside it begins: for a loop, its body.
+    body: usize,
 }
 
 /// How a name is declared.
@@ -94,6 +98,8 @@ pub struct Declaration {
     /// What it is given its value by, where a use of it is no use by anything else:
     /// the initializer of a `const` or `let`, the whole of a function or a class.
     own: Range<usize>,
+    /// The `let` that declares it, when one does.
+    keyword: Option<Span>,
 }
 
 /// A use of a name.
@@ -179,6 +185,7 @@ struct Declaring {
     origin: usize,
     dead: Range<usize>,
     exported: bool,
+    keyword: Option<Span>,
 }
 
 struct Binder<'a> {
@@ -257,6 +264,15 @@ fn child(node: NodeRef<'_>, kind: NodeKind) -> Option<NodeRef<'_>> {
     })
 }
 
+/// Where the last node directly inside `node` begins: the body, for a loop.
+fn last_node(node: NodeRef<'_>) -> usize {
+    let nodes = node.children().filter_map(|child| match child {
+        Element::Node(inner) => Some(inner.span().byte_start),
+        Element::Token(_) => None,
+    });
+    nodes.last().unwrap_or_default()
+}
+
 /// Whether a class field is `static`: only then do two words come before its value,
 /// the word and the field's name.
 fn is_static(field: NodeRef<'_>) -> bool {
@@ -277,6 +293,14 @@ fn is_write(node: NodeRef<'_>, children: &[Element<'_>], at: usize) -> bool {
         NodeKind::ForUpdate => !children[..at].iter().any(is_ident),
         NodeKind::UpdateExpr | NodeKind::ArrayPattern | NodeKind::RestElement => true,
         NodeKind::PatternProperty => at == 0 || is_punct(before, Punct::Colon),
+        // `(x) = 1` assigns as `x = 1` does.
+        NodeKind::ParenExpr => node.parent().is_some_and(|parent| {
+            let around: Vec<Element<'_>> = parent.children().collect();
+            let here = around.iter().position(
+                |child| matches!(child, Element::Node(inner) if inner.span() == node.span()),
+            );
+            here.is_some_and(|here| is_write(parent, &around, here))
+        }),
         _ => false,
     }
 }
@@ -378,6 +402,72 @@ fn judge_names(out: &Bindings, runs_in: &[usize], found: &mut Vec<(Code, Span, S
     }
 }
 
+/// The findings about what is assigned: E123 and E138 onto `found`, and the E106s,
+/// which say what to write instead.
+fn judge_writes(
+    out: &Bindings,
+    path: &str,
+    found: &mut Vec<(Code, Span, String)>,
+) -> Vec<Diagnostic> {
+    let mut written = vec![false; out.declarations.len()];
+    // The declarations of which some name is assigned.
+    let mut assigned = BTreeSet::new();
+    for reference in out.references.iter().filter(|reference| reference.write) {
+        let Some(at) = reference.declaration else {
+            continue;
+        };
+        let declaration = &out.declarations[at];
+        let scope = &out.scopes[declaration.scope];
+        let (name, line) = (&declaration.name, declaration.span.start.line);
+        written[at] = true;
+        assigned.insert(declaration.origin);
+        let what = match declaration.kind {
+            DeclKind::Const => "a constant",
+            DeclKind::Import => "an import",
+            DeclKind::Function => "a function",
+            DeclKind::Class => "a class",
+            DeclKind::Let | DeclKind::Param | DeclKind::Catch => {
+                let is_loop = matches!(scope.kind, ScopeKind::For | ScopeKind::ForOf);
+                if is_loop && reference.span.byte_start >= scope.body {
+                    let message = format!(
+                        "`{name}` is the variable of the loop on line {line}: only the loop's header may change it (SPEC.md §8.1)"
+                    );
+                    found.push((Code::E123, reference.span, message));
+                }
+                continue;
+            }
+        };
+        let message = format!(
+            "`{name}` cannot be assigned: it is {what}, declared on line {line} (SPEC.md §8.1)"
+        );
+        found.push((Code::E138, reference.span, message));
+    }
+    // A `let` nothing assigns is a `const` (E106), reported once for the declaration;
+    // where another name of the declaration is assigned, on the name that is not.
+    let mut told = BTreeSet::new();
+    let mut unused = Vec::new();
+    for (id, declaration) in out.declarations.iter().enumerate() {
+        let name = &declaration.name;
+        let is_first = out.scopes[declaration.scope].names.get(name) == Some(&id);
+        let Some(keyword) = declaration.keyword.filter(|_| is_first && !written[id]) else {
+            continue;
+        };
+        if assigned.contains(&declaration.origin) {
+            let message = format!(
+                "`{name}` is never reassigned, unlike another name of its `let`: declare it on its own, with `const` (SPEC.md §4.2)"
+            );
+            unused.push(Diagnostic::new(Code::E106, path, declaration.span, message));
+        } else if told.insert(declaration.origin) {
+            let message =
+                format!("`{name}` is never reassigned: declare it with `const` (SPEC.md §4.2)");
+            unused.extend(
+                Diagnostic::new(Code::E106, path, keyword, message).with_fix("let", "const"),
+            );
+        }
+    }
+    unused
+}
+
 impl Binder<'_> {
     /// The kind of scope `node` opens, if it opens one.
     fn opens(node: NodeRef<'_>) -> Option<ScopeKind> {
@@ -431,6 +521,7 @@ impl Binder<'_> {
                     span,
                     names: BTreeMap::new(),
                     head: outer.filter(|_| is_body),
+                    body: last_node(node),
                 });
                 if matches!(opened, ScopeKind::Function | ScopeKind::Arrow) {
                     self.functions.insert(span.byte_start, scope);
@@ -458,6 +549,12 @@ impl Binder<'_> {
                     ),
                     origin: span.byte_start,
                     dead: own.map_or(span.byte_end..iterable, |own| own.byte_start..own.byte_end),
+                    keyword: node.children().find_map(|child| match child {
+                        Element::Token(token) if kind == NodeKind::LetDecl => {
+                            Some(token.token().span)
+                        }
+                        _ => None,
+                    }),
                 })
             }
             NodeKind::Param | NodeKind::RestParam | NodeKind::Params => {
@@ -469,6 +566,7 @@ impl Binder<'_> {
                     origin: list.map_or(span.byte_start, |list| list.span().byte_start),
                     dead: 0..0,
                     exported: false,
+                    keyword: None,
                 })
             }
             _ => incoming.cloned(),
@@ -536,6 +634,7 @@ impl Binder<'_> {
             } else {
                 0..0
             },
+            keyword: None,
         };
         let declared = match kind {
             NodeKind::PatternProperty if is_key => return,
@@ -544,6 +643,7 @@ impl Binder<'_> {
                 own: own.dead.clone(),
                 exported: own.exported,
                 origin: own.origin,
+                keyword: own.keyword,
                 function: child(node, NodeKind::Initializer)
                     .and_then(|value| child(value, NodeKind::ArrowFunction))
                     .map(|arrow| arrow.span().byte_start),
@@ -656,6 +756,8 @@ impl Binder<'_> {
         };
         let mut found = Vec::new();
         judge_names(out, &runs_in, &mut found);
+        self.diagnostics
+            .extend(judge_writes(out, self.source.path(), &mut found));
         for reference in out.references.iter().filter(|reference| !reference.export) {
             let Some(declaration) = reference.declaration.map(|at| &out.declarations[at]) else {
                 continue;

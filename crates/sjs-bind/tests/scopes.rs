@@ -76,11 +76,12 @@ fn snapshot(name: &str, text: &str) {
     sjs_testkit::snapshot!(name, &all);
 }
 
-/// The findings but those about what is read (E115, E153), which have tests of their
-/// own.
+/// The findings but those about what is read (E115, E153) and what is assigned (E106,
+/// E123, E138), which have tests of their own.
 fn findings(text: &str) -> Vec<String> {
     let all = bound(text).1.into_iter();
-    all.filter(|found| !found.starts_with("E115") && !found.starts_with("E153"))
+    let apart = ["E106", "E115", "E123", "E138", "E153"];
+    all.filter(|found| !apart.iter().any(|code| found.starts_with(code)))
         .collect()
 }
 
@@ -508,5 +509,151 @@ fn a_name_that_begins_with_an_underscore_is_one_nothing_reads() {
         unread("const _a = 1\nconst _ = 2\nconst f = (_x, _y) => _y\nexport { f }\ntry {\n} catch (_e) {\n}\nconst _b = 1\nexport { _b }\nexport const _c = _\nlet _w = 1\n_w = 2\n"),
         [e153(2, 7, "_"), e153(3, 16, "_y"), e153(8, 7, "_b")],
         "unread it is fine, written too; read or exported in a list it is E153"
+    );
+}
+
+/// The E106, E123 and E138 findings: (code, line, column, what the span covers, the
+/// replacement).
+fn assigned(text: &str) -> Vec<(String, u32, u32, String, Option<String>)> {
+    let source = SourceFile::new("a.js", text.as_bytes().to_vec()).expect("utf-8");
+    let (tree, _) = parse(&source);
+    let (_, diagnostics) = bind(&source, &tree);
+    diagnostics
+        .iter()
+        .filter(|d| matches!(d.code.as_str(), "E106" | "E123" | "E138"))
+        .map(|d| {
+            let at = source.slice(&d.span).expect("in the file").to_owned();
+            assert_eq!(d.current.is_some(), d.replacement.is_some());
+            assert_eq!(d.current.as_ref().unwrap_or(&at), &at, "{}", d.message);
+            (
+                d.code.as_str().to_owned(),
+                d.span.start.line,
+                d.span.start.column,
+                at,
+                d.replacement.clone(),
+            )
+        })
+        .collect()
+}
+
+fn found(
+    code: &str,
+    line: u32,
+    column: u32,
+    at: &str,
+) -> (String, u32, u32, String, Option<String>) {
+    let fix = (at == "let").then(|| "const".to_owned());
+    (code.to_owned(), line, column, at.to_owned(), fix)
+}
+
+fn messages(text: &str, code: &str) -> Vec<String> {
+    let all = bound(text).1.into_iter();
+    all.filter(|found| found.starts_with(code)).collect()
+}
+
+#[test]
+fn a_let_nothing_assigns_is_e106_with_const_in_its_place() {
+    assert_eq!(
+        assigned("let x = 1\nexport let y = 2\nfor (let z of zs) {\n}\nlet { a, b: [c] } = o\n  let d = 1\n"),
+        [
+            found("E106", 1, 1, "let"),
+            found("E106", 2, 8, "let"),
+            found("E106", 3, 6, "let"),
+            found("E106", 5, 1, "let"),
+            found("E106", 6, 3, "let"),
+        ],
+        "once for a declaration, whatever it declares, on its `let`"
+    );
+    assert_eq!(
+        messages("let x = 1\nlet { a, b } = o\n", "E106"),
+        [
+            "E106 @1:1 `x` is never reassigned: declare it with `const` (SPEC.md §4.2)",
+            "E106 @2:1 `a` is never reassigned: declare it with `const` (SPEC.md §4.2)"
+        ]
+    );
+    assert_eq!(
+        assigned(concat!(
+            "let a = 1\na = 2\nlet b = 1\nb += 1\nlet c = 1\nc ??= 2\nlet d = 1\nd++\nlet e = 1\n--e\n",
+            "let f = 1\nconst g = () => {\n  f = 2\n}\nlet h = 1\nlet i = 2\n;[h, i] = [i, h]\n",
+            "let j = 1\nlet k = 1\nlet l = 1\n;({ j, m: k, ...l } = o)\nlet n = 1\n;(n) = 2\nlet p = 1\n;((p))++\n",
+            "let q = 1\nif (false) {\n  q = 2\n}\nfor (let r = 0; r < 1; r += 1) {\n}\nlet s = 1\n;[...s] = o\nlet t = 1\n;[t = 1] = o\n",
+        )),
+        [],
+        "assigned, compound and `??=` included, updated, in a nested function, by a pattern, in parentheses, in dead code, in a loop's header"
+    );
+    assert_eq!(
+        assigned("let [a, b] = o\na = 1\nlet c = 1\n;(c)\n;(c) + 1\nc.d = 1\nc[0] = 1\nvar v = 1\nlet w = 1\nlet w = 2\nw\nconst k = (p) => p\ntry {\n} catch (e) {\n}\nlet z = (z = 1)\n"),
+        [
+            found("E106", 1, 9, "b"),
+            found("E106", 3, 1, "let"),
+            found("E106", 9, 1, "let"),
+        ],
+        "a name beside one that is assigned, on the name; a read in parentheses and a write to a member are none; `var` and a second declaration are other findings; an assignment in its own initializer is one"
+    );
+    assert_eq!(
+        messages("let [a, b] = o\na = 1\n", "E106"),
+        ["E106 @1:9 `b` is never reassigned, unlike another name of its `let`: declare it on its own, with `const` (SPEC.md §4.2)"]
+    );
+}
+
+#[test]
+fn a_loop_variable_its_loop_body_assigns_is_e123() {
+    assert_eq!(
+        assigned(concat!(
+            "for (let x of xs) {\n  x = 1\n}\nfor (let i = 0; i < 1; i += 1) {\n  i += 1\n}\n",
+            "for (let j = 0; j < 1; j += 1) {\n  const f = () => {\n    j++\n  }\n}\n",
+            "for (let k = 0; (k += 1) < 9; ) {\n}\nfor (let m = 0; m < 1; m += 1) m = 2\n",
+            "for (let [n, p] of xs) {\n  ;[p] = n\n}\n",
+        )),
+        [
+            found("E123", 2, 3, "x"),
+            found("E123", 5, 3, "i"),
+            found("E123", 9, 5, "j"),
+            found("E123", 14, 32, "m"),
+            found("E106", 15, 11, "n"),
+            found("E123", 16, 5, "p"),
+        ],
+        "in the body, in an arrow inside it, in a body without braces; the header's update and condition may"
+    );
+    assert_eq!(
+        messages("\nfor (let i = 0; i < 1; i += 1) {\n  i = 0\n}\n", "E123"),
+        ["E123 @3:3 `i` is the variable of the loop on line 2: only the loop's header may change it (SPEC.md §8.1)"]
+    );
+    assert_eq!(
+        assigned("for (let i = 0; i < 1; i += 1) {\n  let b = i\n  b += 1\n  const f = (p) => {\n    p = 1\n  }\n  try {\n  } catch (e) {\n    e = 1\n  }\n}\nlet out = 0\nfor (const x of xs) {\n  out += x\n}\nwhile (out) {\n  out -= 1\n}\n"),
+        [],
+        "a `let` of the body, a parameter, a `catch` binding and a variable from outside the loop are no loop variables"
+    );
+}
+
+#[test]
+fn a_binding_that_may_not_be_assigned_is_e138_where_it_is() {
+    assert_eq!(
+        assigned(concat!(
+            "import { i } from \"./i.js\"\nimport * as ns from \"./n.js\"\nconst c = 1\nfunction f() {}\nclass K {}\n",
+            "c = 2\ni += 1\nns = 1\nf ??= 1\nK++\nfor (const x of xs) {\n  x = 1\n}\n",
+            "const g = function named() {\n  named = 1\n}\nconst [d, { e }] = o\n;[d, e] = o\nundeclared = 1\n",
+        )),
+        [
+            found("E138", 6, 1, "c"),
+            found("E138", 7, 1, "i"),
+            found("E138", 8, 1, "ns"),
+            found("E138", 9, 1, "f"),
+            found("E138", 10, 1, "K"),
+            found("E138", 12, 3, "x"),
+            found("E138", 15, 3, "named"),
+            found("E138", 18, 3, "d"),
+            found("E138", 18, 6, "e"),
+        ],
+        "a constant, an import, a function and a class, by any assignment; a name the file does not declare is the checker's"
+    );
+    assert_eq!(
+        messages("import { i } from \"./i.js\"\nconst c = 1\nfunction f() {}\nclass K {}\ni = 1\nc = 1\nf = 1\nK = 1\n", "E138"),
+        [
+            "E138 @5:1 `i` cannot be assigned: it is an import, declared on line 1 (SPEC.md §8.1)",
+            "E138 @6:1 `c` cannot be assigned: it is a constant, declared on line 2 (SPEC.md §8.1)",
+            "E138 @7:1 `f` cannot be assigned: it is a function, declared on line 3 (SPEC.md §8.1)",
+            "E138 @8:1 `K` cannot be assigned: it is a class, declared on line 4 (SPEC.md §8.1)",
+        ]
     );
 }

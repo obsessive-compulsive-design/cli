@@ -2462,7 +2462,30 @@ declared as a `const` at module level is not shadowing a binding (US-068 handles
 used only in `instanceof` (read); a function used only as a value (read).
 
 #### US-066 Reassignment analysis
-§4.2 E106, §8.1 E123, E138 · After: US-063 · Size: S · M1
+§4.2 E106, §8.1 E123, E138 · After: US-063 · Size: S · M1 · **Status: complete** (2026-11-17)
+
+> Delivered in `sjs-bind::scopes` (`judge_writes`), from the writes US-065 records. A
+> `let` no reference writes is `E106` on its `let`, with the replacement `const`, once
+> for the declaration; a write to a `let` of a loop's header from the loop's body is
+> `E123` at the write; a write to a `const`, import, `function` or `class` binding is
+> `E138` at the write. **Decisions:** (1) when a `let` pattern has a name that is
+> assigned and one that is not, `E106` is on the unassigned name and carries no
+> replacement, since `const` would break the other; (2) anything in a loop's header may
+> change its variable, the condition as well as the update, and the body is the loop's
+> last node, braces or none; (3) `for (let x of xs)` is therefore always a finding:
+> `E106` unassigned, `E123` assigned; (4) a `const` loop variable assigned in the body
+> is `E138` only; (5) a parenthesised target, `(x) = 1`, is a write (this also stops it
+> counting as a read for `E115`); (6) `var` is the lexer's finding and gets no `E106`;
+> parameters and `catch` bindings may be assigned; a name the file does not declare is
+> left to the checker; (7) the name of a function expression is a function binding, so
+> assigning it inside is `E138`. `E138` stays mapped to US-088 in `codes.txt`; its
+> fixtures here cover the binding cases only. Fixtures changed: `02-grammar/pass/`
+> `for-of-stmt.js` lost its `for (let … of …)` loop (no such loop is clean now),
+> `let-decl.js`, `05-modules/E000/near-miss-exports.js` reassign their `let`s,
+> `04-bindings/E000/near-miss-patterns.js` uses `const`, and
+> `04-expressions/S005/parenthesised-target.js` exports `a`. Verified: fmt, both clippy
+> passes, audit, tests, doc tests, 100% line and region coverage, `cargo mutants
+> --in-diff` 20 caught, 0 missed, 1 unviable.
 
 **Done when**
 - `let x = 1` never reassigned is `E106` with replacement `const`; assignment in a nested

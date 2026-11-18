@@ -5,4 +5,4 @@ function set() {
   (a) = 1
 }
 
-export { set }
+export { a, set }

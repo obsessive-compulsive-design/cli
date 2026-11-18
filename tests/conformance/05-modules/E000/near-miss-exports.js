@@ -5,6 +5,8 @@ export const b = 1
 
 export let c = 2
 
+c += 1
+
 export function d() {}
 
 export async function e() {}
