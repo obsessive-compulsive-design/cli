@@ -3,3 +3,5 @@
 // Only what the quotes force changes: a bare " gains a backslash, an escaped ' loses one.
 const s = 'say "hi"'
 const t = 'it\'s'
+
+export { s, t }

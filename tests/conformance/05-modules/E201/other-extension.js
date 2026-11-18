@@ -2,3 +2,5 @@
 // expect: E201 foreign-import @4:19
 import { a } from "./a.mjs"
 import { b } from "./b.ts"
+
+export { a, b }

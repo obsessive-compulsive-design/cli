@@ -2,3 +2,5 @@
 function f() {
     a()
 }
+
+export { f }

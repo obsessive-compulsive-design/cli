@@ -76,7 +76,7 @@ Const z1@12:11 in 8
 Catch err@21:10 in 11
 Function inner@43:12 in 19
 i@1:17 in 1 -> 1:10
-i@1:24 in 1 -> 1:10
+i@1:24 in 1 -> 1:10 write
 a@2:3 in 2 -> ?
 i@2:10 in 2 -> 1:10
 xs@4:20 in 3 -> ?
@@ -92,13 +92,13 @@ err@22:3 in 12 -> 21:10
 err@24:3 in 13 -> ?
 g@27:3 in 14 -> ? call
 g@29:3 in 16 -> ? call
-x1@31:3 in 0 -> ?
-x2@31:8 in 0 -> ?
-y1@31:15 in 0 -> ?
-w1@31:23 in 0 -> ?
+x1@31:3 in 0 -> ? write
+x2@31:8 in 0 -> ? write
+y1@31:15 in 0 -> ? write
+w1@31:23 in 0 -> ? write
 d1@31:28 in 0 -> ?
-r1@31:35 in 0 -> ?
-x3@31:44 in 0 -> ?
+r1@31:35 in 0 -> ? write
+x3@31:44 in 0 -> ? write
 y1@31:51 in 0 -> ?
 q@32:8 in 0 -> ?
 aw@33:7 in 0 -> ?

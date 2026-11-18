@@ -2427,7 +2427,29 @@ its own scope; a function declared in a block is invisible outside it.
 declared as a `const` at module level is not shadowing a binding (US-068 handles it).
 
 #### US-065 Unused bindings
-§8.1 E115, §8.3 E153 · After: US-063 · Size: S · M1
+§8.1 E115, §8.3 E153 · After: US-063 · Size: S · M1 · **Status: complete** (2026-11-16)
+
+> Delivered in `sjs-bind::scopes`: each reference now says whether it writes
+> (`Reference::write`: the target of `=`, of a compound assignment, of `++`/`--`, or a
+> name in the pattern an assignment fills) and each declaration whether it is exported
+> where declared (`Declaration::exported`). A binding with no read is `E115` on its
+> name, of every kind: imports, `const`/`let`, functions, classes, parameters, `catch`
+> bindings, the names of patterns, rest elements. A name beginning with `_` (or `_`
+> itself) is exempt, and is `E153` on its declaration when something does read it.
+> Eight fixtures under `04-bindings/E115/`, three under `08-naming/E153/`.
+> **Decisions:** `(a, b) => b` reports `a`: position gives no exemption. A write is no
+> read, compound assignment included. A use inside what gives a binding its own value
+> does not count: the initializer of a `const`/`let`, the whole of a function or
+> class (so one that only calls itself is unused). `export const`, `export function`
+> and `export class` are never `E115`; a name in an `export { … }` list is a read, so
+> exporting a `_` name that way is `E153`. A name declared twice is reported once.
+> Two bindings that read only each other are not found.
+> **Fixtures changed:** 66 existing fixtures declared names nothing reads. Most now
+> end with an `export { … }` list of their module-level names (no line moves); the
+> rest export at the declaration, use a parameter in the body or take a `_` name
+> (same length where a line's width is the point), the `_harness/` ones included.
+> Verified: all §0.2 gates with 100 % lines and regions; mutation testing on the diff
+> with no survivor (33 caught).
 
 **Done when**
 - A binding never read is `E115` (imports, variables, parameters, catch bindings,

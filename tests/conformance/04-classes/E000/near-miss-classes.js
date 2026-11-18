@@ -35,3 +35,5 @@ class A extends ns.B {
   }
   #p() {}
 }
+
+export { A }

@@ -1,2 +1,2 @@
 // expect: E000 @99:1
-const a = 1
+export const a = 1

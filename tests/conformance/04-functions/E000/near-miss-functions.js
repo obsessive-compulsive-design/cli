@@ -1,6 +1,6 @@
 // Every permitted function form: no diagnostic.
 function f(a, b = 1, ...c) {
-  return a
+  return [a, b, c]
 }
 
 async function g(x) {
@@ -19,7 +19,7 @@ const j = (a) => a
 
 const k = async (a, { b }, ...c) => {
   g(b)
-  return a
+  return [a, c]
 }
 
 const l = () => ({})
@@ -27,3 +27,5 @@ const l = () => ({})
 const m = f((n) => n, 2)
 
 await g(1)
+
+export { h, i, j, k, l, m }

@@ -11,3 +11,5 @@ class A {
     return this.x
   }
 }
+
+export { A }

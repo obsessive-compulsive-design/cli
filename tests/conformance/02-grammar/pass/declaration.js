@@ -10,3 +10,5 @@ class C {}
 b += a
 
 f(new C())
+
+export { b }

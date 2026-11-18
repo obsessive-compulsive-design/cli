@@ -4,3 +4,5 @@ import cfg from "../c.json" with { type: "json" }
 import { b } from "./"
 import { c } from "././c.js"
 import { a } from "./a.js/"
+
+export { d, cfg, b, c, a }

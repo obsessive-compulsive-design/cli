@@ -39,9 +39,10 @@ fn dump(text: &str) -> String {
     }
     for d in &bindings.declarations {
         let at = d.span.start;
+        let exported = if d.exported { " exported" } else { "" };
         writeln!(
             out,
-            "{:?} {}@{}:{} in {}",
+            "{:?} {}@{}:{} in {}{exported}",
             d.kind, d.name, at.line, at.column, d.scope
         )
         .expect("a string");
@@ -54,9 +55,10 @@ fn dump(text: &str) -> String {
         });
         let call = if r.call { " call" } else { "" };
         let export = if r.export { " export" } else { "" };
+        let write = if r.write { " write" } else { "" };
         writeln!(
             out,
-            "{}@{}:{} in {} -> {to}{call}{export}",
+            "{}@{}:{} in {} -> {to}{call}{export}{write}",
             r.name, at.line, at.column, r.scope
         )
         .expect("a string");
@@ -69,13 +71,38 @@ fn snapshot(name: &str, text: &str) {
     let all = format!(
         "{text}---\n{}---\n{}\n",
         dump(text),
-        bound(text).1.join("\n")
+        findings(text).join("\n")
     );
     sjs_testkit::snapshot!(name, &all);
 }
 
+/// The findings but those about what is read (E115, E153), which have tests of their
+/// own.
 fn findings(text: &str) -> Vec<String> {
-    bound(text).1
+    let all = bound(text).1.into_iter();
+    all.filter(|found| !found.starts_with("E115") && !found.starts_with("E153"))
+        .collect()
+}
+
+/// The E115 and E153 findings: (code, line, column, name).
+fn unread(text: &str) -> Vec<(String, u32, u32, String)> {
+    let source = SourceFile::new("a.js", text.as_bytes().to_vec()).expect("utf-8");
+    let (tree, _) = parse(&source);
+    let (_, diagnostics) = bind(&source, &tree);
+    diagnostics
+        .iter()
+        .filter(|d| matches!(d.code.as_str(), "E115" | "E153"))
+        .map(|d| {
+            let name = source.slice(&d.span).expect("in the file").to_owned();
+            let rule = if d.code.as_str() == "E115" {
+                format!("`{name}` is never read: remove it, or name it `_{name}` to keep it (SPEC.md §8.1)")
+            } else {
+                format!("`{name}` is read on line ")
+            };
+            assert!(d.message.starts_with(&rule), "{}", d.message);
+            (d.code.as_str().to_owned(), d.span.start.line, d.span.start.column, name)
+        })
+        .collect()
 }
 
 #[test]
@@ -408,4 +435,78 @@ fn a_name_resolves_to_the_nearest_declaration_around_it() {
         .map(|s| (s.span.start.line, s.span.end.line))
         .collect();
     assert_eq!(spans, [(1, 7), (2, 6), (2, 6), (3, 5)]);
+}
+
+fn e115(line: u32, column: u32, name: &str) -> (String, u32, u32, String) {
+    ("E115".to_owned(), line, column, name.to_owned())
+}
+
+fn e153(line: u32, column: u32, name: &str) -> (String, u32, u32, String) {
+    ("E153".to_owned(), line, column, name.to_owned())
+}
+
+#[test]
+fn a_binding_of_any_kind_that_nothing_reads_is_e115() {
+    assert_eq!(
+        unread("import { a, b as c } from \"./x.js\"\nimport * as ns from \"./y.js\"\nimport cfg from \"./c.json\" with { type: \"json\" }\n\nconst k = 1\nlet l = 2\nfunction f(p, { q, r: [s] }, ...t) {}\nclass K {}\ntry {\n} catch (e) {\n}\nconst [u, { v, ...w }, ...x] = []\nfor (const y of []) {\n}\n"),
+        [
+            e115(1, 10, "a"),
+            e115(1, 18, "c"),
+            e115(2, 13, "ns"),
+            e115(3, 8, "cfg"),
+            e115(5, 7, "k"),
+            e115(6, 5, "l"),
+            e115(7, 10, "f"),
+            e115(7, 12, "p"),
+            e115(7, 17, "q"),
+            e115(7, 24, "s"),
+            e115(7, 33, "t"),
+            e115(8, 7, "K"),
+            e115(10, 10, "e"),
+            e115(12, 8, "u"),
+            e115(12, 13, "v"),
+            e115(12, 19, "w"),
+            e115(12, 27, "x"),
+            e115(13, 12, "y"),
+        ],
+        "imports, variables, a function and its parameters, a class, a `catch` binding, the names of patterns, rest elements"
+    );
+    assert_eq!(
+        unread("export const f = (a, b) => b\nexport const g = (c, { d }, ...e) => c\n"),
+        [e115(1, 19, "a"), e115(2, 24, "d"), e115(2, 32, "e")],
+        "a parameter before one that is read is reported like any other"
+    );
+    assert_eq!(
+        unread("const a = 1\nconst a = 2\nconst g = (p) => {\n  const p = 1\n}\ng\n"),
+        [e115(1, 7, "a"), e115(3, 12, "p")],
+        "a name declared twice is reported once"
+    );
+}
+
+#[test]
+fn a_read_an_export_or_a_use_as_a_value_is_a_read_and_a_write_is_not() {
+    assert_eq!(
+        unread("const a = 1\nconst b = a\nexport { b }\nexport const c = 1\nexport function f() {}\nexport class K {}\nexport async function* s() {}\nexport const [d, { e }] = []\nclass L {}\nconst t = (x) => x instanceof L\nfunction g() {}\nconst h = [g, t]\nh\n"),
+        [],
+        "read by another binding, exported in a list or where declared, used in `instanceof`, as a value, as a statement"
+    );
+    assert_eq!(
+        unread("let n = 1\nn = 2\nn += 1\nn++\nlet m = 1\n;[m, { m, k: m }, ...m] = []\nfor (let i = 0; i < 1; i += 1) {\n}\nfor (let q = 0; cond; q += step) {\n}\nlet d = 1\nlet t = 0\n;({ t = d } = o)\nlet u = 1\nlet v = 2\n;[u = v] = o\nlet w = 1\nfor (let z = 0; z < 1; z += w) {\n}\n"),
+        [e115(1, 5, "n"), e115(5, 5, "m"), e115(9, 10, "q"), e115(12, 5, "t"), e115(14, 5, "u")],
+        "assigned, updated or filled by a pattern only; a loop's condition, a default and a step read"
+    );
+    assert_eq!(
+        unread("const f = () => f()\nfunction g() {\n  return g\n}\nclass K {\n  static me = K\n}\nconst [p, q = p] = []\nexport { q }\nconst later = () => after\nconst after = later\n"),
+        [e115(1, 7, "f"), e115(2, 10, "g"), e115(5, 7, "K")],
+        "a use inside what gives the binding its own value is none; an element's default naming another is one"
+    );
+}
+
+#[test]
+fn a_name_that_begins_with_an_underscore_is_one_nothing_reads() {
+    assert_eq!(
+        unread("const _a = 1\nconst _ = 2\nconst f = (_x, _y) => _y\nexport { f }\ntry {\n} catch (_e) {\n}\nconst _b = 1\nexport { _b }\nexport const _c = _\nlet _w = 1\n_w = 2\n"),
+        [e153(2, 7, "_"), e153(3, 16, "_y"), e153(8, 7, "_b")],
+        "unread it is fine, written too; read or exported in a list it is E153"
+    );
 }

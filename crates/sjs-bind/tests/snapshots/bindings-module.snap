@@ -32,19 +32,19 @@ Import c@1:18 in 0
 Import ns@2:13 in 0
 Import from@3:13 in 0
 Import cfg@4:8 in 0
-Const k@8:14 in 0
+Const k@8:14 in 0 exported
 Let p@9:7 in 0
 Let r@9:13 in 0
 Let rest@9:23 in 0
 Const s@10:8 in 0
 Const t@10:11 in 0
 Const u@10:21 in 0
-Function fn@11:17 in 0
+Function fn@11:17 in 0 exported
 Param x@11:20 in 1
 Param y@11:25 in 1
 Param w@11:32 in 1
 Param more@11:46 in 1
-Function stream@14:24 in 0
+Function stream@14:24 in 0 exported
 Param n@14:31 in 3
 Const g@19:7 in 0
 Param h@19:18 in 5

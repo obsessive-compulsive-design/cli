@@ -27,3 +27,5 @@ class A {
 class B {
   m() {}
 }
+
+export { A, B }

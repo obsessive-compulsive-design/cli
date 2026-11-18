@@ -4,3 +4,5 @@ let a = 0
 function set() {
   (a) = 1
 }
+
+export { set }

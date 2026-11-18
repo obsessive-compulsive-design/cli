@@ -9,3 +9,5 @@ class A {
   [Symbol.iterator]() {}
   #p() {}
 }
+
+export { A }

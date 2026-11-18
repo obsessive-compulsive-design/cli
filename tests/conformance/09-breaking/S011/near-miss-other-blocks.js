@@ -12,3 +12,5 @@ const i = () => {
   // why
   return a
 }
+
+export { f, h, i }

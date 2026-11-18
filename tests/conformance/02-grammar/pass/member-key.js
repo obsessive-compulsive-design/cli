@@ -7,3 +7,5 @@ class A {
   [Symbol.asyncDispose]() {}
   #secret() {}
 }
+
+export { A }

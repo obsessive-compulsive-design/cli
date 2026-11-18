@@ -10,3 +10,5 @@ let { b } = o
 let [c] = xs
 
 a += b + c
+
+export { a }

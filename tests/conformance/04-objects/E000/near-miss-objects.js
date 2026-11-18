@@ -20,3 +20,5 @@ const u = []
 const v = [1, ...u, ...u]
 
 const w = { a: 1, b: { a: 2 } }
+
+export { q, r, s, t, v, w }

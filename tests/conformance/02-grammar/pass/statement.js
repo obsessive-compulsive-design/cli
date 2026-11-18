@@ -32,3 +32,5 @@ function f(xs) {
   f(2)
   return xs
 }
+
+export { f }

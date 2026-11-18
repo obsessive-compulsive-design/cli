@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn valid_files_produce_nothing() {
         let diagnostics = check_files(&[
-            file("a.js", b"const a = 1\n"),
+            file("a.js", b"export const a = 1\n"),
             file("b.js", "// \u{e9}\n".as_bytes()),
         ]);
         assert!(diagnostics.is_empty());

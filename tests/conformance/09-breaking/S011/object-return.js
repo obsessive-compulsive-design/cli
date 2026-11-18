@@ -1,2 +1,4 @@
 // expect: S011 arrow-block-return @2:17 "{ return { a } }" -> "({ a })"
 const g = () => { return { a } }
+
+export { g }

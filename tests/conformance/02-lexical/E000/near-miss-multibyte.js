@@ -4,3 +4,5 @@
 const cafe = "café 😀"
 
 const zwnbsp = "﻿"
+
+export { cafe, zwnbsp }

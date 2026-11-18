@@ -1,2 +1,2 @@
-// expect: S008 layout @2:12 "" -> "\n"
-const a = 1
+// expect: S008 layout @2:19 "" -> "\n"
+export const a = 1

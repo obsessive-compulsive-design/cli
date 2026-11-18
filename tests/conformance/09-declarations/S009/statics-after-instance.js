@@ -6,3 +6,5 @@ class A {
   static m() {}
   static s = 1
 }
+
+export { A }

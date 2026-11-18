@@ -4,7 +4,7 @@ const size = 1
 
 export const scale = (size) => {
   const kept = size
-  return (kept) => kept
+  return [kept, (kept) => kept]
 }
 
 export class Box {

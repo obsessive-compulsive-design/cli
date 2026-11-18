@@ -9,3 +9,5 @@ const y = a
 const z = a.b.c.d
 
 const w = f().a().b()
+
+export { x, y, z, w }

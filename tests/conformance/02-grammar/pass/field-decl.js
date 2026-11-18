@@ -8,3 +8,5 @@ class A {
   #z
   #w = 2
 }
+
+export { A }

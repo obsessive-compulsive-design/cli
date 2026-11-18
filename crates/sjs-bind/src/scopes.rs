@@ -89,6 +89,11 @@ pub struct Declaration {
     origin: usize,
     /// Where the function it names begins, when it names one.
     function: Option<usize>,
+    /// Whether it is exported where it is declared (`export const …`).
+    pub exported: bool,
+    /// What it is given its value by, where a use of it is no use by anything else:
+    /// the initializer of a `const` or `let`, the whole of a function or a class.
+    own: Range<usize>,
 }
 
 /// A use of a name.
@@ -107,6 +112,9 @@ pub struct Reference {
     pub call: bool,
     /// Whether it is a name in an `export { … }` list, which evaluates nothing.
     pub export: bool,
+    /// Whether it is written to and not read: the target of an assignment (compound
+    /// ones included) or of `++`/`--`.
+    pub write: bool,
 }
 
 /// The scopes of a file, what each declares and what every name refers to.
@@ -170,6 +178,7 @@ struct Declaring {
     kind: DeclKind,
     origin: usize,
     dead: Range<usize>,
+    exported: bool,
 }
 
 struct Binder<'a> {
@@ -259,6 +268,19 @@ fn is_static(field: NodeRef<'_>) -> bool {
         .is_some_and(|name| !is_punct(Some(&name), Punct::Semicolon))
 }
 
+/// Whether the use of a name at `children[at]` of `node` writes to it: the target of an
+/// assignment or of an update, a name in the pattern an assignment fills.
+fn is_write(node: NodeRef<'_>, children: &[Element<'_>], at: usize) -> bool {
+    let before = at.checked_sub(1).and_then(|before| children.get(before));
+    match node.kind() {
+        NodeKind::AssignExpr | NodeKind::PatternElement => at == 0,
+        NodeKind::ForUpdate => !children[..at].iter().any(is_ident),
+        NodeKind::UpdateExpr | NodeKind::ArrayPattern | NodeKind::RestElement => true,
+        NodeKind::PatternProperty => at == 0 || is_punct(before, Punct::Colon),
+        _ => false,
+    }
+}
+
 /// Whether the identifier at `children[at]` of `node`, which declares nothing, is a use
 /// of a name, and not a key, a property name or a contextual word.
 fn is_use(node: NodeRef<'_>, children: &[Element<'_>], at: usize) -> bool {
@@ -292,6 +314,67 @@ fn is_use(node: NodeRef<'_>, children: &[Element<'_>], at: usize) -> bool {
         }
         NodeKind::ExportSpecifier => !earlier.iter().any(is_ident) && !from_elsewhere(),
         _ => USES.contains(&kind),
+    }
+}
+
+/// The findings about the names themselves: E107, E115 and E153. `runs_in` is the
+/// function each scope runs as part of.
+fn judge_names(out: &Bindings, runs_in: &[usize], found: &mut Vec<(Code, Span, String)>) {
+    // A name of the function a block is in may not be declared again in the block
+    // (E107); a nested function has its own names.
+    for (id, declaration) in out.declarations.iter().enumerate() {
+        let scope = &out.scopes[declaration.scope];
+        let is_first = scope.names.get(&declaration.name) == Some(&id);
+        let around = scope.parent.filter(|_| is_first);
+        let outer = around.and_then(|parent| out.lookup(parent, &declaration.name));
+        let outer = outer.map(|outer| &out.declarations[outer]);
+        if outer.is_some_and(|outer| runs_in[outer.scope] == runs_in[declaration.scope]) {
+            let line = outer.map_or(0, |outer| outer.span.start.line);
+            let message = format!(
+                "`{}` shadows the binding declared on line {line}: only a nested function may reuse an outer name (SPEC.md §4.2)",
+                declaration.name
+            );
+            found.push((Code::E107, declaration.span, message));
+        }
+    }
+    // A binding nothing reads is E115, unless its name begins with `_`; one that
+    // begins with `_` and is read is E153. A write is no read, nor is a use inside
+    // what gives the binding its own value; an export is one.
+    let mut reads: Vec<Option<u32>> = vec![None; out.declarations.len()];
+    for reference in out
+        .references
+        .iter()
+        .rev()
+        .filter(|reference| !reference.write)
+    {
+        if let Some(at) = reference.declaration {
+            if !out.declarations[at]
+                .own
+                .contains(&reference.span.byte_start)
+            {
+                reads[at] = Some(reference.span.start.line);
+            }
+        }
+    }
+    for (id, declaration) in out.declarations.iter().enumerate() {
+        let name = &declaration.name;
+        let is_first = out.scopes[declaration.scope].names.get(name) == Some(&id);
+        let kept = name.starts_with('_');
+        match reads[id] {
+            None if is_first && !kept && !declaration.exported => {
+                let message = format!(
+                    "`{name}` is never read: remove it, or name it `_{name}` to keep it (SPEC.md §8.1)"
+                );
+                found.push((Code::E115, declaration.span, message));
+            }
+            Some(line) if kept => {
+                let message = format!(
+                    "`{name}` is read on line {line}: a name that begins with `_` is one nothing reads (SPEC.md §8.3)"
+                );
+                found.push((Code::E153, declaration.span, message));
+            }
+            _ => {}
+        }
     }
 }
 
@@ -369,6 +452,10 @@ impl Binder<'_> {
                     } else {
                         DeclKind::Let
                     },
+                    exported: is_node(
+                        node.parent().map(Element::Node).as_ref(),
+                        NodeKind::ExportDecl,
+                    ),
                     origin: span.byte_start,
                     dead: own.map_or(span.byte_end..iterable, |own| own.byte_start..own.byte_end),
                 })
@@ -381,6 +468,7 @@ impl Binder<'_> {
                     kind: DeclKind::Param,
                     origin: list.map_or(span.byte_start, |list| list.span().byte_start),
                     dead: 0..0,
+                    exported: false,
                 })
             }
             _ => incoming.cloned(),
@@ -439,11 +527,22 @@ impl Binder<'_> {
             dead: 0..0,
             origin: ident.byte_start,
             function,
+            exported: is_node(
+                node.parent().map(Element::Node).as_ref(),
+                NodeKind::ExportDecl,
+            ),
+            own: if function.is_some() || kind == DeclKind::Class {
+                span.byte_start..span.byte_end
+            } else {
+                0..0
+            },
         };
         let declared = match kind {
             NodeKind::PatternProperty if is_key => return,
             _ if own.is_some() => own.map(|own| Declaration {
                 dead: own.dead.clone(),
+                own: own.dead.clone(),
+                exported: own.exported,
                 origin: own.origin,
                 function: child(node, NodeKind::Initializer)
                     .and_then(|value| child(value, NodeKind::ArrowFunction))
@@ -502,6 +601,7 @@ impl Binder<'_> {
                 declaration: None,
                 call: kind == NodeKind::CallExpr && at == 0,
                 export: kind == NodeKind::ExportSpecifier,
+                write: is_write(node, children, at),
             });
         }
     }
@@ -555,23 +655,7 @@ impl Binder<'_> {
             at < declaration.ready || declaration.dead.contains(&at)
         };
         let mut found = Vec::new();
-        // A name of the function a block is in may not be declared again in the block
-        // (E107); a nested function has its own names.
-        for (id, declaration) in out.declarations.iter().enumerate() {
-            let scope = &out.scopes[declaration.scope];
-            let is_first = scope.names.get(&declaration.name) == Some(&id);
-            let around = scope.parent.filter(|_| is_first);
-            let outer = around.and_then(|parent| out.lookup(parent, &declaration.name));
-            let outer = outer.map(|outer| &out.declarations[outer]);
-            if outer.is_some_and(|outer| runs_in[outer.scope] == runs_in[declaration.scope]) {
-                let line = outer.map_or(0, |outer| outer.span.start.line);
-                let message = format!(
-                    "`{}` shadows the binding declared on line {line}: only a nested function may reuse an outer name (SPEC.md §4.2)",
-                    declaration.name
-                );
-                found.push((Code::E107, declaration.span, message));
-            }
-        }
+        judge_names(out, &runs_in, &mut found);
         for reference in out.references.iter().filter(|reference| !reference.export) {
             let Some(declaration) = reference.declaration.map(|at| &out.declarations[at]) else {
                 continue;

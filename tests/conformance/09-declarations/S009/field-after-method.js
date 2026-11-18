@@ -4,3 +4,5 @@ class A {
   m() {}
   a = 1
 }
+
+export { A }

@@ -32,3 +32,5 @@ function f() {
   const v = 1
   return v
 }
+
+export { A, t }

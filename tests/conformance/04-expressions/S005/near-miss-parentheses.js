@@ -27,3 +27,5 @@ const o = (b?.c).d
 const q = () => ({})
 
 const t = `${(b)}`
+
+export { a, e, g, h, i, j, k, l, m, n, o, q, t }

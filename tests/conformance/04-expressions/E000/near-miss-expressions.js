@@ -54,7 +54,7 @@ const y = o.delete(1)
 function* gen() {
   yield 1
   yield* gen()
-  const v = yield a
+  const _v = yield a
   yield
 }
 
@@ -63,3 +63,5 @@ async function run() {
 }
 
 [a, b] = [b, a]
+
+export { i, f, g, h, k, m, r, t, n, p, q, s, u, w, y, gen, run }

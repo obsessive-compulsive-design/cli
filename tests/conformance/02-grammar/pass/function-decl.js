@@ -14,3 +14,5 @@ function* h() {
 async function* k() {
   yield await g()
 }
+
+export { h, k }

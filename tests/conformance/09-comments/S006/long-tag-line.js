@@ -5,4 +5,6 @@
  *
  * @param a  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
  */
-export function f(a) {}
+export function f(a) {
+  return a
+}
