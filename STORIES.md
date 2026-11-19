@@ -2499,7 +2499,31 @@ counts for both; a `let` reassigned only in dead code still counts here (E117 is
 checker's); a loop variable modified in a nested arrow inside the body is `E123`.
 
 #### US-067 Export and import resolution
-§5.1 · After: US-060, US-063 · Size: S · M1
+§5.1 · After: US-060, US-063 · Size: S · M1 · **Status: complete** (2026-11-17)
+
+> Delivered in `sjs-bind::links`: `ModuleGraph::link()` returns `Links` and the
+> findings. `Links::import(module, local)` and `Links::export(module, name)` say what a
+> name is bound to (`Bound::Declaration { module, span }`, `Bound::Namespace(path)`,
+> `Bound::Json(path)`), followed through `export { … } from` chains, renames and
+> imports exported again; `Import::namespace()` is the namespace an `import(…)` resolves
+> to. `E206` is on the name as written: the name asked for in a named import or a
+> re-export, the key in `ns.b` or `ns["b"]`. `E137` is on the key of `ns[…]` that is no
+> string literal. `check_graph` runs the pass. **Decisions:** (1) `E206` is reported
+> one step at a time, where a module asks another for a name it lacks, so a chain that
+> breaks is one finding at the link that breaks and not one per importer; (2) a module
+> the grammar rejects (E000, E001, E002) is left out: nothing is said of what it
+> exports, nor of what it asks for, and the same goes for a path that names no module
+> and for a file that is no text; (3) re-exports that go round bind to nothing and are
+> E203's to report; (4) a namespace that arrives through a re-export (`export { ns }`,
+> then `import { ns }`) is checked like one imported directly; (5) every key of
+> `ns[…]` but a string literal is `E137`, a number and a template without holes
+> included, also when the module's exports are unknown; (6) only `ns.b` and `ns["b"]`
+> are judged here: a namespace destructured, passed on or reached through `import(…)`
+> needs types (US-083); (7) the JSON value is `Bound::Json`, its type `unknown` left to
+> US-083. `E137` stays mapped to US-086 in `codes.txt`. Fixture changed:
+> `05-modules/E203/self-import` imported a name it did not export, now `kept as mine`.
+> Verified: fmt, both clippy passes, audit, tests, doc tests, 100% line and region
+> coverage, `cargo mutants --in-diff` 36 caught, 0 missed, 11 unviable.
 
 **Done when**
 - `import { a }` binds to `a`'s declaration through `export { a } from` chains; an

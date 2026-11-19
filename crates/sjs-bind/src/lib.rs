@@ -7,16 +7,20 @@
 //! US-062 adds [`ModuleGraph::unreachable`]: E207 for every `.js` file beneath `./src`
 //! that is no module of the graph. US-063 adds [`bind`]: the scopes, declarations and
 //! references of one file, with E000 for a name declared twice and E135 for a use in
-//! the temporal dead zone.
+//! the temporal dead zone. US-067 adds [`ModuleGraph::link`]: what every import and export
+//! is bound to ([`Links`]), with E206 for a name a module does not export and E137 for
+//! a namespace read by a key that is no string literal.
 
 mod cycles;
 mod graph;
 mod host;
 mod json;
+mod links;
 mod scopes;
 mod unreachable;
 
 pub use graph::{Content, Import, LoadError, Module, ModuleGraph};
 pub use host::{Disk, Host};
 pub use json::is_json;
+pub use links::{Bound, Links};
 pub use scopes::{bind, Bindings, DeclKind, Declaration, Reference, Scope, ScopeKind};

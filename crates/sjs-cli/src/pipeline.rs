@@ -8,7 +8,8 @@
 //! (US-042), S004 and S011 (US-043), S010 (US-044), S003 (US-045), S006 (US-046), S009
 //! (US-047), and the S006, S007 and S008 of every other change the layout makes
 //! (US-048). [`check_graph`] is the module graph's pass over a program on disk
-//! (US-060: E205 for a path that names no module; US-061: E203 for an import cycle; US-062: E207 for an unreachable module).
+//! (US-060: E205 for a path that names no module; US-061: E203 for an import cycle; US-062: E207 for an unreachable module;
+//! US-067: E206 for a name a module does not export, E137 for a namespace's computed key).
 
 use sjs_bind::{Host, LoadError, ModuleGraph};
 use sjs_diag::{Code, Diagnostics, SourceFile};
@@ -56,8 +57,9 @@ pub fn check_files(files: &[InputFile]) -> Diagnostics {
 
 /// What the module graph of the program at `roots` finds: E205 for each path that names
 /// no module (US-060), E203 for each import cycle (US-061) and E207 for each `.js` file
-/// beneath `<base>/src` the roots do not reach (US-062). Files are named relative to
-/// `base`, the project's directory.
+/// beneath `<base>/src` the roots do not reach (US-062), E206 for each name asked of a
+/// module that does not export it and E137 for a namespace read by a computed key
+/// (US-067). Files are named relative to `base`, the project's directory.
 ///
 /// # Errors
 ///
@@ -70,6 +72,7 @@ pub fn check_graph(
     ModuleGraph::load(host, base, roots).map(|(graph, mut diagnostics)| {
         diagnostics.extend(graph.import_cycles().iter().cloned());
         diagnostics.extend(graph.unreachable(host).iter().cloned());
+        diagnostics.extend(graph.link().1.iter().cloned());
         diagnostics
     })
 }
@@ -106,7 +109,13 @@ mod tests {
             .iter()
             .map(|d| (d.path.as_str(), d.code, d.span.start))
             .collect();
-        assert_eq!(found, [("entry.js", Code::E203, Position::new(1, 19))]);
+        assert_eq!(
+            found,
+            [
+                ("a.js", Code::E206, Position::new(1, 10)),
+                ("entry.js", Code::E203, Position::new(1, 19))
+            ]
+        );
         dir.write("src/orphan.js", "").expect("write");
         let found = check_graph(&Disk, dir.path(), &root).expect("loads");
         let found: Vec<_> = found
@@ -116,6 +125,7 @@ mod tests {
         assert_eq!(
             found,
             [
+                ("a.js", Code::E206, Position::new(1, 10)),
                 ("entry.js", Code::E203, Position::new(1, 19)),
                 ("src/orphan.js", Code::E207, Position::new(1, 1))
             ]
