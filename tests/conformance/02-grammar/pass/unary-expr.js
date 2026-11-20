@@ -9,10 +9,10 @@ const b = -1
 
 const c = +b
 
-const d = ~c
+const d = ~b
 
 const e = typeof typeof d
 
 const g = await p
 
-f(a, e, g)
+f(a, c, e, g)

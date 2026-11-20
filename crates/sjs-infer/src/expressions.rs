@@ -2,7 +2,7 @@
 
 use sjs_bind::Bindings;
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
-use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
+use sjs_syntax::{Element, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
 use sjs_types::{ClassId, Integer, Literal, Number, Printer, Property, Type, TypeId, Types};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -202,32 +202,8 @@ impl<'a> Typer<'a> {
                 Some(TypeId::STRING)
             }
             NodeKind::UnaryExpr => self.unary(node, &children),
-            NodeKind::BinaryExpr => {
-                let sides = children.first().copied().zip(children.last().copied());
-                match (punct(children.get(1)), sides) {
-                    (Some(Punct::QuestionQuestion), Some((left, right))) => {
-                        let (left, right) = (self.type_of(left)?, self.type_of(right)?);
-                        let present = self.present(left);
-                        Some(self.types.union([present, right]))
-                    }
-                    (Some(Punct::EqEqEq | Punct::BangEqEq), _) => Some(TypeId::BOOLEAN),
-                    (
-                        Some(
-                            operator @ (Punct::Plus
-                            | Punct::Minus
-                            | Punct::Star
-                            | Punct::Slash
-                            | Punct::Percent
-                            | Punct::StarStar),
-                        ),
-                        Some((left, right)),
-                    ) => {
-                        let (left, right) = (self.type_of(left)?, self.type_of(right)?);
-                        self.arithmetic(operator == Punct::Plus, left, right)
-                    }
-                    _ => None,
-                }
-            }
+            NodeKind::BinaryExpr => self.binary(node, &children),
+            NodeKind::CondExpr => self.conditional(node, &children),
             NodeKind::ObjectLit => self.object(node),
             NodeKind::ArrayLit => {
                 let elements: Vec<Element<'_>> = children
@@ -515,39 +491,6 @@ impl<'a> Typer<'a> {
         )
     }
 
-    /// `-x`, `!x`, `typeof x`. The minus of a number or bigint literal is the literal
-    /// of the negated value, so `-2147483648` is an `int32` and `-0` is not.
-    fn unary(&mut self, node: NodeRef<'_>, children: &[Element<'_>]) -> Option<TypeId> {
-        // The operator is the first token of the expression.
-        match node.tokens().first().map(|operator| &operator.kind) {
-            Some(TokenKind::Punct(Punct::Bang)) => Some(TypeId::BOOLEAN),
-            Some(TokenKind::Keyword(Keyword::Typeof)) => Some(TypeId::STRING),
-            Some(TokenKind::Punct(Punct::Minus)) => {
-                let operand = children.last().copied();
-                let operand = operand.and_then(|operand| self.type_of(operand))?;
-                match self.types.get(operand).clone() {
-                    Type::Literal(Literal::Number(number)) => Some(
-                        self.types
-                            .literal(Literal::Number(Number::new(-number.value()))),
-                    ),
-                    Type::Literal(Literal::BigInt(integer)) => {
-                        let decimal = integer.decimal();
-                        let negated = decimal
-                            .strip_prefix('-')
-                            .map_or(format!("-{decimal}"), str::to_owned);
-                        Integer::parse(&negated)
-                            .map(|integer| self.types.literal(Literal::BigInt(integer)))
-                    }
-                    // The negation of the least `int32` is no `int32`.
-                    Type::Number | Type::Int32 => Some(TypeId::NUMBER),
-                    Type::BigInt => Some(TypeId::BIGINT),
-                    _ => None,
-                }
-            }
-            _ => None,
-        }
-    }
-
     /// Whether a value of this type may fill a template: a string, a number, a bigint,
     /// a boolean, a union of those, or an instance of a class whose `toString()` is
     /// seen to return a string.
@@ -620,6 +563,14 @@ pub fn check_expressions(
         }
         judge.member_access(node, &children);
         judge.empty_untyped(node);
+        judge.self_assignment(node, &children);
+        let operates = matches!(
+            node.kind(),
+            NodeKind::BinaryExpr | NodeKind::UnaryExpr | NodeKind::CondExpr
+        );
+        if operates {
+            judge.type_of(Element::Node(node));
+        }
         if node.kind() == NodeKind::TemplateLit {
             judge.template(node.span().byte_start, &children);
         }

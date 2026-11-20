@@ -11,12 +11,14 @@
 //! them and property writes (E137, E121, E129, E138). US-087 follows what the program mutates
 //! and what fills an empty collection: a `const` array literal nothing mutates is a
 //! tuple, an empty `[]`, `new Map()` or `new Set()` is typed by what is put into it and
-//! is E110 when nothing is, and assigning `length` is E133.
+//! is E110 when nothing is, and assigning `length` is E133. US-088 types the operators
+//! of SPEC.md §4.1 and judges their operands (E138, E104, E105, E120).
 
 mod bindings;
 mod expressions;
 mod members;
 mod mutation;
+mod operators;
 mod program;
 
 pub use bindings::infer_bindings;

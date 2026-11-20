@@ -36,6 +36,14 @@ fn is_member(node: NodeRef<'_>) -> bool {
 }
 
 impl Typer<'_> {
+    pub(crate) fn print_type(&self, id: TypeId) -> String {
+        self.print(id)
+    }
+
+    pub(crate) fn members_of(&self, id: TypeId) -> Vec<TypeId> {
+        self.members(id)
+    }
+
     fn print(&self, id: TypeId) -> String {
         let name = |class: ClassId| self.class_name(class);
         Printer::new(self.types, &name).print(id)

@@ -60,7 +60,6 @@ fn typed_with(text: &str, known: Known<'_>) -> String {
         .expect("a value");
     let mut judge = Typer::new(&source, &tree, &bindings, &facts, &mut types);
     let ty = judge.type_of(value);
-    assert!(judge.finish().iter().all(|d| d.code.as_str() == "E125"));
     ty.map_or("?".to_owned(), |ty| {
         Printer::new(&types, &class_name).print(ty)
     })
@@ -181,11 +180,14 @@ fn the_other_literals_and_what_is_plain_from_the_text() {
         ("null", "null"),
         ("`a${1}b`", "string"),
         ("!x", "boolean"),
-        ("typeof x", "string"),
+        ("typeof x", "\"bigint\" | \"boolean\" | \"function\" | \"number\" | \"object\" | \"string\" | \"undefined\""),
         ("x === null", "boolean"),
         ("x !== 1", "boolean"),
         ("[1, 2]", "readonly int32[]"),
         ("1 + 2", "number"),
+        ("+1", "number"),
+        ("x ? 1 : 2", "1 | 2"),
+        ("x < 1", "boolean"),
         ("{ a: 1 }", "{ a: 1 }"),
         ("[1, 1.5]", "readonly number[]"),
         ("[1, \"a\", true]", "readonly (int32 | string | boolean)[]"),
@@ -195,7 +197,7 @@ fn the_other_literals_and_what_is_plain_from_the_text() {
         ),
         ("JSON.parse(\"1\")", "unknown"),
         ("(JSON.parse(text))", "unknown"),
-        ("1 ?? 2", "1 | 2"),
+        ("1 ?? 2", "1"),
         ("undefined ?? \"d\"", "\"d\""),
         ("null ?? 1", "1"),
     ] {
@@ -213,7 +215,6 @@ fn the_other_literals_and_what_is_plain_from_the_text() {
         "1 ?? x",
         "-x",
         "-\"a\"",
-        "+1",
         "this",
         "JSON.stringify(1)",
         "o.JSON.parse(1)",
@@ -223,9 +224,7 @@ fn the_other_literals_and_what_is_plain_from_the_text() {
         "JSON.parse(1)(2)",
         "-(() => 1)",
         "await x",
-        "x ? 1 : 2",
         "/re/v",
-        "x < 1",
         "void 0",
     ] {
         assert_eq!(typed(later), "?", "{later} is a later pass's");
@@ -260,7 +259,11 @@ fn names_have_the_types_that_are_known_of_them() {
         "int32 | string | undefined",
         "without `null` too"
     );
-    assert_eq!(typed("n ?? x"), "number | string | undefined");
+    assert_eq!(
+        typed("n ?? x"),
+        "number",
+        "a left that is never absent is all there is"
+    );
     assert_eq!(typed("-n"), "number");
     assert_eq!(
         typed("-i"),

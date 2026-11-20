@@ -3048,7 +3048,42 @@ body); `[[]]` (E110 on the inner); `xs.push()` with no arguments does not type; 
 mutated only in a test file is mutated program-wide.
 
 #### US-088 Operators
-§4.1, E104, E105, E120, E138 · After: US-083 · Size: M · M1
+§4.1, E104, E105, E120, E138 · After: US-083 · Size: M · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-infer::operators`, part of the typer and of `check_expressions`:
+> every row of §4.1 but `await` (US-108's). `+` on two numbers, two bigints or two
+> strings; `- * / % **` on two numbers (`number`; `%` on two `int32` is `int32`) or two
+> bigints; unary `-` and `+` on a number or a bigint; `& | ^ << >>` and `~` on `int32`
+> (`int32`) or bigints, `>>>` on two `int32` only (`number`); `< > <= >=` on two
+> numbers, two bigints or two strings; `=== !==` between types that share a value;
+> `! && ||` on booleans; `??` with a left that may be `undefined` or `null`, the union
+> without them; `?:` with a boolean condition, the union of its branches; `typeof x`
+> the literal union of what `x` may give (`"object"` for `null`, all seven strings for
+> what is unknown: never `"symbol"`); `instanceof` with a class on its right. A wrong
+> operand is `E138` at the operator (for `! && || ?? ?:`, unary operators and
+> `instanceof`, at the operand); a bitwise operator on numbers that are not both
+> `int32` is `E104`; `===` between types that share no value is `E105`; a place
+> compared with or assigned to itself is `E120` on the whole expression. The matrix:
+> `crates/sjs-cli/tests/operators.rs` holds §4.1 as a table and generates the 60
+> fixtures of `tests/conformance/04-operators/table` from it, one file per operator of
+> what it accepts and one per code it refuses with, over six operand kinds; it fails
+> when they differ (`SJS_UPDATE_SNAPSHOTS=1` rewrites them). **Decisions:** (1) an
+> operator is judged when the types of its operands are known; one of no type yet is
+> not judged yet; (2) a `??` whose left is never nullish is `E138` at the left, and is
+> typed as its left; (3) overlap for `===`: two literals overlap only when they are one
+> value; a literal overlaps its primitive, an `int32` literal `number` too; `int32`
+> overlaps `number`; `unknown` and a type variable overlap everything; a primitive
+> never overlaps an object, and any two objects (shapes, arrays, classes, functions)
+> may be the same one; (4) self-compare covers `=== !== < > <= >=` on a name, `this`
+> or a member chain of them written the same on both sides, so `x !== x` as a `NaN`
+> test and `undefined === undefined` are `E120`; self-assign is plain `=` only;
+> (5) the right of `instanceof` is refused when it has a type, for a class as a value
+> has none yet; (6) compound assignments (`x += "a"`) are not judged here; (7) a
+> union of kinds (`number | string`) is no operand of an arithmetic operator.
+> Fixtures: the generated table; five `02-grammar/pass` fixtures compared or combined
+> constants the rules refuse and now use imported names. Verified: fmt, both clippy
+> passes, audit, tests, doc tests, 100% line and region coverage, `cargo mutants
+> --in-diff` 105 caught, 0 missed, 6 unviable.
 
 **Done when**
 - Every row of §4.1 has accept fixtures per permitted operand kind and reject fixtures

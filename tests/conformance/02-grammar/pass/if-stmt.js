@@ -1,7 +1,5 @@
 // IfStmt: with and without `else`, and an `else if` chain, bodies always blocks.
-import { f } from "./names.js"
-
-const x = 1
+import { f, x } from "./names.js"
 
 if (x === 1) {
   f(x)

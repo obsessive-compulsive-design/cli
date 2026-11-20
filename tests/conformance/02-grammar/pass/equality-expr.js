@@ -1,7 +1,5 @@
 // EqualityExpr: `===` and `!==`, chained with relational operands.
-import { f } from "./names.js"
-
-const a = 1
+import { a, f } from "./names.js"
 
 const b = a === 1
 
