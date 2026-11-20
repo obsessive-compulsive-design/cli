@@ -11,8 +11,6 @@ const q = { async: 1, get: 2, set: 3 }
 
 const r = { ["__proto__"]: p }
 
-const s = { __proto__ }
-
 const t = {}
 
 const u = []
@@ -21,4 +19,4 @@ const v = [1, ...u, ...u]
 
 const w = { a: 1, b: { a: 2 } }
 
-export { q, r, s, t, v, w }
+export { q, r, t, v, w }

@@ -5,6 +5,7 @@
 //! a `let` nothing assigns (E106), a loop variable its loop's body assigns (E123), a
 //! binding that may not be assigned at all (E138).
 
+use crate::ambient::{Table, Use};
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
 use std::collections::{BTreeMap, BTreeSet};
@@ -121,6 +122,9 @@ pub struct Reference {
     /// Whether it is written to and not read: the target of an assignment (compound
     /// ones included) or of `++`/`--`.
     pub write: bool,
+    /// The key it is read by, `name.key` or `name[…]`: the key's text when it is a
+    /// name or a string literal, and where the key is.
+    pub member: Option<(Option<String>, Span)>,
 }
 
 /// The scopes of a file, what each declares and what every name refers to.
@@ -702,7 +706,32 @@ impl Binder<'_> {
                 call: kind == NodeKind::CallExpr && at == 0,
                 export: kind == NodeKind::ExportSpecifier,
                 write: is_write(node, children, at),
+                member: self.member(node, children).filter(|_| at == 0),
             });
+        }
+    }
+
+    /// The key the first child of `node` is read by, when `node` reads one by a key.
+    fn member(
+        &self,
+        node: NodeRef<'_>,
+        children: &[Element<'_>],
+    ) -> Option<(Option<String>, Span)> {
+        match (node.kind(), children.last(), children.iter().rev().nth(1)) {
+            (NodeKind::MemberExpr, Some(Element::Token(name)), _) => {
+                let span = name.token().span;
+                let text = self.source.slice(&span).unwrap_or_default();
+                Some((Some(text.to_owned()), span))
+            }
+            (NodeKind::IndexExpr, _, Some(Element::Token(key))) => {
+                let name = match &key.token().kind {
+                    TokenKind::String(value) => Some(value.to_string()),
+                    _ => None,
+                };
+                Some((name, key.token().span))
+            }
+            (NodeKind::IndexExpr, _, Some(Element::Node(key))) => Some((None, key.span())),
+            _ => None,
         }
     }
 
@@ -803,6 +832,26 @@ impl Binder<'_> {
                     );
                     found.push((Code::E135, reference.span, message));
                 }
+            }
+        }
+        // A name the file does not declare is a global, or nothing (E204, E133, E138).
+        let table = Table::shipped();
+        let test_file = self.source.path().ends_with(".test.js");
+        for reference in out.references.iter().filter(|r| r.declaration.is_none()) {
+            let used = Use {
+                name: &reference.name,
+                keyed: reference.member.is_some(),
+                member: reference
+                    .member
+                    .as_ref()
+                    .and_then(|(key, _)| key.as_deref()),
+                write: reference.write,
+                test_file,
+            };
+            if let Some(verdict) = table.judge(&used) {
+                let key = reference.member.as_ref().filter(|_| verdict.on_member);
+                let span = key.map_or(reference.span, |(_, span)| *span);
+                found.push((verdict.code, span, verdict.message));
             }
         }
         let path = self.source.path();

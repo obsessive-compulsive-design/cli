@@ -1,4 +1,6 @@
 // NullishExpr: `??` alone, and parenthesised beside `||` and `&&`.
+import { f } from "./names.js"
+
 const a = undefined
 
 const b = a ?? 1

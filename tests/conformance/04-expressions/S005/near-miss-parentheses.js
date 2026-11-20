@@ -1,6 +1,8 @@
 // Every pair of parentheses ES2025 needs, or that the subset keeps, and a pair inside
 // a template literal, which is copied as written: no diagnostic.
-({ r } = s)
+import { b, c, d, p, s } from "./names.js"
+
+({ r: p.x } = s)
 
 const a = (b ?? c) || d
 

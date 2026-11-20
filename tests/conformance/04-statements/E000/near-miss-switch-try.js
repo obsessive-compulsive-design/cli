@@ -1,4 +1,6 @@
 // Every permitted `switch` and `try` form: no diagnostic.
+import { f, g, h, x } from "./names.js"
+
 switch (x) {}
 
 switch (x) {

@@ -1,4 +1,6 @@
 // ArrowFn: parameters always parenthesised, expression or block body, async or not.
+import { f } from "./names.js"
+
 const a = (x) => x
 
 const b = () => {}

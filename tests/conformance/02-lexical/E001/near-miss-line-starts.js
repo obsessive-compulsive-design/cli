@@ -1,5 +1,5 @@
 // Every line start that is no hazard: no diagnostic. The first line is never one.
-(first + 1).x
+(f + 1).x
 
 const o = {
   a: 1,
@@ -12,21 +12,21 @@ const s = o
 
 class A {}
 
-(second + 1).x
+(f + 2).x
 
 {
-  (third + 1).x
+  (f + 3).x
 }
 
 const t = () => {}
 
-(fourth + 1).x
+(f + 4).x
 
 if (s) {
   f()
 }
 
-[a, b] = [b, a]
+[o.a] = [2]
 
 function f() {
   const v = 1

@@ -1,4 +1,6 @@
 // RelExpr: `<`, `>`, `<=`, `>=` and `instanceof`.
+import { f } from "./names.js"
+
 class A {}
 
 const a = new A()

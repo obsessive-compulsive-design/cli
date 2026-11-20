@@ -1,4 +1,6 @@
 // A block with two statements, a bare `return`, or a comment: no diagnostic.
+import { a, g } from "./names.js"
+
 const f = () => {
   g()
   return a

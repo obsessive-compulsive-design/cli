@@ -2536,7 +2536,42 @@ checker's); a loop variable modified in a nested arrow inside the body is `E123`
 as b }`; exporting a `let`.
 
 #### US-068 Ambient globals table and E204/E133
-§5.2, §6, §10.1 · After: US-063 · Size: L · M1
+§5.2, §6, §10.1 · After: US-063 · Size: L · M1 · **Status: complete** (2026-11-20)
+
+> Delivered: `ambient/globals.toml` (127 globals: the rows of §6.1, §6.2, §6.4 and the
+> test globals of §10.2, each with its source, its kept and removed members and the
+> runtimes that have it), read by `sjs_bind::ambient` (`Table::parse`, a reader of the
+> TOML subset the file is written in; `Table::shipped`; `Table::judge`). `bind` judges
+> every name a file does not declare: `E204` for a name that is no global, a global or
+> kept member some runtime lacks (the message names the runtimes) and a test global
+> outside a `.test.js` file; `E133` for a removed global, a removed member (with the §12
+> replacement) and a member the row does not list; `E138` for a global assigned outside
+> a `.test.js` file. `Reference::member` records the key a name is read by, which
+> `links` now uses too. `crates/sjs-cli/tests/ambient.rs` generates the 194 fixtures of
+> `tests/conformance/06-ambient/table` from the table and fails when they differ
+> (`SJS_UPDATE_SNAPSHOTS=1` rewrites them). **Decisions:** (1) the §6.4 names are told
+> apart by presence: one every runtime has (`eval`, `globalThis`, `encodeURI`, `Proxy`)
+> is `E133`, one a runtime lacks (`window`, `process`, `document`, `Deno`) is `E204`
+> naming the runtimes, as §5.2 says; (2) the set is closed, so a built-in §6 does not
+> list (`Boolean`) is `E204`; (3) only `Global.member` and `Global["member"]` are judged
+> here: a computed key, a member of a value (`str.substr`) and the call and `new` forms
+> (`BigInt(x)`, `new Date()`, `new RegExp(s)`) are the checker's (US-095 to US-098,
+> US-122); `Symbol` is the exception, removed but for its members; (4) the §6.2
+> classes, `Intl`, `Temporal` and the value globals are `open`: any member passes here
+> and US-098/US-099 type them; (5) a removed member §12 has no row for carries no
+> replacement, and `RegExp.escape`, `Date.UTC` and the like are `E133` as unlisted;
+> (6) presence is transcribed as this release knows it: `Temporal` on no runtime,
+> `Uint8Array.fromBase64`/`fromHex` missing on Node 24 and Deno 2, everything else §6
+> keeps on all five; (7) `eval` is the lexer's `E000` first (`syntax = true` in its
+> row); (8) a table that cannot be read is an empty table, which a unit test rules
+> out for the shipped file. Fixtures changed: 41 existing fixtures used undeclared
+> names (mostly `f`); 38 now import them under their header (expect lines shifted to
+> match), `02-lexical/E001/near-miss-line-starts.js` and
+> `04-expressions/S005/near-miss-parentheses.js` were reworked by hand, and
+> `04-objects/E000/near-miss-objects.js` lost its `{ __proto__ }` shorthand line.
+> Verified: fmt, both clippy passes, audit, tests, doc tests, 100% line and region
+> coverage, `cargo mutants --in-diff` 0 missed (the five survivors of the first run,
+> all in the reader's comment stripping, are killed by two added rows).
 
 As a programmer I want exactly the §6 intersection visible as globals, every member outside
 it reported, and the test globals visible only in `.test.js` files.

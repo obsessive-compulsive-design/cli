@@ -1,4 +1,6 @@
 // Every pattern form: no diagnostic.
+import { k, p, q } from "./names.js"
+
 const a = 1
 
 const b = a + 1

@@ -1,4 +1,6 @@
 // PostfixExpr: members, optional members, indexes, optional indexes, calls, optional calls.
+import { f } from "./names.js"
+
 const o = { a: { b: [1] }, f: () => 1 }
 
 const a = o.a.b[0]

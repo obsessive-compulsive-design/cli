@@ -133,7 +133,6 @@ impl ModuleGraph {
                     source,
                     linked: Linked::default(),
                     uses: Vec::new(),
-                    keys: BTreeMap::new(),
                 };
                 reader.read(tree);
                 links.modules.insert(module.path.clone(), reader.linked);
@@ -208,8 +207,6 @@ struct Reader<'a> {
     source: &'a SourceFile,
     linked: Linked,
     uses: Vec<Use>,
-    /// The key each name is read by, by where the name begins: `ns.b`, `ns[…]`.
-    keys: BTreeMap<usize, (Option<String>, Span)>,
 }
 
 impl<'a> Reader<'a> {
@@ -291,11 +288,9 @@ impl<'a> Reader<'a> {
                 self.linked.exports.insert(exported, source);
             }
         }
-        self.keys(root);
         for reference in &bindings.references {
             let declared = reference.declaration.map(|at| &bindings.declarations[at]);
-            let key = self.keys.get(&reference.span.byte_start);
-            if let (Some(declared), Some((key, span))) = (declared, key) {
+            if let (Some(declared), Some((key, span))) = (declared, &reference.member) {
                 if declared.kind == DeclKind::Import {
                     let read = Use::Key(reference.name.clone(), key.clone(), *span);
                     self.uses.push(read);
@@ -330,36 +325,6 @@ impl<'a> Reader<'a> {
             self.linked
                 .imports
                 .extend(local.map(|local| (local, source)));
-        }
-    }
-
-    /// Records the key every name is read by, throughout `node`.
-    fn keys(&mut self, node: NodeRef<'_>) {
-        let mut pending = vec![node];
-        while let Some(node) = pending.pop() {
-            let children: Vec<Element<'_>> = node.children().collect();
-            pending.extend(children.iter().copied().filter_map(node_of));
-            let object = match children.first() {
-                Some(Element::Token(token)) => token.token().span.byte_start,
-                _ => continue,
-            };
-            let key = match (node.kind(), children.last(), children.iter().rev().nth(1)) {
-                (NodeKind::MemberExpr, Some(Element::Token(name)), _) => {
-                    let span = name.token().span;
-                    let text = self.source.slice(&span).unwrap_or_default();
-                    (Some(text.to_owned()), span)
-                }
-                (NodeKind::IndexExpr, _, Some(Element::Token(key))) => {
-                    let name = match &key.token().kind {
-                        TokenKind::String(value) => Some(value.to_string()),
-                        _ => None,
-                    };
-                    (name, key.token().span)
-                }
-                (NodeKind::IndexExpr, _, Some(Element::Node(key))) => (None, key.span()),
-                _ => continue,
-            };
-            self.keys.insert(object, key);
         }
     }
 }

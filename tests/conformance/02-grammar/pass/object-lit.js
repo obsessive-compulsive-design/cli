@@ -1,4 +1,6 @@
 // ObjectLit: shorthand, named, string and computed keys, a spread, and a trailing comma.
+import { f } from "./names.js"
+
 const a = 1
 
 const k = "key"

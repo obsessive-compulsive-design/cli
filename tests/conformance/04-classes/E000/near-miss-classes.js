@@ -1,4 +1,6 @@
 // Every permitted class form: no diagnostic.
+import { ns } from "./names.js"
+
 class A extends ns.B {
   static count = 0
   static #registry

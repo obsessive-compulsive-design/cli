@@ -1,0 +1,954 @@
+# The ambient table (SPEC.md §5.2, §6, §10.1; STORIES.md US-068): every global the
+# language knows, transcribed from SPEC.md §6 and §10.2.
+#
+# One `[[global]]` per name:
+#   name          the global.
+#   spec          the section of SPEC.md the row transcribes.
+#   source        where the global is specified: ES2025, a web standard, a runtime.
+#   present       the runtimes that have it, of "browser" (current Chrome, Firefox and
+#                 Safari), "node" (Node 24+), "deno" (Deno 2+), "bun" and "workerd"
+#                 (Cloudflare Workers). A global missing on any one is E204.
+#   members       the members the language keeps (`Global.member`).
+#   open          true when every member is kept: a value, or a type whose members a
+#                 later table types (Intl, the §6.2 classes).
+#   removed       present when the global itself is removed (E133): the replacement of
+#                 SPEC.md §12, "none" where §12 says none, "" where it names none.
+#   members_only  present when the global is used through its members only (E133
+#                 otherwise), with the replacement.
+#   test          true for a global only a `.test.js` file has (§10.1).
+#   syntax        true for a name the lexer refuses as a word (E000) before any name
+#                 is looked up here.
+# and after it, where needed:
+#   [global.removed]  member = replacement: the removed members (E133).
+#   [global.present]  member = runtimes: a kept member some runtime lacks (E204).
+# A member that is neither kept nor listed as removed is E133 all the same.
+#
+# The fixtures under tests/conformance/06-ambient/table are generated from this file:
+#   SJS_UPDATE_SNAPSHOTS=1 cargo test -p sjs-cli --test ambient
+
+[[global]]
+name = "undefined"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §19.1.4"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "NaN"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §19.1.3"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "Infinity"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §19.1.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "Object"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §20.1"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = [
+    "keys", "values", "entries", "fromEntries", "hasOwn", "groupBy", "freeze", "isFrozen",
+    "assign",
+]
+
+[global.removed]
+defineProperty = "plain classes and objects"
+defineProperties = "plain classes and objects"
+getPrototypeOf = "classes"
+setPrototypeOf = "classes"
+create = "classes"
+seal = "`Object.freeze`"
+preventExtensions = "`Object.freeze`"
+is = ""
+getOwnPropertyNames = ""
+getOwnPropertySymbols = ""
+getOwnPropertyDescriptor = ""
+
+[[global]]
+name = "Array"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §23.1"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["isArray", "from", "fromAsync", "of"]
+
+[[global]]
+name = "String"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §22.1"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["raw", "fromCodePoint"]
+
+[global.removed]
+fromCharCode = "`String.fromCodePoint`"
+
+[[global]]
+name = "Number"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §21.1"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = [
+    "isFinite", "isInteger", "isNaN", "isSafeInteger", "parseFloat", "parseInt", "EPSILON",
+    "MAX_SAFE_INTEGER", "MIN_SAFE_INTEGER", "MAX_VALUE", "MIN_VALUE", "NaN",
+    "NEGATIVE_INFINITY", "POSITIVE_INFINITY",
+]
+
+[[global]]
+name = "parseInt"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §19.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = "`Number.parseInt`"
+
+[[global]]
+name = "parseFloat"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §19.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = "`Number.parseFloat`"
+
+[[global]]
+name = "isNaN"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §19.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = "`Number.isNaN`"
+
+[[global]]
+name = "isFinite"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §19.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = "`Number.isFinite`"
+
+[[global]]
+name = "BigInt"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §21.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["asIntN", "asUintN"]
+
+[[global]]
+name = "Math"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §21.3"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = [
+    "E", "LN10", "LN2", "LOG10E", "LOG2E", "PI", "SQRT1_2", "SQRT2", "abs", "acos", "acosh",
+    "asin", "asinh", "atan", "atanh", "atan2", "cbrt", "ceil", "clz32", "cos", "cosh", "exp",
+    "expm1", "floor", "fround", "f16round", "hypot", "imul", "log", "log1p", "log10", "log2",
+    "max", "min", "pow", "random", "round", "sign", "sin", "sinh", "sqrt", "tan", "tanh",
+    "trunc",
+]
+
+[[global]]
+name = "Symbol"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §20.4"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["iterator", "asyncIterator", "dispose", "asyncDispose"]
+members_only = "`#private`, well-known symbols only"
+
+[global.removed]
+for = "`#private`, well-known symbols only"
+keyFor = "`#private`, well-known symbols only"
+hasInstance = ""
+isConcatSpreadable = ""
+match = ""
+matchAll = ""
+replace = ""
+search = ""
+species = ""
+split = ""
+toPrimitive = ""
+toStringTag = ""
+unscopables = ""
+
+[[global]]
+name = "Map"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §24.1"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["groupBy"]
+
+[[global]]
+name = "Set"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §24.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "WeakMap"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §24.3"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "WeakSet"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §24.4"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = ""
+
+[[global]]
+name = "WeakRef"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §26.1"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = "none"
+
+[[global]]
+name = "FinalizationRegistry"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §26.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = "none"
+
+[[global]]
+name = "Int8Array"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §23.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["from", "of", "BYTES_PER_ELEMENT"]
+
+[[global]]
+name = "Uint8Array"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §23.2; fromBase64 and fromHex: ES2026 (proposal-arraybuffer-base64)"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["from", "of", "BYTES_PER_ELEMENT", "fromBase64", "fromHex"]
+
+[global.present]
+fromBase64 = ["browser", "bun", "workerd"]
+fromHex = ["browser", "bun", "workerd"]
+
+[[global]]
+name = "Uint8ClampedArray"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §23.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["from", "of", "BYTES_PER_ELEMENT"]
+
+[[global]]
+name = "Int16Array"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §23.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["from", "of", "BYTES_PER_ELEMENT"]
+
+[[global]]
+name = "Uint16Array"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §23.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["from", "of", "BYTES_PER_ELEMENT"]
+
+[[global]]
+name = "Int32Array"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §23.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["from", "of", "BYTES_PER_ELEMENT"]
+
+[[global]]
+name = "Uint32Array"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §23.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["from", "of", "BYTES_PER_ELEMENT"]
+
+[[global]]
+name = "Float16Array"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §23.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["from", "of", "BYTES_PER_ELEMENT"]
+
+[[global]]
+name = "Float32Array"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §23.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["from", "of", "BYTES_PER_ELEMENT"]
+
+[[global]]
+name = "Float64Array"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §23.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["from", "of", "BYTES_PER_ELEMENT"]
+
+[[global]]
+name = "BigInt64Array"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §23.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["from", "of", "BYTES_PER_ELEMENT"]
+
+[[global]]
+name = "BigUint64Array"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §23.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["from", "of", "BYTES_PER_ELEMENT"]
+
+[[global]]
+name = "ArrayBuffer"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §25.1"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["isView"]
+
+[[global]]
+name = "DataView"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §25.3"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "Promise"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §27.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["all", "allSettled", "any", "race", "resolve", "reject", "withResolvers", "try"]
+
+[[global]]
+name = "Iterator"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §27.1"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["from"]
+
+[[global]]
+name = "JSON"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §25.5"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["parse", "stringify", "rawJSON", "isRawJSON"]
+
+[[global]]
+name = "RegExp"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §22.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "Error"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §20.5"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[global.removed]
+captureStackTrace = ""
+
+[[global]]
+name = "EvalError"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §20.5.5"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "RangeError"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §20.5.5"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "ReferenceError"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §20.5.5"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "SyntaxError"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §20.5.5"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "TypeError"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §20.5.5"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "URIError"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §20.5.5"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "AggregateError"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §20.5.7"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "Intl"
+spec = "§6.1"
+source = "ECMA-402, 12th edition"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "Date"
+spec = "§6.1"
+source = "ES2025 (ECMA-262, 16th edition) §21.4"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["now"]
+
+[global.removed]
+parse = ""
+
+[[global]]
+name = "Temporal"
+spec = "§6.1"
+source = "TC39 proposal-temporal (not in ES2025)"
+present = []
+open = true
+
+[[global]]
+name = "structuredClone"
+spec = "§6.1"
+source = "HTML Standard §2.7.10; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "encodeURIComponent"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §19.2.6"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "decodeURIComponent"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §19.2.6"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "fetch"
+spec = "§6.2"
+source = "Fetch Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "Request"
+spec = "§6.2"
+source = "Fetch Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "Response"
+spec = "§6.2"
+source = "Fetch Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "Headers"
+spec = "§6.2"
+source = "Fetch Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "FormData"
+spec = "§6.2"
+source = "XMLHttpRequest Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "URL"
+spec = "§6.2"
+source = "URL Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "URLSearchParams"
+spec = "§6.2"
+source = "URL Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "URLPattern"
+spec = "§6.2"
+source = "URL Pattern Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "AbortController"
+spec = "§6.2"
+source = "DOM Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "AbortSignal"
+spec = "§6.2"
+source = "DOM Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "EventTarget"
+spec = "§6.2"
+source = "DOM Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "Event"
+spec = "§6.2"
+source = "DOM Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "CustomEvent"
+spec = "§6.2"
+source = "DOM Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "ReadableStream"
+spec = "§6.2"
+source = "Streams Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "WritableStream"
+spec = "§6.2"
+source = "Streams Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "TransformStream"
+spec = "§6.2"
+source = "Streams Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "TextEncoderStream"
+spec = "§6.2"
+source = "Encoding Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "TextDecoderStream"
+spec = "§6.2"
+source = "Encoding Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "CompressionStream"
+spec = "§6.2"
+source = "Compression Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "DecompressionStream"
+spec = "§6.2"
+source = "Compression Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "Blob"
+spec = "§6.2"
+source = "File API; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "File"
+spec = "§6.2"
+source = "File API; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "TextEncoder"
+spec = "§6.2"
+source = "Encoding Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "TextDecoder"
+spec = "§6.2"
+source = "Encoding Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "WebSocket"
+spec = "§6.2"
+source = "WebSockets Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "BroadcastChannel"
+spec = "§6.2"
+source = "HTML Standard §9; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "MessageChannel"
+spec = "§6.2"
+source = "HTML Standard §9; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "MessagePort"
+spec = "§6.2"
+source = "HTML Standard §9; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+open = true
+
+[[global]]
+name = "crypto"
+spec = "§6.2"
+source = "Web Cryptography API; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["subtle", "randomUUID", "getRandomValues"]
+
+[[global]]
+name = "queueMicrotask"
+spec = "§6.2"
+source = "HTML Standard §8; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "setTimeout"
+spec = "§6.2"
+source = "HTML Standard §8; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "clearTimeout"
+spec = "§6.2"
+source = "HTML Standard §8; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "setInterval"
+spec = "§6.2"
+source = "HTML Standard §8; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "clearInterval"
+spec = "§6.2"
+source = "HTML Standard §8; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "performance"
+spec = "§6.2"
+source = "High Resolution Time; User Timing; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["now", "mark", "measure"]
+
+[[global]]
+name = "console"
+spec = "§6.2"
+source = "Console Standard; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = [
+    "log", "error", "warn", "info", "debug", "table", "time", "timeEnd", "group", "groupEnd",
+    "assert",
+]
+
+[[global]]
+name = "navigator"
+spec = "§6.2"
+source = "HTML Standard §8.9; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["hardwareConcurrency"]
+
+[[global]]
+name = "atob"
+spec = "§6.2"
+source = "HTML Standard §8.3; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "btoa"
+spec = "§6.2"
+source = "HTML Standard §8.3; WinterCG Minimum Common Web Platform API"
+present = ["browser", "node", "deno", "bun", "workerd"]
+
+[[global]]
+name = "eval"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §19.2.1"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = "none"
+syntax = true
+
+[[global]]
+name = "Function"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §20.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = "none"
+
+[[global]]
+name = "Proxy"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §28.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = "plain classes and objects"
+
+[[global]]
+name = "Reflect"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §28.1"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = "plain classes and objects"
+
+[[global]]
+name = "escape"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §B.2.1"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = ""
+
+[[global]]
+name = "unescape"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §B.2.1"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = ""
+
+[[global]]
+name = "encodeURI"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §19.2.6"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = "`encodeURIComponent`"
+
+[[global]]
+name = "decodeURI"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §19.2.6"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = "`decodeURIComponent`"
+
+[[global]]
+name = "globalThis"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §19.1.1"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "self"
+spec = "§6.4"
+source = "HTML Standard §7.2"
+present = ["browser", "deno", "bun", "workerd"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "window"
+spec = "§6.4"
+source = "HTML Standard §7.2"
+present = ["browser"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "document"
+spec = "§6.4"
+source = "HTML Standard §7.2"
+present = ["browser"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "global"
+spec = "§6.4"
+source = "Node.js globals"
+present = ["node", "bun"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "localStorage"
+spec = "§6.4"
+source = "HTML Standard §12 (Web Storage)"
+present = ["browser", "deno"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "sessionStorage"
+spec = "§6.4"
+source = "HTML Standard §12 (Web Storage)"
+present = ["browser", "deno"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "indexedDB"
+spec = "§6.4"
+source = "Indexed Database API"
+present = ["browser"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "Worker"
+spec = "§6.4"
+source = "HTML Standard §10 (Web Workers)"
+present = ["browser", "deno", "bun"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "SharedArrayBuffer"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §25.2"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = ""
+
+[[global]]
+name = "Atomics"
+spec = "§6.4"
+source = "ES2025 (ECMA-262, 16th edition) §25.4"
+present = ["browser", "node", "deno", "bun", "workerd"]
+removed = ""
+
+[[global]]
+name = "XMLHttpRequest"
+spec = "§6.4"
+source = "XMLHttpRequest Standard"
+present = ["browser"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "require"
+spec = "§6.4"
+source = "Node.js CommonJS modules"
+present = ["node", "bun"]
+removed = "relative `.js` imports only"
+
+[[global]]
+name = "module"
+spec = "§6.4"
+source = "Node.js CommonJS modules"
+present = ["node", "bun"]
+removed = "relative `.js` imports only"
+
+[[global]]
+name = "exports"
+spec = "§6.4"
+source = "Node.js CommonJS modules"
+present = ["node", "bun"]
+removed = "relative `.js` imports only"
+
+[[global]]
+name = "__dirname"
+spec = "§6.4"
+source = "Node.js CommonJS modules"
+present = ["node", "bun"]
+removed = "relative `.js` imports only"
+
+[[global]]
+name = "__filename"
+spec = "§6.4"
+source = "Node.js CommonJS modules"
+present = ["node", "bun"]
+removed = "relative `.js` imports only"
+
+[[global]]
+name = "process"
+spec = "§6.4"
+source = "Node.js globals"
+present = ["node", "deno", "bun"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "Buffer"
+spec = "§6.4"
+source = "Node.js globals"
+present = ["node", "deno", "bun"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "Deno"
+spec = "§6.4"
+source = "Deno runtime API"
+present = ["deno"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "Bun"
+spec = "§6.4"
+source = "Bun runtime API"
+present = ["bun"]
+removed = "a host file outside the subset"
+
+[[global]]
+name = "describe"
+spec = "§10.2"
+source = "SPEC.md §10.2 (the runner's host file installs it)"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["skip", "only"]
+test = true
+
+[[global]]
+name = "it"
+spec = "§10.2"
+source = "SPEC.md §10.2 (the runner's host file installs it)"
+present = ["browser", "node", "deno", "bun", "workerd"]
+members = ["skip", "only"]
+test = true
+
+[[global]]
+name = "expect"
+spec = "§10.2"
+source = "SPEC.md §10.2 (the runner's host file installs it)"
+present = ["browser", "node", "deno", "bun", "workerd"]
+test = true
+
+[[global]]
+name = "beforeEach"
+spec = "§10.2"
+source = "SPEC.md §10.2 (the runner's host file installs it)"
+present = ["browser", "node", "deno", "bun", "workerd"]
+test = true
+
+[[global]]
+name = "afterEach"
+spec = "§10.2"
+source = "SPEC.md §10.2 (the runner's host file installs it)"
+present = ["browser", "node", "deno", "bun", "workerd"]
+test = true
+
+[[global]]
+name = "beforeAll"
+spec = "§10.2"
+source = "SPEC.md §10.2 (the runner's host file installs it)"
+present = ["browser", "node", "deno", "bun", "workerd"]
+test = true
+
+[[global]]
+name = "afterAll"
+spec = "§10.2"
+source = "SPEC.md §10.2 (the runner's host file installs it)"
+present = ["browser", "node", "deno", "bun", "workerd"]
+test = true

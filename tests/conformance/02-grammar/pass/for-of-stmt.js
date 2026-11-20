@@ -1,4 +1,6 @@
 // ForOfStmt: `const` bindings, patterns, and `for await`.
+import { f } from "./names.js"
+
 const xs = [1, 2]
 
 const m = new Map()

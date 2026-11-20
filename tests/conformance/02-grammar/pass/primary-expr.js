@@ -1,6 +1,7 @@
 // PrimaryExpr: each literal, a name, `this`, an array, an object, an arrow, a template,
 // `new` on a name and a namespaced name, a dynamic import, and parentheses.
 import * as ns from "./a.js"
+import { f } from "./names.js"
 
 class A {
   m() {

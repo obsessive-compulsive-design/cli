@@ -1,4 +1,6 @@
 // IfStmt: with and without `else`, and an `else if` chain, bodies always blocks.
+import { f } from "./names.js"
+
 const x = 1
 
 if (x === 1) {

@@ -1,4 +1,6 @@
 // UnaryExpr: `!`, `-`, `+`, `~`, `typeof` and `await`, nested.
+import { f } from "./names.js"
+
 const p = Promise.resolve(1)
 
 const a = !true

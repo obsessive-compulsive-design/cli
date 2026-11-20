@@ -1,4 +1,6 @@
 // TryStmt: catch with and without a binding, finally with and without catch.
+import { f } from "./names.js"
+
 try {
   f(1)
 } catch {

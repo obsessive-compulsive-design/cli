@@ -157,7 +157,7 @@ mod tests {
     fn each_invalid_file_reports_its_own_e000() {
         let diagnostics = check_files(&[
             file("bom.js", b"\xEF\xBB\xBFx"),
-            file("ok.js", b"x\n"),
+            file("ok.js", b"undefined\n"),
             file("bad.js", b"a\xFF"),
         ]);
         let found: Vec<(&str, Code, Position)> = diagnostics

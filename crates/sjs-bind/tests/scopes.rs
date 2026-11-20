@@ -76,11 +76,11 @@ fn snapshot(name: &str, text: &str) {
     sjs_testkit::snapshot!(name, &all);
 }
 
-/// The findings but those about what is read (E115, E153) and what is assigned (E106,
-/// E123, E138), which have tests of their own.
+/// The findings but those about what is read (E115, E153), what is assigned (E106,
+/// E123, E138) and what is not declared (E204, E133), which have tests of their own.
 fn findings(text: &str) -> Vec<String> {
     let all = bound(text).1.into_iter();
-    let apart = ["E106", "E115", "E123", "E138", "E153"];
+    let apart = ["E106", "E115", "E123", "E133", "E138", "E153", "E204"];
     all.filter(|found| !apart.iter().any(|code| found.starts_with(code)))
         .collect()
 }

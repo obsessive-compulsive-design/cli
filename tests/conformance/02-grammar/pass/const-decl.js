@@ -1,4 +1,6 @@
 // ConstDecl: a name, an object pattern and an array pattern, each initialised.
+import { f } from "./names.js"
+
 const o = { a: 1, b: 2 }
 
 const xs = [1, 2]

@@ -1,4 +1,6 @@
 // Block: declarations and statements inside braces, nested.
+import { f } from "./names.js"
+
 {
   const a = 1
   {
