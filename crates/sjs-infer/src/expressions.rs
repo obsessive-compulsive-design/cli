@@ -1,5 +1,6 @@
 //! The types of literal and primitive expressions (SPEC.md §3.1, §4.1).
 
+use crate::functions::{Passed, Site};
 use sjs_bind::Bindings;
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
@@ -27,6 +28,24 @@ pub struct Facts {
     pub mutated: BTreeSet<usize>,
     /// The declarations something is put into: `push`, `set`, `add`, `name[i] = v`.
     pub filled: BTreeSet<usize>,
+    /// What each function declared by name returns, by the declaration of its name.
+    pub returns: BTreeMap<usize, TypeId>,
+    /// How many arguments each function declared by name takes: at least, and at
+    /// most unless it has a rest.
+    pub arity: BTreeMap<usize, (usize, Option<usize>)>,
+    /// The parameters of each function declared by name, in order: the declaration
+    /// of each that is a plain name.
+    pub parameters: BTreeMap<usize, Vec<Option<usize>>>,
+    /// The type of the elements of each rest parameter, by its declaration.
+    pub rest: BTreeMap<usize, TypeId>,
+    /// The call sites of each parameter, by its declaration: those of this file and
+    /// those of [`Facts::external_sites`].
+    pub sites: BTreeMap<usize, Vec<Site>>,
+    /// Given to [`crate::infer_bindings`]: the call sites of this file's parameters
+    /// in other files.
+    pub external_sites: BTreeMap<usize, Vec<Site>>,
+    /// The arguments this file passes to functions it imports.
+    pub passed: Vec<Passed>,
     /// The names of the classes, for findings.
     pub class_names: BTreeMap<ClassId, String>,
 }
@@ -225,12 +244,11 @@ impl<'a> Typer<'a> {
             }
             NodeKind::CallExpr => {
                 // `JSON.parse(…)`, of the global `JSON`: anything at all.
-                let callee = match children.first() {
-                    Some(Element::Node(callee)) => *callee,
-                    _ => return None,
-                };
-                let text = self.source.slice(&callee.span()).unwrap_or_default();
-                let reference = self.references.get(&callee.span().byte_start);
+                let callee = children.first().map(element_span);
+                let text = callee
+                    .and_then(|span| self.source.slice(&span))
+                    .unwrap_or_default();
+                let reference = callee.and_then(|span| self.references.get(&span.byte_start));
                 let global =
                     reference.is_some_and(|&at| self.bindings.references[at].declaration.is_none());
                 match (global, text) {
@@ -240,8 +258,12 @@ impl<'a> Typer<'a> {
                         let argument = argument.and_then(|argument| self.type_of(argument));
                         argument.and_then(|shape| self.keys_of(shape, text == "Object.entries"))
                     }
-                    _ => None,
+                    _ => self.call(node, &children),
                 }
+            }
+            NodeKind::NewExpr => {
+                self.construction(node, &children);
+                None
             }
             NodeKind::MemberExpr | NodeKind::IndexExpr => {
                 let (ty, short) = self.chain(node)?;
@@ -289,6 +311,37 @@ impl<'a> Typer<'a> {
             let found = Diagnostic::new(code, self.source.path(), span, message);
             self.diagnostics.push(found);
         }
+    }
+
+    /// Pushes a finding about operands, the first time: when an operand is a
+    /// parameter, each call that gave it a part of its type is a related location.
+    pub(crate) fn report_about(
+        &mut self,
+        first: bool,
+        code: Code,
+        span: Span,
+        message: String,
+        operands: &[Element<'_>],
+    ) {
+        if !first {
+            return;
+        }
+        let mut found = Diagnostic::new(code, self.source.path(), span, message);
+        for operand in operands {
+            let start = element_span(operand).byte_start;
+            let reference = self.references.get(&start);
+            let declaration = reference.and_then(|&at| self.bindings.references[at].declaration);
+            let sites = declaration.and_then(|declaration| self.facts.sites.get(&declaration));
+            for site in sites.into_iter().flatten() {
+                let name = |class: ClassId| self.class_name(class);
+                let note = format!(
+                    "passed a `{}` here",
+                    Printer::new(self.types, &name).print(site.ty)
+                );
+                found = found.with_related(site.path.clone(), site.span, note);
+            }
+        }
+        self.diagnostics.push(found);
     }
 
     /// The type of an object literal (SPEC.md §4.6): its exact shape, a key with a
@@ -564,9 +617,14 @@ pub fn check_expressions(
         judge.member_access(node, &children);
         judge.empty_untyped(node);
         judge.self_assignment(node, &children);
+        judge.mixed_returns(node);
         let operates = matches!(
             node.kind(),
-            NodeKind::BinaryExpr | NodeKind::UnaryExpr | NodeKind::CondExpr
+            NodeKind::BinaryExpr
+                | NodeKind::UnaryExpr
+                | NodeKind::CondExpr
+                | NodeKind::CallExpr
+                | NodeKind::NewExpr
         );
         if operates {
             judge.type_of(Element::Node(node));

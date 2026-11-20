@@ -11,5 +11,5 @@ import { f } from "./names.js"
 
   function g() {}
   class C {}
-  g(new C())
+  f(g, new C())
 }

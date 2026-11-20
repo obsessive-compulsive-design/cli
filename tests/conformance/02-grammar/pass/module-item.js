@@ -1,5 +1,7 @@
 // ModuleItem: an export declaration, a declaration, a statement.
-export function f() {}
+export function f(m) {
+  return m
+}
 
 const n = 1
 

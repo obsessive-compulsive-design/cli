@@ -3101,7 +3101,55 @@ mutated only in a test file is mutated program-wide.
 `(a + b) & 1` with int32 `a`, `b` is E104 (the sum is `number`).
 
 #### US-089 Function signatures from bodies and call sites
-§3.2, §4.4, E111, E136, E139 · After: US-088, US-067 · Size: L · M1
+§3.2, §4.4, E111, E136, E139 · After: US-088, US-067 · Size: L · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-infer::functions`, with `infer_bindings` and `infer_program`
+> reworked around it, **for functions declared by name**: `function f() {}` and
+> `const`/`let f = (…) => …`. A parameter is the union of what is passed for it at
+> every call of the function by name (literals loosened), with its default; optional
+> when it has a default and some call leaves it out; a rest is an array of what is
+> passed past the others. The return is the union of the body's `return` values
+> (top-level literals widened, the literals of shapes kept), `undefined` for a body
+> that returns nothing, `never` for one that only throws, a promise of that for an
+> `async` function. A call has the type of what it calls: by name what the function
+> returns, else what the callee's type returns, the union for a union of functions.
+> Recursion: every function returns `never` to begin with and the rounds go on until
+> nothing changes; a parameter may be typed from the calls that have a type so far;
+> what does not settle, or still lacks a call's type at the end, is dropped and
+> everything is settled again without it. `infer_program` infers the modules in
+> rounds, each given the call sites the round before found in the others, so a
+> function called with a `string` in one module and a number in another has both.
+> Findings: `E111` for a body that returns a value on some paths only (at the bare
+> `return`, or at the first valued one when the body may run off its end), for
+> methods and function expressions too; `E136` for a count of arguments outside what
+> the function takes; `E139` for calling a value that is no function and for `new`
+> on a function or a typed value; an `E138` on an operator whose operand is a
+> parameter carries each call site of the parameter as a related location, across
+> modules. `Facts` gained `returns`, `arity`, `parameters`, `rest`, `sites`,
+> `external_sites` and `passed`. Both §13.7 examples infer their printed signatures.
+> **Decisions and limits:** (1) methods and constructors are not typed here: classes
+> have no types yet (US-091); their `E111` is decided, since it needs none; (2) calls
+> are followed by name: an argument passed through an alias, a union of functions or a
+> namespace does not reach the parameter, though such a call is typed and its count
+> judged; (3) an arrow that is a value (`o.f`, a callback, `() => () => 1`) has no
+> type yet, so a callback a builtin invokes is not a call site yet: that waits for
+> the builtins' signatures (US-095 on); (4) a function with a parameter nothing is
+> passed for, a destructured parameter or a parameter the body assigns has no type,
+> but its calls still have what it returns and its count is still judged; US-090
+> generalizes the first; (5) "does not run off its end" is: the last statement that
+> is no hoisted function declaration returns or throws, or is a block, an `if` with
+> an `else`, a `switch` with a `default`, or a `try` whose paths all do; loops are
+> not followed; (6) a generator has no type yet; `await` is US-108's; (7) the
+> terminating widening is giving up: a type still changing after as many rounds as
+> the file has declarations (eight at least) is dropped, alone; (8) `infer_program`
+> is still not part of `check_files`, so cross-module call sites type nothing in the
+> per-file findings yet. Fixtures: `04-functions/E111` (3), `E136` (3), `E139` (3),
+> `E138/union-parameter.js`; three `02-grammar/pass` fixtures passed arguments to
+> functions that take none, and `02-lexical/E001/near-miss-line-starts.js` added a
+> function to a number. Verified: fmt, both clippy passes, audit, tests, doc tests,
+> 100% line and region coverage, `cargo mutants --in-diff` 163 caught, 0 missed, 36
+> unviable, 1 timeout (the outer settle loop made endless); 10 000 call sites are
+> checked against 2 500 for linear time.
 
 **Scope.** Program-wide call-site collection per function (declaration, arrow, method,
 constructor) before bodies are checked; parameter type = union of argument types at all

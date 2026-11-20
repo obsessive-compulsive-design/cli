@@ -94,22 +94,17 @@ impl<'t> Collector<'_, 't> {
 
     /// The parameters of the function whose parts are `children`, in order.
     fn parameters(&self, children: &[Element<'t>]) -> Vec<Option<usize>> {
-        // The list is the first node of a function: `(a, b)`, or `a` alone.
+        // The list is the first node of a function.
         let list = children.iter().find_map(|child| match child {
             Element::Node(list) => Some(*list),
             Element::Token(_) => None,
         });
-        let parts = list.into_iter().flat_map(NodeRef::children);
-        parts
-            .filter(|part| punct(Some(part)).is_none())
-            .map(|part| match part {
-                Element::Node(parameter) => {
-                    let plain = parameter.kind() == NodeKind::Param;
-                    let name = parameter.children().next();
-                    self.declares(name.as_ref()).filter(|_| plain)
-                }
-                // `x => …`: the one name, without parentheses.
-                name @ Element::Token(_) => self.declares(Some(&name)),
+        let listed = list.into_iter().flat_map(nodes);
+        listed
+            .map(|parameter| {
+                let plain = parameter.kind() == NodeKind::Param;
+                let name = parameter.children().next();
+                self.declares(name.as_ref()).filter(|_| plain)
             })
             .collect()
     }

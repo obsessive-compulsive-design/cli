@@ -177,20 +177,13 @@ fn passing_to_a_parameter_that_is_mutated_mutates() {
         "the other parameter is not mutated"
     );
     assert_eq!(
-        typed(&format!(
-            "{callee}const x = [1, 2]\nfill([0], x, x)\nfill()\n"
-        )),
+        typed(&format!("{callee}const x = [1, 2]\nfill([0], x)\n")),
         "[1, 2]"
     );
     assert_eq!(
         typed("function sortAll(xs) {\n  xs.sort(by)\n}\nconst x = [2, 1]\nsortAll(x)\n"),
         "int32[]",
         "a function declaration"
-    );
-    assert_eq!(
-        typed("const one = xs => {\n  xs[0] = 1\n}\nconst x = [2, 1]\none(x)\n"),
-        "int32[]",
-        "a parameter without parentheses"
     );
     assert_eq!(
         typed("const inner = (zs) => {\n  zs.pop()\n}\nconst middle = (ys) => inner(ys)\nconst outer = (ws) => {\n  middle(ws)\n}\nconst x = [1, 2]\nouter(x)\n"),

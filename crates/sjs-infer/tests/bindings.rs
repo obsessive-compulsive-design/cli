@@ -119,7 +119,7 @@ fn a_const_has_the_type_of_its_value() {
             "const f = () => {\n  const inner = 1\n  {\n    const deep = \"a\"\n  }\n}\n",
             &["inner", "deep", "f"]
         ),
-        ["1", "\"a\"", "?"],
+        ["1", "\"a\"", "(): undefined"],
         "in any scope"
     );
 }

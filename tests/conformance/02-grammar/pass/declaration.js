@@ -9,6 +9,6 @@ class C {}
 
 b += a
 
-f(new C())
+f()
 
-export { b }
+export { b, C }

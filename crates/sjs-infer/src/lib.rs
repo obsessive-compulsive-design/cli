@@ -12,10 +12,13 @@
 //! and what fills an empty collection: a `const` array literal nothing mutates is a
 //! tuple, an empty `[]`, `new Map()` or `new Set()` is typed by what is put into it and
 //! is E110 when nothing is, and assigning `length` is E133. US-088 types the operators
-//! of SPEC.md §4.1 and judges their operands (E138, E104, E105, E120).
+//! of SPEC.md §4.1 and judges their operands (E138, E104, E105, E120). US-089 infers the
+//! signatures of functions declared by name, from their bodies and from every call
+//! of them, and judges calls (E111, E136, E139).
 
 mod bindings;
 mod expressions;
+mod functions;
 mod members;
 mod mutation;
 mod operators;
@@ -23,4 +26,5 @@ mod program;
 
 pub use bindings::infer_bindings;
 pub use expressions::{check_expressions, Facts, Typer};
+pub use functions::{Passed, Site};
 pub use program::{infer_program, ModuleTypes};

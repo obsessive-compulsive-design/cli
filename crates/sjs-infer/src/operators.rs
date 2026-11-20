@@ -318,7 +318,7 @@ impl Typer<'_> {
                 let Some(sides) = lt.zip(rt) else {
                     return compares.then_some(TypeId::BOOLEAN);
                 };
-                self.numeric(first, (&operator, sign), sides)
+                self.numeric(first, (&operator, sign), sides, &[left, right])
             }
         }
     }
@@ -329,10 +329,15 @@ impl Typer<'_> {
         first: bool,
         (operator, sign): (&Element<'_>, Punct),
         (lt, rt): (TypeId, TypeId),
+        operands: &[Element<'_>],
     ) -> Option<TypeId> {
         let at = element_span_of(operator);
         let symbol = self.source.slice(&at).unwrap_or_default().to_owned();
         let compares = matches!(sign, Punct::Lt | Punct::Gt | Punct::LtEq | Punct::GtEq);
+        // What never comes gives nothing: a function seen calling itself, at first.
+        if lt == TypeId::NEVER || rt == TypeId::NEVER {
+            return Some(TypeId::NEVER);
+        }
         let kinds = (self.kind(lt), self.kind(rt));
         let numbers = |kind: Kind| matches!(kind, Kind::Number | Kind::Int32);
         let both_numbers = numbers(kinds.0) && numbers(kinds.1);
@@ -391,7 +396,7 @@ impl Typer<'_> {
                     ),
                 )
             };
-            self.report(first, code, at, message);
+            self.report_about(first, code, at, message, operands);
         }
         result.or(compares.then_some(TypeId::BOOLEAN))
     }

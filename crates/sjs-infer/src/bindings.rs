@@ -2,7 +2,8 @@
 //! the union of every value assigned to it, without their literals; a name a pattern
 //! declares, what the pattern takes from the value it is given.
 
-use crate::expressions::{nodes, punct, Facts, Typer};
+use crate::expressions::{element_span_of, nodes, punct, Facts, Typer};
+use crate::functions::{declared_in, Call, Declared, Passed, Site};
 use crate::mutation::{arguments, settled, uses_of, Fill};
 use sjs_bind::{Bindings, DeclKind};
 use sjs_diag::SourceFile;
@@ -419,17 +420,12 @@ fn contributed(
     }
 }
 
-/// The type of each `const` and `let` of the file that has a value, added to `facts`:
-/// the declarations whose type can be told from the expressions [`Typer`] types and
-/// from one another.
-#[must_use]
-pub fn infer_bindings(
-    source: &SourceFile,
-    tree: &SyntaxTree,
-    bindings: &Bindings,
-    facts: &Facts,
-    types: &mut Types,
-) -> Facts {
+/// What every binding of the file is given.
+fn collected<'a, 't>(
+    source: &'a SourceFile,
+    tree: &'t SyntaxTree,
+    bindings: &'a Bindings,
+) -> Collector<'a, 't> {
     let spans = |starts: Vec<usize>| -> BTreeMap<usize, usize> {
         starts
             .into_iter()
@@ -458,6 +454,205 @@ pub fn infer_bindings(
         handled: BTreeSet::new(),
     };
     collector.collect(tree.root());
+    collector
+}
+
+/// Works out one function for a round: its parameters from their call sites, what it
+/// returns, and its type once both are known, from `known` into `next`.
+fn typed_function(
+    judge: &mut Typer<'_>,
+    function: &Declared<'_>,
+    inputs: &Inputs<'_, '_>,
+    (known, unknown): (&Facts, &BTreeSet<usize>),
+    (next, partial): (&mut Facts, &mut BTreeSet<usize>),
+) {
+    for (parameter, ty, complete, sites) in judge.parameter_types(function, inputs.calls, known) {
+        next.sites.insert(parameter, sites);
+        if unknown.contains(&parameter) {
+            continue;
+        }
+        // From the calls that have a type so far: one that has none yet may be a
+        // call of the function by itself, which the next round types.
+        let is_rest = function
+            .parameters
+            .iter()
+            .any(|p| p.rest && p.declaration == Some(parameter));
+        let held = ty.map(|ty| {
+            if is_rest {
+                next.rest.insert(parameter, ty);
+                let rest = Type::Array {
+                    element: ty,
+                    mutated: false,
+                };
+                judge.types_mut().intern(rest)
+            } else {
+                ty
+            }
+        });
+        next.declarations.extend(held.map(|held| (parameter, held)));
+        if !complete {
+            partial.insert(parameter);
+        }
+    }
+    // How many arguments it takes is plain from how it is written.
+    let (ty, arity) = judge.signature(function, known, inputs.calls);
+    next.arity.insert(function.name, arity);
+    if unknown.contains(&function.name) {
+        return;
+    }
+    // A body of no type yet keeps what it was taken to return, for the rounds to go
+    // on; if it has none in the end, the function is given up on.
+    let returned = judge.returned(function);
+    if returned.is_none() {
+        partial.insert(function.name);
+    }
+    let returned = returned.or(known.returns.get(&function.name).copied());
+    next.returns
+        .extend(returned.map(|returned| (function.name, returned)));
+    next.declarations.extend(ty.map(|ty| (function.name, ty)));
+}
+
+/// What a file's declarations are typed from.
+struct Inputs<'a, 't> {
+    source: &'a SourceFile,
+    tree: &'a SyntaxTree,
+    bindings: &'a Bindings,
+    facts: &'a Facts,
+    given: &'a BTreeMap<usize, Vec<Given<'t>>>,
+    followed: &'a [usize],
+    mutated: &'a BTreeSet<usize>,
+    fills: &'a BTreeMap<usize, Vec<Fill<'t>>>,
+    functions: &'a [Declared<'t>],
+    calls: &'a [Call<'t>],
+}
+
+/// Types every declaration but the `unknown` ones, round after round until nothing
+/// changes: each from what the round before knew. Returns what is known, and the
+/// declarations to give up on: a parameter some call of which has no type, and what
+/// still changed in the last round (a type that grows without end).
+fn rounds(
+    inputs: &Inputs<'_, '_>,
+    unknown: &BTreeSet<usize>,
+    types: &mut Types,
+) -> (Facts, BTreeSet<usize>) {
+    let bindings = inputs.bindings;
+    // Enough rounds for a chain of declarations each known from the next.
+    let last = bindings.declarations.len().max(ROUNDS);
+    let mut known = inputs.facts.clone();
+    // A function that calls itself returns, to begin with, nothing at all.
+    let names = inputs
+        .functions
+        .iter()
+        .map(|function| (function.name, TypeId::NEVER));
+    known
+        .returns
+        .extend(names.filter(|(name, _)| !unknown.contains(name)));
+    let mut dropped = BTreeSet::new();
+    for round in 0..=last {
+        let mut next = inputs.facts.clone();
+        let mut partial = BTreeSet::new();
+        let mut judge = Typer::new(inputs.source, inputs.tree, bindings, &known, types);
+        for &at in inputs.followed.iter().filter(|at| !unknown.contains(at)) {
+            let holder = Holder {
+                constant: bindings.declarations[at].kind == DeclKind::Const,
+                mutated: inputs.mutated.contains(&at),
+                fills: inputs.fills.get(&at).map_or(&[][..], Vec::as_slice),
+            };
+            let own = known.declarations.get(&at).copied();
+            // In the first round a binding is what it is declared with.
+            let counted = inputs.given[&at]
+                .iter()
+                .filter(|given| round > 0 || matches!(given, Given::Declared(..)));
+            let parts: Option<Vec<TypeId>> = counted
+                .map(|given| contributed(&mut judge, &known, given, &holder, own))
+                .collect();
+            // A binding given something of no type yet has none yet either.
+            let ty = parts.map(|parts| judge.types_mut().union(parts));
+            next.declarations.extend(ty.map(|ty| (at, ty)));
+        }
+        for function in inputs.functions {
+            typed_function(
+                &mut judge,
+                function,
+                inputs,
+                (&known, unknown),
+                (&mut next, &mut partial),
+            );
+        }
+        let all = 0..bindings.declarations.len();
+        let changed: Vec<usize> = all
+            .filter(|at| {
+                next.declarations.get(at) != known.declarations.get(at)
+                    || next.returns.get(at) != known.returns.get(at)
+            })
+            .collect();
+        known = next;
+        if changed.is_empty() || round == last {
+            // Still changing in the last round: a type that grows without end.
+            dropped = partial;
+            dropped.extend(changed);
+            break;
+        }
+    }
+    (known, dropped)
+}
+
+/// Records in `known` what the file passes to the functions it imports, and the
+/// parameters of its own functions, for the other files of the program.
+fn outgoing(
+    source: &SourceFile,
+    tree: &SyntaxTree,
+    bindings: &Bindings,
+    known: &mut Facts,
+    types: &mut Types,
+    (functions, calls): (&[Declared<'_>], &[Call<'_>]),
+) {
+    let mut passed = Vec::new();
+    let facts = known.clone();
+    let mut judge = Typer::new(source, tree, bindings, &facts, types);
+    let imported = calls
+        .iter()
+        .filter(|call| bindings.declarations[call.callee].kind == DeclKind::Import);
+    for call in imported {
+        for (position, argument) in call.passed.iter().enumerate() {
+            let ty = judge.type_of(*argument).map(|ty| judge.loosened(ty));
+            passed.extend(ty.map(|ty| Passed {
+                callee: call.callee,
+                position,
+                site: Site {
+                    path: source.path().to_owned(),
+                    span: element_span_of(argument),
+                    ty,
+                },
+            }));
+        }
+    }
+    known.passed = passed;
+    let listed = |function: &Declared<'_>| -> Vec<Option<usize>> {
+        let plain = function
+            .parameters
+            .iter()
+            .filter(|parameter| !parameter.rest);
+        plain.map(|parameter| parameter.declaration).collect()
+    };
+    known.parameters = functions
+        .iter()
+        .map(|function| (function.name, listed(function)))
+        .collect();
+}
+
+/// The type of each `const` and `let` of the file that has a value, added to `facts`:
+/// the declarations whose type can be told from the expressions [`Typer`] types and
+/// from one another.
+#[must_use]
+pub fn infer_bindings(
+    source: &SourceFile,
+    tree: &SyntaxTree,
+    bindings: &Bindings,
+    facts: &Facts,
+    types: &mut Types,
+) -> Facts {
+    let mut collector = collected(source, tree, bindings);
     // What the file mutates, with what `facts` says is mutated from elsewhere.
     let uses = uses_of(source, tree, bindings);
     let outright: BTreeSet<usize> = uses.direct.union(&facts.mutated).copied().collect();
@@ -490,42 +685,37 @@ pub fn infer_bindings(
         .copied()
         .filter(|at| !unknown.contains(at))
         .collect();
-    // Enough rounds for a chain of bindings each known from the next.
-    let last = followed.len().max(ROUNDS);
-    let mut known = facts.clone();
-    for round in 0..=last {
-        let mut next = facts.clone();
-        for &at in &followed {
-            let given = &collector.given[&at];
-            let holder = Holder {
-                constant: bindings.declarations[at].kind == DeclKind::Const,
-                mutated: mutated.contains(&at),
-                fills: uses.fills.get(&at).map_or(&[][..], Vec::as_slice),
-            };
-            let mut judge = Typer::new(source, tree, bindings, &known, types);
-            let own = known.declarations.get(&at).copied();
-            // In the first round a binding is what it is declared with.
-            let counted = given
-                .iter()
-                .filter(|given| round > 0 || matches!(given, Given::Declared(..)));
-            let parts: Option<Vec<TypeId>> = counted
-                .map(|given| contributed(&mut judge, &known, given, &holder, own))
-                .collect();
-            // A binding given something of no type yet has none yet either.
-            let ty = parts.map(|parts| types.union(parts));
-            next.declarations.extend(ty.map(|ty| (at, ty)));
+    let (functions, calls) = declared_in(source, tree, bindings);
+    let inputs = Inputs {
+        source,
+        tree,
+        bindings,
+        facts,
+        given: &collector.given,
+        followed: &followed,
+        mutated: &mutated,
+        fills: &uses.fills,
+        functions: &functions,
+        calls: &calls,
+    };
+    // What cannot be settled is given up on, and the rest is settled again without
+    // it, so that nothing is typed from a type that was dropped.
+    let mut known = loop {
+        let (settled, dropped) = rounds(&inputs, &unknown, types);
+        let before = unknown.len();
+        unknown.extend(dropped);
+        if unknown.len() == before {
+            break settled;
         }
-        let differs = |at: &&usize| next.declarations.get(at) != known.declarations.get(at);
-        let changed: Vec<usize> = followed.iter().filter(differs).copied().collect();
-        if round == last {
-            // Still changing: a type that grows without end.
-            unknown.extend(changed.iter().copied());
-        }
-        known = next;
-        if changed.is_empty() {
-            break;
-        }
-    }
+    };
+    outgoing(
+        source,
+        tree,
+        bindings,
+        &mut known,
+        types,
+        (&functions, &calls),
+    );
     for at in unknown {
         known.declarations.remove(&at);
     }

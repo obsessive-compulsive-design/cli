@@ -3,9 +3,11 @@
 
 use crate::bindings::infer_bindings;
 use crate::expressions::Facts;
+use crate::functions::Site;
 use crate::mutation::{settled, uses_of};
-use sjs_bind::{bind, Bindings, Bound, Content, DeclKind, Links, ModuleGraph};
-use sjs_diag::Code;
+use sjs_bind::{bind, Bindings, Bound, Content, DeclKind, Links, Module, ModuleGraph};
+use sjs_diag::{Code, SourceFile};
+use sjs_syntax::SyntaxTree;
 use sjs_types::{Property, Type, TypeId, Types};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -18,6 +20,9 @@ pub struct ModuleTypes {
     /// The types of its declarations.
     pub facts: Facts,
 }
+
+/// How many times the modules are inferred from one another at most.
+const ROUNDS: usize = 8;
 
 struct Program<'a> {
     links: &'a Links,
@@ -67,25 +72,11 @@ impl Program<'_> {
     }
 }
 
-/// Infers every module of the program, each after the modules it imports
-/// ([`ModuleGraph::evaluation_order`]): an imported name has the type of the
-/// declaration it is bound to, a namespace import the shape of its module's exports
-/// (once each has a type), a JSON import `unknown`. A module the grammar rejects is
-/// left out, and so what is imported from it has no type; nor has what modules that
-/// import one another take from each other. What is mutated is settled program-wide
-/// first: a binding mutated in any module, or passed in any module to a parameter its
-/// function mutates, is mutated wherever it is imported.
-pub fn infer_program(
-    graph: &ModuleGraph,
-    links: &Links,
-    types: &mut Types,
-) -> BTreeMap<PathBuf, ModuleTypes> {
-    let mut program = Program {
-        links,
-        modules: BTreeMap::new(),
-        shaping: BTreeSet::new(),
-    };
-    // The modules the grammar accepts, in the order they are inferred in.
+/// A module the grammar accepts, with its text, its tree and its names.
+type Scanned<'a> = (&'a Module, &'a SourceFile, &'a SyntaxTree, Bindings);
+
+/// The modules the grammar accepts, in the order they are inferred in.
+fn accepted(graph: &ModuleGraph) -> Vec<Scanned<'_>> {
     let mut scanned = Vec::new();
     for module in graph.evaluation_order() {
         let Content::Script {
@@ -104,6 +95,87 @@ pub fn infer_program(
             scanned.push((module, source, tree, bindings));
         }
     }
+    scanned
+}
+
+/// The call sites each module's parameters have in the other modules, as the round
+/// before found them: for the module at each place of `paths`, by parameter.
+fn sites_elsewhere(
+    paths: &[&Path],
+    previous: &BTreeMap<PathBuf, ModuleTypes>,
+    canonical: &dyn Fn(usize, usize) -> (usize, usize),
+) -> Vec<BTreeMap<usize, Vec<Site>>> {
+    let mut external: Vec<BTreeMap<usize, Vec<Site>>> = vec![BTreeMap::new(); paths.len()];
+    for (at, path) in paths.iter().enumerate() {
+        let passed = previous.get(*path).map(|inferred| &inferred.facts.passed);
+        for passed in passed.into_iter().flatten() {
+            let (home, function) = canonical(at, passed.callee);
+            let declared = previous.get(paths[home]);
+            let parameters = declared.and_then(|inferred| inferred.facts.parameters.get(&function));
+            let parameter =
+                parameters.and_then(|list| list.get(passed.position).copied().flatten());
+            if let Some(parameter) = parameter {
+                external[home]
+                    .entry(parameter)
+                    .or_default()
+                    .push(passed.site.clone());
+            }
+        }
+    }
+    external
+}
+
+/// What is mutated, program-wide: each as the module and declaration `canonical`
+/// gives for it, so that a binding is one binding wherever it is imported.
+fn mutated_anywhere(
+    scanned: &[Scanned<'_>],
+    canonical: &dyn Fn(usize, usize) -> (usize, usize),
+) -> BTreeSet<(usize, usize)> {
+    let uses: Vec<_> = scanned
+        .iter()
+        .map(|(_, source, tree, bindings)| uses_of(source, tree, bindings))
+        .collect();
+    let mut outright = BTreeSet::new();
+    let mut calls = Vec::new();
+    for (at, used) in uses.iter().enumerate() {
+        outright.extend(
+            used.direct
+                .iter()
+                .map(|&declaration| canonical(at, declaration)),
+        );
+        calls.extend(used.calls.iter().map(|&(argument, callee, place)| {
+            (canonical(at, argument), canonical(at, callee), place)
+        }));
+    }
+    let parameter = |(at, callee): (usize, usize), place: usize| {
+        let parameters = uses[at].functions.get(&callee);
+        let taken = parameters.and_then(|parameters| parameters.get(place).copied().flatten());
+        taken.map(|taken| (at, taken))
+    };
+    settled(outright, &calls, &parameter)
+}
+
+/// Infers every module of the program, each after the modules it imports
+/// ([`ModuleGraph::evaluation_order`]): an imported name has the type of the
+/// declaration it is bound to, a namespace import the shape of its module's exports
+/// (once each has a type), a JSON import `unknown`. A module the grammar rejects is
+/// left out, and so what is imported from it has no type; nor has what modules that
+/// import one another take from each other. What is mutated is settled program-wide
+/// first: a binding mutated in any module, or passed in any module to a parameter its
+/// function mutates, is mutated wherever it is imported. A function's parameters
+/// are what every module passes for them: the modules are inferred in rounds, each
+/// with the call sites the round before found in the others, until nothing changes.
+pub fn infer_program(
+    graph: &ModuleGraph,
+    links: &Links,
+    types: &mut Types,
+) -> BTreeMap<PathBuf, ModuleTypes> {
+    let mut program = Program {
+        links,
+        modules: BTreeMap::new(),
+        shaping: BTreeSet::new(),
+    };
+    let scanned = accepted(graph);
     // What is mutated, program-wide: a binding is one binding wherever it is imported.
     let place_of: BTreeMap<&Path, usize> = scanned
         .iter()
@@ -127,46 +199,61 @@ pub fn infer_program(
         });
         found.unwrap_or((at, declaration))
     };
-    let uses: Vec<_> = scanned
-        .iter()
-        .map(|(_, source, tree, bindings)| uses_of(source, tree, bindings))
-        .collect();
-    let mut outright = BTreeSet::new();
-    let mut calls = Vec::new();
-    for (at, used) in uses.iter().enumerate() {
-        outright.extend(
-            used.direct
-                .iter()
-                .map(|&declaration| canonical(at, declaration)),
-        );
-        calls.extend(used.calls.iter().map(|&(argument, callee, place)| {
-            (canonical(at, argument), canonical(at, callee), place)
-        }));
-    }
-    let parameter = |(at, callee): (usize, usize), place: usize| {
-        let parameters = uses[at].functions.get(&callee);
-        let taken = parameters.and_then(|parameters| parameters.get(place).copied().flatten());
-        taken.map(|taken| (at, taken))
-    };
-    let mutated = settled(outright, &calls, &parameter);
-    for (at, (module, source, tree, bindings)) in scanned.iter().enumerate() {
-        let mut facts = Facts::default();
-        let declarations = 0..bindings.declarations.len();
-        facts.mutated = declarations
-            .filter(|&declaration| mutated.contains(&canonical(at, declaration)))
+    let mutated = mutated_anywhere(&scanned, &canonical);
+    // A parameter is what every module passes for it, and what a module passes
+    // depends on the others: the modules are inferred until nothing changes.
+    let mut previous: BTreeMap<PathBuf, ModuleTypes> = BTreeMap::new();
+    for _ in 0..ROUNDS {
+        let paths: Vec<&Path> = scanned
+            .iter()
+            .map(|(module, ..)| module.path.as_path())
             .collect();
-        let imports = bindings.declarations.iter().enumerate();
-        for (index, declaration) in imports.filter(|(_, d)| d.kind == DeclKind::Import) {
-            let bound = links.import(&module.path, &declaration.name);
-            let ty = bound.and_then(|bound| program.type_of(&bound, types));
-            facts.declarations.extend(ty.map(|ty| (index, ty)));
+        let mut external = sites_elsewhere(&paths, &previous, &canonical);
+        program.modules.clear();
+        for (at, (module, source, tree, bindings)) in scanned.iter().enumerate() {
+            let mut facts = Facts::default();
+            let declarations = 0..bindings.declarations.len();
+            facts.mutated = declarations
+                .filter(|&declaration| mutated.contains(&canonical(at, declaration)))
+                .collect();
+            facts.external_sites = std::mem::take(&mut external[at]);
+            for (index, declaration) in bindings.declarations.iter().enumerate() {
+                if declaration.kind != DeclKind::Import {
+                    continue;
+                }
+                let bound = links.import(&module.path, &declaration.name);
+                let ty = bound
+                    .as_ref()
+                    .and_then(|bound| program.type_of(bound, types));
+                facts.declarations.extend(ty.map(|ty| (index, ty)));
+                // A function imported is called as it is declared.
+                let (home, function) = canonical(at, index);
+                let declared = program.modules.get(&scanned[home].0.path);
+                let returns = declared.and_then(|inferred| inferred.facts.returns.get(&function));
+                let arity = declared.and_then(|inferred| inferred.facts.arity.get(&function));
+                facts
+                    .returns
+                    .extend(returns.map(|&returns| (index, returns)));
+                facts.arity.extend(arity.map(|&arity| (index, arity)));
+            }
+            let facts = infer_bindings(source, tree, bindings, &facts, types);
+            let inferred = ModuleTypes {
+                bindings: bindings.clone(),
+                facts,
+            };
+            program.modules.insert(module.path.clone(), inferred);
         }
-        let facts = infer_bindings(source, tree, bindings, &facts, types);
-        let inferred = ModuleTypes {
-            bindings: bindings.clone(),
-            facts,
+        let snapshot = |modules: &BTreeMap<PathBuf, ModuleTypes>| -> Vec<_> {
+            let facts = modules.values().map(|inferred| &inferred.facts);
+            facts
+                .map(|facts| (facts.declarations.clone(), facts.returns.clone()))
+                .collect()
         };
-        program.modules.insert(module.path.clone(), inferred);
+        let settled = snapshot(&program.modules) == snapshot(&previous);
+        previous.clone_from(&program.modules);
+        if settled {
+            break;
+        }
     }
     program.modules
 }
