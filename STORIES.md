@@ -2681,13 +2681,14 @@ affect order; a JSON module is pure.
 > **Decisions:** (1) the canonical order is structural, never by id, so the members of
 > a union are in one order whatever was interned first (the printer of US-081 and
 > §3.2's order-independence need that): primitives, literals by value (numbers,
-> bigints, strings, `false`, `true`), shapes, dictionaries, arrays, tuples, functions,
+> bigints, strings, `true`, `false`: amended by US-081), shapes, dictionaries, arrays, tuples, functions,
 > classes, variables, promises, iterators, generators, collections, then `null` and
 > `undefined` last, so `string | undefined` reads that way; (2) `true | false` is
 > `boolean`: without it one set of values would have two ids; (3) a number literal's
 > primitive is `int32` when it is an integer in range and not `-0`, else `number`;
 > an int32 literal is absorbed by `int32` and by `number`, any other number literal
-> by `number` only; (4) a shape is interned with its keys sorted, and of a key given
+> by `number` only; (4) a shape is interned with its keys sorted (US-081: the keys
+> that retain a literal first), and of a key given
 > twice the last stays (E134 is the checker's); (5) `Type::Union` given to `intern`
 > goes through the normalizer, so no unnormalized union can be interned; (6) a mutated
 > and an unmutated array of one element type are two types, as are an optional
@@ -2722,7 +2723,32 @@ literals; key order does not change a shape's identity; tuple vs array differ; o
 param vs `T | undefined` param differ; `null` never absorbs into `undefined`.
 
 #### US-081 Type printer
-§13.7 notation, §10.6 · After: US-080 · Size: S · M1
+§13.7 notation, §10.6 · After: US-080 · Size: S · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-types::printer`: `Printer::new(&types, &class_name)`, `print(id)`
+> and `signature(name, param_names, id)` (`greet(name: string, opts: { loud: boolean
+> }): string` for a function, `name: type` otherwise); `Types::ids` lists the interned
+> set. Both §13.7 examples print exactly. **Decisions:** (1) a function type carries no
+> parameter names (two functions that differ in them are one type), so `signature`
+> takes them from the declaration and a nested function type names them by place: `a`,
+> `b`, … `z`, `p26`, …, and `rest`; (2) so that printing is injective: an array the
+> program never mutates is `readonly T[]` and a mutated one `T[]`; `int32` prints as
+> `int32`; a key whose retained-literal flag disagrees with its type is marked
+> (`literal key: number`, `mutable key: "a"`), the usual cases being unmarked; a
+> union, a function or a `readonly` array before `[]` is parenthesised, as is a
+> function in a union; (3) literals as JavaScript writes them: `-0`, `1e+21`, `1e-7`,
+> `10n`, double-quoted strings with `\"`, `\\`, `\n`, `\r`, `\t` and `\u{…}` for other
+> control characters; (4) a key that is no ASCII identifier is quoted; type variables
+> are `T`, `U`, … `Z`, then `T7`, …; `Iterator`/`AsyncIterator`, `Generator<Y,
+> R>`/`AsyncGenerator`, `Map`/`Set`/`WeakMap` with their arguments; (5) **the
+> canonical order of US-080 changed for the second §13.7 example**: a shape keeps the
+> keys that retain a literal first (the discriminants), each group by key, shapes are
+> compared key by key (key, flag, type) and `true` comes before `false`, which gives
+> `{ ok: true, value: Config } | { ok: false, error: ParseError }`. Tests: a snapshot
+> of every constructor (`tests/snapshots/notation.snap`), the spec's examples, and a
+> property test that no two interned types print alike; the type generator moved to
+> `tests/common`. Verified: fmt, both clippy passes, audit, tests, doc tests, 100% line
+> and region coverage, `cargo mutants --in-diff` 50 caught, 0 missed, 9 unviable.
 
 **Done when**
 - The two §13.7 examples print exactly; unions in canonical order with ` | `; literals as

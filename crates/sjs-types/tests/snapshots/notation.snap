@@ -1,0 +1,93 @@
+number
+int32
+bigint
+string
+boolean
+undefined
+null
+unknown
+never
+0
+-0
+1
+-1.5
+1000
+123456789.25
+1e+21
+1.5e+22
+0.000001
+1e-7
+2.5e-9
+-1e+300
+NaN
+Infinity
+-Infinity
+999999999999999900000
+0n
+10n
+-7n
+123456789012345678901234567890n
+""
+"a"
+"it's"
+"say \"hi\""
+"back\\slash"
+"line\nbreak\r\ttab"
+"bell\u{7}"
+"naïve ☃"
+true
+false
+{}
+{ a: number }
+{ kind: "a", size: 1, next: string | undefined }
+{ both: 1 | "a", mutable held: 1 | "a" }
+{ literal kept: number, literal part: number | "a", mutable loose: "a" }
+{ "": number, $ok_1: number, "1st": number, "not-an-identifier": number, "with \"quotes\"": number, "é": number }
+{ [key: string]: number }
+{ [key: string]: string | undefined }
+number[]
+readonly number[]
+(string | undefined)[]
+readonly (string | undefined)[]
+((a: number): string)[]
+number[][]
+readonly number[][]
+(readonly number[])[]
+readonly (readonly number[])[]
+[]
+[number, string]
+[string | undefined, (a: number): string, number[]]
+(): undefined
+(a: number): string
+<T>(a: T): T
+<T, U>(a: T, b?: U, ...rest: U[]): T
+(a?: number): number
+(...rest: number[]): number
+(a: string, ...rest: (string | undefined)[]): number
+(...rest: ((a: number): string)[]): number
+(...rest: (readonly number[])[]): number
+(a: (a: number): string): (a: number): string
+(): string | undefined
+((a: number): string) | undefined
+number | ((): string | undefined) | ((a: number): string)
+<T7, Z>(): number
+(a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number, p26: number, p27: number): number
+Node
+Class9
+T
+U
+Z
+T7
+Promise<number>
+Promise<string | undefined>
+Promise<(a: number): string>
+Iterator<number>
+AsyncIterator<string>
+Generator<number, string>
+AsyncGenerator<number, undefined>
+Map<string, number>
+Set<string | undefined>
+WeakMap<Node, (a: number): string>
+string | undefined
+number | string | boolean | Node | null | undefined
+int32 | bigint | readonly number[] | number[]

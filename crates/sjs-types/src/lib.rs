@@ -4,11 +4,14 @@
 //! its one canonical form, so two types are equal exactly when their [`TypeId`]s are.
 //! A union is a normalized set: flat, without duplicates, without a member another
 //! member already holds, in an order that depends on the types alone, and never of
-//! fewer than two members.
+//! fewer than two members. [`Printer`] writes a type in the readable notation of
+//! SPEC.md §13.7 (US-081).
 
 mod literal;
+mod printer;
 
 pub use literal::{Integer, Literal, Number};
+pub use printer::Printer;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -106,8 +109,9 @@ pub enum Type {
     Boolean,
     /// A literal type: one value of a primitive.
     Literal(Literal),
-    /// An object shape: a fixed set of keys. Interned with its keys in order, so the
-    /// order they are given in does not matter; of a key given twice the last stays.
+    /// An object shape: a fixed set of keys. Interned with its keys in one order, so
+    /// the order they are given in does not matter: the keys that retain a literal
+    /// first, each group by key. Of a key given twice the last stays.
     Object(Vec<Property>),
     /// A dictionary (SPEC.md §4.6): `string` keys, one value type.
     Dictionary(TypeId),
@@ -168,6 +172,10 @@ enum Atom<'a> {
     Id(u32),
     Key(&'a str),
     Literal(&'a Literal),
+    /// A boolean literal, `true` first: whether it is `false`.
+    Falsity(bool),
+    /// A type inside the type, compared as types are.
+    Type(TypeId),
 }
 
 /// The interner: every type of a program, each once.
@@ -214,6 +222,11 @@ impl Types {
         self.types.len()
     }
 
+    /// The id of every interned type, in the order they were interned.
+    pub fn ids(&self) -> impl Iterator<Item = TypeId> {
+        (0..self.types.len()).map(|at| TypeId(u32::try_from(at).unwrap_or(u32::MAX)))
+    }
+
     /// The type an id stands for.
     ///
     /// # Panics
@@ -251,6 +264,8 @@ impl Types {
                     }
                     kept.push(property);
                 }
+                // The keys that retain a literal first: they tell shapes apart.
+                kept.sort_by_key(|property| !property.literal);
                 self.store(Type::Object(kept))
             }
             other => self.store(other),
@@ -313,14 +328,16 @@ impl Types {
             Type::BigInt => (2, Vec::new(), Vec::new()),
             Type::String => (3, Vec::new(), Vec::new()),
             Type::Boolean => (4, Vec::new(), Vec::new()),
+            Type::Literal(Literal::Boolean(value)) => (5, vec![Atom::Falsity(!value)], Vec::new()),
             Type::Literal(literal) => (5, vec![Atom::Literal(literal)], Vec::new()),
             Type::Object(properties) => {
                 let mut atoms = vec![Atom::Count(properties.len())];
                 for property in properties {
                     atoms.push(Atom::Key(&property.key));
                     atoms.push(Atom::Flag(property.literal));
+                    atoms.push(Atom::Type(property.ty));
                 }
-                (6, atoms, properties.iter().map(|p| p.ty).collect())
+                (6, atoms, Vec::new())
             }
             Type::Dictionary(value) => (7, Vec::new(), vec![*value]),
             Type::Array { element, mutated } => (8, vec![Atom::Flag(*mutated)], vec![*element]),
@@ -360,7 +377,8 @@ impl Types {
     }
 
     /// The canonical order of types, which the members of a union are kept in: by
-    /// kind (the primitives, literals by value, shapes, dictionaries, arrays, tuples,
+    /// kind (the primitives, literals by value with `true` before `false`, shapes key by
+    /// key, dictionaries, arrays, tuples,
     /// functions, classes, variables, promises, iterators, generators, collections,
     /// then `null` and `undefined` last), then by what the types hold. It depends on
     /// the types alone, not on when they were interned.
@@ -369,12 +387,18 @@ impl Types {
         if a == b {
             return Ordering::Equal;
         }
-        let (kind, atoms, inside) = self.parts(a);
-        let (other_kind, other_atoms, other_inside) = self.parts(b);
-        let shallow = kind.cmp(&other_kind).then_with(|| atoms.cmp(&other_atoms));
-        let pairs = inside.iter().zip(&other_inside);
-        pairs.fold(shallow, |order, (&x, &y)| {
-            order.then_with(|| self.compare(x, y))
+        let items = |id: TypeId| {
+            let (kind, mut atoms, inside) = self.parts(id);
+            atoms.extend(inside.into_iter().map(Atom::Type));
+            (kind, atoms)
+        };
+        let ((kind, atoms), (other_kind, other_atoms)) = (items(a), items(b));
+        let pairs = atoms.iter().zip(&other_atoms);
+        pairs.fold(kind.cmp(&other_kind), |order, pair| {
+            order.then_with(|| match pair {
+                (Atom::Type(x), Atom::Type(y)) => self.compare(*x, *y),
+                (x, y) => x.cmp(y),
+            })
         })
     }
 }

@@ -330,7 +330,46 @@ fn one_id_for_one_type_and_another_for_any_other() {
     assert_eq!(t.count(), before, "interning again makes nothing");
     assert_eq!(
         t.get(shape),
-        &Type::Object(vec![property("a", n, false), property("b", s, true)])
+        &Type::Object(vec![property("b", s, true), property("a", n, false)]),
+        "the keys that retain a literal first"
+    );
+}
+
+#[test]
+fn the_keys_of_a_shape_and_the_two_booleans_have_their_order() {
+    let mut t = Types::new();
+    let n = TypeId::NUMBER;
+    let keys = ["d", "a", "c", "b"].map(|key| property(key, n, key > "b"));
+    let sorted = t.intern(Type::Object(keys.to_vec()));
+    let order: Vec<String> = match t.get(sorted) {
+        Type::Object(properties) => properties.iter().map(|p| p.key.clone()).collect(),
+        _ => Vec::new(),
+    };
+    assert_eq!(order, ["c", "d", "a", "b"], "each group by key");
+    let (yes, no) = (boolean(&mut t, true), boolean(&mut t, false));
+    assert_eq!(t.compare(yes, no), Ordering::Less, "`true` before `false`");
+    let a = string(&mut t, "a");
+    assert_eq!(
+        t.compare(a, yes),
+        Ordering::Less,
+        "after the other literals"
+    );
+    let of = |t: &mut Types, ty| {
+        t.intern(Type::Object(vec![
+            property("ok", ty, true),
+            property("z", TypeId::NUMBER, false),
+        ]))
+    };
+    let (ok, failed) = (of(&mut t, yes), of(&mut t, no));
+    let other = t.intern(Type::Object(vec![
+        property("ok", no, true),
+        property("a", n, false),
+    ]));
+    let union = t.union([other, failed, ok]);
+    assert_eq!(
+        members(&t, union),
+        [ok, other, failed],
+        "shapes key by key: the type of a key before the next key"
     );
 }
 

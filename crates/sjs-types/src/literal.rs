@@ -101,8 +101,9 @@ impl PartialOrd for Integer {
     }
 }
 
-/// The value of a literal type. In the canonical order: numbers by value, then
-/// bigints by value, strings, `false`, `true`.
+/// The value of a literal type. As values they are ordered numbers by value, then
+/// bigints by value, strings, `false`, `true`; the canonical order of types is the
+/// same but for `true`, which comes before `false`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Literal {
     /// A number: `1`, `1.5`.
