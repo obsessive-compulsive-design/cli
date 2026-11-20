@@ -2628,7 +2628,29 @@ runtime is `E204` naming the runtime; a member in the removed column is `E133` w
 (fine); a nested class inside a method restores `this`.
 
 #### US-070 Module purity and evaluation order
-§5.1, §7 · After: US-063, US-067 · Size: S · M1
+§5.1, §7 · After: US-063, US-067 · Size: S · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-bind::purity`: `Module::impure()` is where a module first does
+> something when it is evaluated, as the text reads, and `None` for a pure module;
+> `ModuleGraph::evaluation_order()` is every module once in ES module order. No
+> diagnostic comes of either: the build report (§7) and `sjs map` (§13.6) are their
+> readers. **Decisions:** (1) what runs nothing: an import, an export, a `function`, a
+> class, and a `const`/`let` whose value is a literal, a name, an arrow, an object or
+> array literal of such, or an operator (`-`, `+`, `? :`, parentheses) over such, so
+> `60 * 1000` is pure; (2) what may run code is impure, on its own span: a call
+> (`Object.freeze(…)` too), `new`, `await`, `import(…)`, an assignment, any statement
+> that is no declaration, and also a member read (an accessor), a spread or a
+> destructuring pattern (an iterator) and a template that fills in values; (3) of a
+> class, a `static` block is impure (the block is the span) and so is a static field
+> whose value is; an instance field's value runs when an instance is made, not when
+> the module is; (4) purity is the module's own: importing an impure module does not
+> make the importer impure; (5) a JSON module is pure, and so is a file that is no
+> text; (6) in the order, `export … from` is an import, a cycle ends where it closes,
+> the roots are taken in the order given, and a module only `import(…)` reaches comes
+> after all the roots' modules, in the order found, with its own imports before it.
+> Verified: fmt, both clippy passes, audit, tests, doc tests, 100% line and region
+> coverage, `cargo mutants --in-diff` 17 caught, 0 missed, 4 unviable, 1 timeout (the
+> import counter multiplied instead of advanced: a loop that never ends).
 
 **Done when**
 - A module is pure when its top-level items are only imports, exports and declarations

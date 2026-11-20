@@ -282,7 +282,7 @@ fn last_node(node: NodeRef<'_>) -> usize {
 
 /// Whether a class field is `static`: only then do two words come before its value,
 /// the word and the field's name.
-fn is_static(field: NodeRef<'_>) -> bool {
+pub(crate) fn is_static(field: NodeRef<'_>) -> bool {
     let mut words = field
         .children()
         .take_while(|child| !is_node(Some(child), NodeKind::Initializer));

@@ -12,7 +12,9 @@
 //! a namespace read by a key that is no string literal.
 //! US-068 adds [`ambient`]: the table of globals (`ambient/globals.toml`), against which
 //! [`bind`] judges every name a file does not declare (E204, E133, E138). US-069 has
-//! [`bind`] judge every `this`: E126 where there is none, E000 before `super()`.
+//! [`bind`] judge every `this`: E126 where there is none, E000 before `super()`. US-070
+//! adds [`Module::impure`], where a module first does something when evaluated, and
+//! [`ModuleGraph::evaluation_order`].
 
 pub mod ambient;
 mod cycles;
@@ -20,6 +22,7 @@ mod graph;
 mod host;
 mod json;
 mod links;
+mod purity;
 mod receiver;
 mod scopes;
 mod unreachable;
