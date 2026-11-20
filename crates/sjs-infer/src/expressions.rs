@@ -16,22 +16,27 @@ pub struct Facts {
     pub to_string: BTreeMap<ClassId, TypeId>,
     /// The types of the public fields of a class, by name.
     pub fields: BTreeMap<ClassId, BTreeMap<String, TypeId>>,
+    /// The names of the methods and accessors' functions of a class: members that are
+    /// called, not read.
+    pub methods: BTreeMap<ClassId, BTreeSet<String>>,
+    /// The class a class extends.
+    pub superclass: BTreeMap<ClassId, ClassId>,
     /// The names of the classes, for findings.
     pub class_names: BTreeMap<ClassId, String>,
 }
 
 /// Types the expressions of one file.
 pub struct Typer<'a> {
-    source: &'a SourceFile,
-    bindings: &'a Bindings,
-    facts: &'a Facts,
-    types: &'a mut Types,
+    pub(crate) source: &'a SourceFile,
+    pub(crate) bindings: &'a Bindings,
+    pub(crate) facts: &'a Facts,
+    pub(crate) types: &'a mut Types,
     /// The reference each name is, by where the name begins.
-    references: BTreeMap<usize, usize>,
+    pub(crate) references: BTreeMap<usize, usize>,
     /// The declarations that are default imports: the one such form is a JSON module.
     json: BTreeSet<usize>,
-    /// The templates and object literals already judged, by where each begins.
-    judged: BTreeSet<usize>,
+    /// The expressions already judged, by where each begins and ends.
+    pub(crate) judged: BTreeSet<(usize, usize)>,
     diagnostics: Diagnostics,
 }
 
@@ -47,6 +52,10 @@ fn element_span(element: &Element<'_>) -> Span {
         Element::Node(node) => node.span(),
         Element::Token(token) => token.token().span,
     }
+}
+
+pub(crate) fn element_span_of(element: &Element<'_>) -> Span {
+    element_span(element)
 }
 
 pub(crate) fn punct(element: Option<&Element<'_>>) -> Option<Punct> {
@@ -242,7 +251,28 @@ impl<'a> Typer<'a> {
                 let reference = self.references.get(&callee.span().byte_start);
                 let global =
                     reference.is_some_and(|&at| self.bindings.references[at].declaration.is_none());
-                (text == "JSON.parse" && global).then_some(TypeId::UNKNOWN)
+                match (global, text) {
+                    (true, "JSON.parse") => Some(TypeId::UNKNOWN),
+                    (true, "Object.keys" | "Object.entries") => {
+                        let argument = children.get(2).copied().filter(|_| children.len() == 4);
+                        let argument = argument.and_then(|argument| self.type_of(argument));
+                        argument.and_then(|shape| self.keys_of(shape, text == "Object.entries"))
+                    }
+                    _ => None,
+                }
+            }
+            NodeKind::MemberExpr | NodeKind::IndexExpr => {
+                let (ty, short) = self.chain(node)?;
+                // Past a `?.` that found nothing, the whole chain is `undefined`.
+                Some(if short {
+                    self.types.union([ty, TypeId::UNDEFINED])
+                } else {
+                    ty
+                })
+            }
+            NodeKind::OptionalChain => {
+                let inside = children.first().copied();
+                inside.and_then(|inside| self.type_of(inside))
             }
             _ => None,
         }
@@ -265,8 +295,14 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// Pushes a finding, the first time the literal that begins at `start` is typed.
-    fn report(&mut self, first: bool, code: Code, span: Span, message: String) {
+    /// Whether this is the first time `node` is judged: its findings are made once.
+    pub(crate) fn first_time(&mut self, node: NodeRef<'_>) -> bool {
+        let span = node.span();
+        self.judged.insert((span.byte_start, span.byte_end))
+    }
+
+    /// Pushes a finding, when it is the first time its expression is typed.
+    pub(crate) fn report(&mut self, first: bool, code: Code, span: Span, message: String) {
         if first {
             let found = Diagnostic::new(code, self.source.path(), span, message);
             self.diagnostics.push(found);
@@ -282,7 +318,7 @@ impl<'a> Typer<'a> {
     /// already, as a key spelled outright after a computed one is. `None` while a
     /// part of it has no type yet.
     fn object(&mut self, node: NodeRef<'_>) -> Option<TypeId> {
-        let first = self.judged.insert(node.span().byte_start);
+        let first = self.first_time(node);
         // Each shape the literal may be: more than one after a union is spread.
         let mut shapes: Vec<Vec<Property>> = vec![Vec::new()];
         // The keys spelled since the start or the last spread: whether outright, and
@@ -425,7 +461,7 @@ impl<'a> Typer<'a> {
     }
 
     /// The name of a class, for findings.
-    fn class_name(&self, class: ClassId) -> String {
+    pub(crate) fn class_name(&self, class: ClassId) -> String {
         let name = self.facts.class_names.get(&class);
         name.map_or(format!("class #{}", class.0), Clone::clone)
     }
@@ -534,7 +570,7 @@ impl<'a> Typer<'a> {
     /// Types what fills a template; E125 for what is no text.
     fn template(&mut self, start: usize, children: &[Element<'_>]) {
         // Once: a template inside another is reached from both.
-        if !self.judged.insert(start) {
+        if !self.judged.insert((start, start)) {
             return;
         }
         let is_piece = |child: &Element<'_>| matches!(child, Element::Token(token) if matches!(token.token().kind, TokenKind::Template(_)));
@@ -576,6 +612,7 @@ pub fn check_expressions(
         if node.kind() == NodeKind::ObjectLit {
             judge.object(node);
         }
+        judge.member_access(node, &children);
         if node.kind() == NodeKind::TemplateLit {
             judge.template(node.span().byte_start, &children);
         }

@@ -2946,7 +2946,36 @@ instance copies public fields; **Decision:** `{ ...[1] }` is `E138`; shorthand o
 undefined binding; nested literal retention.
 
 #### US-086 Property reads and writes
-§3.2, §4.6, E137, E129, E121 · After: US-085 · Size: M · M1
+§3.2, §4.6, E137, E129, E121 · After: US-085 · Size: M · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-infer::members`, part of the typer and of `check_expressions`.
+> Reads: `o.k` is the union of what every member of `o`'s type holds at `k` (a key of a
+> shape, a field of a class or of a class it extends, `length` of an array, tuple or
+> string as `int32`, any key of a dictionary as `T | undefined`), and `E137` at the key
+> when a member lacks it, `undefined`, `null` and `unknown` included. `o?.k` drops
+> `undefined` and `null` from the receiver; the chain then ends in `| undefined` as a
+> whole, so `a?.b.c` reads `c` from `b`, and `(a?.b).c` does not; on a receiver never
+> nullish it is `E121` at the `?.`. `o[k]`: a literal or a union of literals of the
+> keys is the union of those values, a key that is none `E137` naming it; a number
+> reads an array or a string as `T | undefined`, a tuple precisely at a literal place
+> in range; a string reads a dictionary; any other computed read is `E137`.
+> `Object.keys(shape)` is an array of its literal keys and `Object.entries(shape)` of
+> `[key, value]` tuples. Writes (`=`, `+=` and the like, `++`/`--`): the key must be
+> there on every member, else `E129` at the key; for `=` the value must be assignable
+> to what the key holds, else `E138` at the value. `Facts` gained `methods` and
+> `superclass`. **Decisions:** (1) a class method read without being called on the
+> spot is `E138` at the key, as the story says; (2) a key that holds an `int32` takes
+> any number in a write, for `int32` is inferred and never asked for; (3) members a
+> later pass types (methods of arrays, strings and numbers, a class whose fields are
+> not known, a global) are not judged and have no type yet; (4) a plain shape has only
+> its keys: `o.toString` is `E137`; (5) a `?.` that is `E121` is typed as `.`; (6) a
+> destructuring assignment's targets are read, not judged as writes; (7) a JSON import
+> is `unknown`, so reading a key of one before narrowing is `E137`. Fixtures:
+> `04-objects/E137` (4), `04-objects/E129` (2), `04-objects/E138/wrong-value.js`,
+> `08-structure/E121/optional-on-present.js`; `02-grammar/pass/json-path.js` and
+> `02-lexical/E001/near-miss-line-starts.js` read keys their values do not have and
+> were changed. Verified: fmt, both clippy passes, audit, tests, doc tests, 100% line
+> and region coverage, `cargo mutants --in-diff` 77 caught, 0 missed, 13 unviable.
 
 **Done when**
 - `o.k` is `E137` unless every member has `k`; on a union the result is the union of the

@@ -7,10 +7,12 @@
 //! through destructuring too. US-085 completes object literals (spreads, computed keys,
 //! E000, E134 and E138 for what they may not hold) and adds [`infer_program`]: the
 //! modules in order, so that an import has the type of what it is bound to and a
-//! namespace the shape of its module's exports.
+//! namespace the shape of its module's exports. US-086 types property reads and judges
+//! them and property writes (E137, E121, E129, E138).
 
 mod bindings;
 mod expressions;
+mod members;
 mod program;
 
 pub use bindings::infer_bindings;

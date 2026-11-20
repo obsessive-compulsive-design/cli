@@ -5,7 +5,7 @@ const o = {
   a: 1,
 }
 
-const s = o
+const s = f
   .toString()
   .trim()
   .toUpperCase()

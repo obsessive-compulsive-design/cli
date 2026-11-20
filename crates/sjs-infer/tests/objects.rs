@@ -109,7 +109,7 @@ fn a_let_and_a_mutated_object_hold_no_literals() {
         "x.at.r = 2",
         "x[\"r\"] += 1",
         "x.r++",
-        "x.at.deep[k] ??= 1",
+        "x.at[k] ??= 1",
         "for (const i of xs) {\n  x.r -= 1\n}",
         "const f = () => {\n  --x.r\n}",
     ] {
@@ -121,7 +121,7 @@ fn a_let_and_a_mutated_object_hold_no_literals() {
         "f(x.r)",
         "const y = x.r + 1",
         "y.r = 2",
-        "y[x.r] = 2",
+        "y[k] = x.r",
         "const z = x.r === 1",
         "f().r = x",
     ] {
