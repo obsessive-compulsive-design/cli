@@ -3,6 +3,7 @@
 
 use crate::bindings::infer_bindings;
 use crate::expressions::Facts;
+use crate::mutation::{settled, uses_of};
 use sjs_bind::{bind, Bindings, Bound, Content, DeclKind, Links, ModuleGraph};
 use sjs_diag::Code;
 use sjs_types::{Property, Type, TypeId, Types};
@@ -71,7 +72,9 @@ impl Program<'_> {
 /// declaration it is bound to, a namespace import the shape of its module's exports
 /// (once each has a type), a JSON import `unknown`. A module the grammar rejects is
 /// left out, and so what is imported from it has no type; nor has what modules that
-/// import one another take from each other.
+/// import one another take from each other. What is mutated is settled program-wide
+/// first: a binding mutated in any module, or passed in any module to a parameter its
+/// function mutates, is mutated wherever it is imported.
 pub fn infer_program(
     graph: &ModuleGraph,
     links: &Links,
@@ -82,6 +85,8 @@ pub fn infer_program(
         modules: BTreeMap::new(),
         shaping: BTreeSet::new(),
     };
+    // The modules the grammar accepts, in the order they are inferred in.
+    let mut scanned = Vec::new();
     for module in graph.evaluation_order() {
         let Content::Script {
             source,
@@ -94,19 +99,73 @@ pub fn infer_program(
         let rejected = parsed
             .iter()
             .any(|d| matches!(d.code, Code::E000 | Code::E001 | Code::E002));
-        if rejected {
-            continue;
+        if !rejected {
+            let (bindings, _) = bind(source, tree);
+            scanned.push((module, source, tree, bindings));
         }
-        let (bindings, _) = bind(source, tree);
+    }
+    // What is mutated, program-wide: a binding is one binding wherever it is imported.
+    let place_of: BTreeMap<&Path, usize> = scanned
+        .iter()
+        .enumerate()
+        .map(|(at, (module, ..))| (module.path.as_path(), at))
+        .collect();
+    let canonical = |at: usize, declaration: usize| -> (usize, usize) {
+        let (module, _, _, bindings) = &scanned[at];
+        let declared = &bindings.declarations[declaration];
+        let bound = Some(declared)
+            .filter(|declared| declared.kind == DeclKind::Import)
+            .and_then(|declared| links.import(&module.path, &declared.name));
+        let Some(Bound::Declaration { module, span }) = bound else {
+            return (at, declaration);
+        };
+        let home = place_of.get(module.as_path()).copied();
+        let found = home.and_then(|home| {
+            let declarations = &scanned[home].3.declarations;
+            let index = declarations.iter().position(|d| d.span == span);
+            index.map(|index| (home, index))
+        });
+        found.unwrap_or((at, declaration))
+    };
+    let uses: Vec<_> = scanned
+        .iter()
+        .map(|(_, source, tree, bindings)| uses_of(source, tree, bindings))
+        .collect();
+    let mut outright = BTreeSet::new();
+    let mut calls = Vec::new();
+    for (at, used) in uses.iter().enumerate() {
+        outright.extend(
+            used.direct
+                .iter()
+                .map(|&declaration| canonical(at, declaration)),
+        );
+        calls.extend(used.calls.iter().map(|&(argument, callee, place)| {
+            (canonical(at, argument), canonical(at, callee), place)
+        }));
+    }
+    let parameter = |(at, callee): (usize, usize), place: usize| {
+        let parameters = uses[at].functions.get(&callee);
+        let taken = parameters.and_then(|parameters| parameters.get(place).copied().flatten());
+        taken.map(|taken| (at, taken))
+    };
+    let mutated = settled(outright, &calls, &parameter);
+    for (at, (module, source, tree, bindings)) in scanned.iter().enumerate() {
         let mut facts = Facts::default();
+        let declarations = 0..bindings.declarations.len();
+        facts.mutated = declarations
+            .filter(|&declaration| mutated.contains(&canonical(at, declaration)))
+            .collect();
         let imports = bindings.declarations.iter().enumerate();
-        for (at, declaration) in imports.filter(|(_, d)| d.kind == DeclKind::Import) {
+        for (index, declaration) in imports.filter(|(_, d)| d.kind == DeclKind::Import) {
             let bound = links.import(&module.path, &declaration.name);
             let ty = bound.and_then(|bound| program.type_of(&bound, types));
-            facts.declarations.extend(ty.map(|ty| (at, ty)));
+            facts.declarations.extend(ty.map(|ty| (index, ty)));
         }
-        let facts = infer_bindings(source, tree, &bindings, &facts, types);
-        let inferred = ModuleTypes { bindings, facts };
+        let facts = infer_bindings(source, tree, bindings, &facts, types);
+        let inferred = ModuleTypes {
+            bindings: bindings.clone(),
+            facts,
+        };
         program.modules.insert(module.path.clone(), inferred);
     }
     program.modules

@@ -2994,7 +2994,40 @@ writes through a union receiver require the key on every member; `o[k]` where `k
 `"a" | "z"` and `z` is not a key (E137 naming `z`).
 
 #### US-087 Arrays, tuples and empty collections
-§3.2, §4.6, E110, §3.4 · After: US-084 · Size: M · M1
+§3.2, §4.6, E110, §3.4 · After: US-084 · Size: M · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-infer`: `mutation` finds what a file mutates and what fills its
+> empty collections; `infer_bindings` and `infer_program` type by it; the typer reports
+> `E110` and `E133`. A `const` whose value is an array literal is a tuple of its
+> elements' types, literals kept, as long as nothing mutates it; mutated it is an
+> array of the widened union (`int32[]`), and so is a `let` (unmutated: `readonly
+> int32[]` in the notation). Mutated means: a write into it (`xs[i] = v`, `o.k = v`,
+> however deep), one of `push pop shift unshift splice sort reverse fill copyWithin
+> set add delete clear` called on the binding, or the binding passed by name to a
+> parameter its function mutates, settled to a fixpoint, in `infer_program` over all
+> modules at once (a binding is one binding wherever it is imported, so an array
+> mutated only in a test file is mutated program-wide). An empty `[]`, `new Map()`
+> or `new Set()` that is the value of a binding (`const`/`let`, or `name = []`) is
+> typed by the `push`/`unshift` arguments and `name[i] = v` values, the `set` pairs,
+> the `add` values on that binding, from nested functions too; a class field by the
+> same on `this.name` anywhere in the class body. With nothing put in, or as the value
+> of no binding or field (`[[]]`, `f([])`, `{ a: [] }`), it is `E110` at the literal.
+> Assigning `length` of an array or tuple is `E133`. `Facts` gained `mutated` and
+> `filled`. **Decisions:** (1) `xs.push()` with no argument puts nothing in; (2) a
+> collection filled with something of no type yet has no type yet and no finding;
+> (3) calls are followed by name only: `f(xs)` where `f` and `xs` are names and `f`
+> is a function declaration or a `const`/`let` arrow with plain parameters; a method,
+> a call through a namespace, an alias (`const g = f`, `const ys = xs`) and a rest or
+> destructured parameter are not followed, nor is what a key of an object holds;
+> (4) `set`/`add`/`delete`/`clear` mutate whatever they are called on, a shape
+> included; (5) an empty collection is filled in its own module only: fills from
+> another module do not type it; (6) a field's type is not recorded yet (classes are
+> typed later): for fields only `E110` is decided; (7) what a pattern takes from an
+> array literal is a tuple, so `const [a, b] = [1, "x"]` is precise. Fixtures:
+> `04-arrays/E110` (4), `04-arrays/E133/length-assignment.js`; four fixtures held an
+> empty `[]` or `new Map()` and now hold something. Verified: fmt, both clippy passes,
+> audit, tests, doc tests, 100% line and region coverage, `cargo mutants --in-diff`
+> 101 caught, 0 missed, 6 unviable, 1 timeout (the fixpoint loop made endless).
 
 **Done when**
 - `[1, "a"]` is `(int32 | string)[]`; a `const` `[1, 2]` never mutated and never passed

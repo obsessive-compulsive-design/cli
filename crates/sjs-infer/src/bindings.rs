@@ -3,10 +3,11 @@
 //! declares, what the pattern takes from the value it is given.
 
 use crate::expressions::{nodes, punct, Facts, Typer};
+use crate::mutation::{arguments, settled, uses_of, Fill};
 use sjs_bind::{Bindings, DeclKind};
 use sjs_diag::SourceFile;
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
-use sjs_types::{Property, Type, TypeId, Types};
+use sjs_types::{Builtin, Property, Type, TypeId, Types};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// How many times the types of the bindings are worked out anew from one another
@@ -50,8 +51,6 @@ struct Collector<'a, 't> {
     given: BTreeMap<usize, Vec<Given<'t>>>,
     /// The writes that are accounted for, by where the name begins.
     handled: BTreeSet<usize>,
-    /// The declarations whose object is written into: `name.key = …`, `name[…]++`.
-    mutated: BTreeSet<usize>,
 }
 
 fn value_of(node: NodeRef<'_>) -> Option<Element<'_>> {
@@ -141,18 +140,6 @@ impl<'t> Collector<'_, 't> {
                 reference.and_then(|&at| self.bindings.references[at].declaration)
             };
             let declaration = written.and_then(declared);
-            let writes = matches!(
-                node.kind(),
-                NodeKind::AssignExpr | NodeKind::UpdateExpr | NodeKind::ForUpdate
-            );
-            // A write into a member, however deep, changes the object the name holds.
-            let into = nodes(node)
-                .find(|target| matches!(target.kind(), NodeKind::MemberExpr | NodeKind::IndexExpr));
-            let object = into
-                .filter(|_| writes)
-                .and_then(|target| target.tokens().first());
-            let object = object.and_then(|name| declared(name.span.byte_start));
-            self.mutated.extend(object);
             match node.kind() {
                 NodeKind::ConstDecl | NodeKind::LetDecl => {
                     let bound = children.get(1).copied();
@@ -238,31 +225,184 @@ fn taken(typer: &mut Typer<'_>, facts: &Facts, from: TypeId, step: &Step<'_>) ->
     }
 }
 
+/// What holds a value: how the binding it is given to is declared and used.
+struct Holder<'a, 't> {
+    /// Whether it is a `const`.
+    constant: bool,
+    /// Whether the program mutates what it holds.
+    mutated: bool,
+    /// What is put into the collection it holds.
+    fills: &'a [Fill<'t>],
+}
+
+/// An empty collection, which takes its type from what is put into it.
+enum Empty {
+    Array,
+    Map,
+    Set,
+}
+
+/// Which empty collection `value` is, if it is one: `[]`, `new Map()`, `new Set()`.
+pub(crate) fn empty_collection(typer: &Typer<'_>, value: &Element<'_>) -> Option<&'static str> {
+    let Element::Node(node) = value else {
+        return None;
+    };
+    let children: Vec<Element<'_>> = node.children().collect();
+    let has_parts = children.iter().any(|child| punct(Some(child)).is_none());
+    match (node.kind(), children.get(1)) {
+        (NodeKind::ArrayLit, _) => (!has_parts).then_some("[]"),
+        (NodeKind::NewExpr, Some(Element::Token(class))) => {
+            // `Map` and `Set` of the ambient library, not names the file declares.
+            let reference = typer.references.get(&class.token().span.byte_start);
+            let global =
+                reference.is_some_and(|&at| typer.bindings.references[at].declaration.is_none());
+            let name = typer.source.slice(&class.token().span).unwrap_or_default();
+            let empty = arguments(&children).is_empty() && global;
+            match name {
+                "Map" if empty => Some("new Map()"),
+                "Set" if empty => Some("new Set()"),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The type of a value where a binding holds it. An empty collection is typed by
+/// what is put into it; an array literal is a tuple for a `const` nothing mutates and
+/// else an array, mutated or not as its binding is; any other array is mutated when
+/// its binding is.
+fn held(typer: &mut Typer<'_>, value: Element<'_>, holder: &Holder<'_, '_>) -> Option<TypeId> {
+    let empty = empty_collection(typer, &value).map(|empty| match empty {
+        "[]" => Empty::Array,
+        "new Map()" => Empty::Map,
+        _ => Empty::Set,
+    });
+    let all = |typer: &mut Typer<'_>, elements: Vec<Element<'_>>| -> Option<TypeId> {
+        let mut found = Vec::new();
+        for element in elements {
+            let ty = typer.type_of(element)?;
+            found.push(typer.loosened(ty));
+        }
+        // Nothing put in: no type.
+        (!found.is_empty()).then(|| typer.types_mut().union(found))
+    };
+    if let Some(empty) = empty {
+        let mut elements = Vec::new();
+        let (mut keys, mut values, mut members) = (Vec::new(), Vec::new(), Vec::new());
+        for fill in holder.fills {
+            match fill {
+                Fill::Elements(filled) => elements.extend(filled.iter().copied()),
+                Fill::Entry(key, value) => {
+                    keys.push(*key);
+                    values.push(*value);
+                }
+                Fill::Member(member) => members.push(*member),
+            }
+        }
+        let ty = match empty {
+            Empty::Array => Type::Array {
+                element: all(typer, elements)?,
+                mutated: true,
+            },
+            Empty::Map => Type::Builtin(Builtin::Map, vec![all(typer, keys)?, all(typer, values)?]),
+            Empty::Set => Type::Builtin(Builtin::Set, vec![all(typer, members)?]),
+        };
+        return Some(typer.types_mut().intern(ty));
+    }
+    let literal = match value {
+        Element::Node(node) if node.kind() == NodeKind::ArrayLit => Some(node),
+        _ => None,
+    };
+    let elements: Option<Vec<Element<'_>>> = literal.map(|literal| {
+        literal
+            .children()
+            .filter(|child| punct(Some(child)).is_none())
+            .collect()
+    });
+    let spreads = |element: &Element<'_>| matches!(element, Element::Node(node) if node.kind() == NodeKind::SpreadElement);
+    let Some(elements) = elements.filter(|elements| !elements.iter().any(spreads)) else {
+        let ty = typer.type_of(value)?;
+        return Some(if holder.mutated {
+            as_mutated(typer, ty)
+        } else {
+            ty
+        });
+    };
+    let mut found = Vec::new();
+    for element in elements {
+        found.push(typer.type_of(element)?);
+    }
+    let ty = if holder.constant && !holder.mutated {
+        Type::Tuple(found)
+    } else {
+        let element = typer.types_mut().union(found);
+        Type::Array {
+            element: typer.widened(element),
+            mutated: holder.mutated,
+        }
+    };
+    Some(typer.types_mut().intern(ty))
+}
+
+/// A type whose arrays are mutated ones.
+fn as_mutated(typer: &mut Typer<'_>, id: TypeId) -> TypeId {
+    let members: Vec<TypeId> = match typer.types().get(id) {
+        Type::Union(members) => members.clone(),
+        _ => vec![id],
+    };
+    let mut mutated = Vec::new();
+    for member in members {
+        let ty = match typer.types().get(member).clone() {
+            Type::Array { element, .. } => typer.types_mut().intern(Type::Array {
+                element,
+                mutated: true,
+            }),
+            _ => member,
+        };
+        mutated.push(ty);
+    }
+    typer.types_mut().union(mutated)
+}
+
 /// The type one thing gives a binding whose type so far is `own`.
 fn contributed(
     typer: &mut Typer<'_>,
     known: &Facts,
     given: &Given<'_>,
-    loose: bool,
+    holder: &Holder<'_, '_>,
     own: Option<TypeId>,
 ) -> Option<TypeId> {
+    // A `let` and an object written into hold no literal types.
+    let loose = !holder.constant || holder.mutated;
     match given {
+        Given::Declared(value, path) if path.is_empty() => {
+            let ty = held(typer, *value, holder);
+            ty.map(|ty| if loose { typer.loosened(ty) } else { ty })
+        }
         Given::Declared(value, path) => {
-            let mut ty = typer.type_of(*value);
+            // What a pattern takes from is a value of its own, nothing's to mutate.
+            let apart = Holder {
+                constant: true,
+                mutated: false,
+                fills: &[],
+            };
+            let mut ty = held(typer, *value, &apart);
             for step in path {
                 ty = ty.and_then(|from| taken(typer, known, from, step));
             }
-            // What a pattern takes is no literal any more; a `let` holds none at all.
-            let ty = ty.map(|ty| {
-                if path.is_empty() {
-                    ty
-                } else {
-                    typer.widened(ty)
-                }
-            });
+            // What a pattern takes is no literal any more.
+            let ty = ty.map(|ty| typer.widened(ty));
             ty.map(|ty| if loose { typer.loosened(ty) } else { ty })
         }
-        Given::Assigned(value) => typer.type_of(*value).map(|ty| typer.loosened(ty)),
+        Given::Assigned(value) => {
+            let assigned = Holder {
+                constant: false,
+                mutated: holder.mutated,
+                fills: holder.fills,
+            };
+            held(typer, *value, &assigned).map(|ty| typer.loosened(ty))
+        }
         Given::Defaulted(value) => {
             let value = typer.type_of(*value).map(|ty| typer.loosened(ty));
             let present = own.map(|own| typer.present(own));
@@ -316,9 +456,16 @@ pub fn infer_bindings(
         ),
         given: BTreeMap::new(),
         handled: BTreeSet::new(),
-        mutated: BTreeSet::new(),
     };
     collector.collect(tree.root());
+    // What the file mutates, with what `facts` says is mutated from elsewhere.
+    let uses = uses_of(source, tree, bindings);
+    let outright: BTreeSet<usize> = uses.direct.union(&facts.mutated).copied().collect();
+    let parameter = |callee: usize, place: usize| {
+        let parameters = uses.functions.get(&callee);
+        parameters.and_then(|parameters| parameters.get(place).copied().flatten())
+    };
+    let mutated = settled(outright, &uses.calls, &parameter);
     // A binding written in a way that is not followed here has no type yet.
     let unfollowed = bindings.references.iter().filter(|reference| {
         reference.write && !collector.handled.contains(&reference.span.byte_start)
@@ -350,9 +497,11 @@ pub fn infer_bindings(
         let mut next = facts.clone();
         for &at in &followed {
             let given = &collector.given[&at];
-            // A `let` and an object written into hold no literal types.
-            let loose =
-                bindings.declarations[at].kind == DeclKind::Let || collector.mutated.contains(&at);
+            let holder = Holder {
+                constant: bindings.declarations[at].kind == DeclKind::Const,
+                mutated: mutated.contains(&at),
+                fills: uses.fills.get(&at).map_or(&[][..], Vec::as_slice),
+            };
             let mut judge = Typer::new(source, tree, bindings, &known, types);
             let own = known.declarations.get(&at).copied();
             // In the first round a binding is what it is declared with.
@@ -360,7 +509,7 @@ pub fn infer_bindings(
                 .iter()
                 .filter(|given| round > 0 || matches!(given, Given::Declared(..)));
             let parts: Option<Vec<TypeId>> = counted
-                .map(|given| contributed(&mut judge, &known, given, loose, own))
+                .map(|given| contributed(&mut judge, &known, given, &holder, own))
                 .collect();
             // A binding given something of no type yet has none yet either.
             let ty = parts.map(|parts| types.union(parts));
@@ -380,5 +529,7 @@ pub fn infer_bindings(
     for at in unknown {
         known.declarations.remove(&at);
     }
+    known.filled = uses.fills.keys().copied().collect();
+    known.mutated = mutated;
     known
 }

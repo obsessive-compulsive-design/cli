@@ -1,5 +1,5 @@
 // Every permitted statement form: no diagnostic.
-const m = new Map()
+const m = new Map([[1, 2]])
 
 const xs = [1, 2]
 

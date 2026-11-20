@@ -324,6 +324,17 @@ impl Typer<'_> {
         let (Some(keys), Some(span)) = (keys, span) else {
             return;
         };
+        // The length of an array is what is in it (SPEC.md §4.6).
+        let sized = self
+            .members(receiver)
+            .into_iter()
+            .any(|member| matches!(self.types.get(member), Type::Array { .. } | Type::Tuple(_)));
+        if sized && keys == ["length"] {
+            let message =
+                "assigning `length` is removed: use `splice` or `toSpliced` (SPEC.md §4.6)";
+            self.report(first, Code::E133, span, message.to_owned());
+            return;
+        }
         let mut takes = Vec::new();
         for member in self.members(receiver) {
             for key in &keys {

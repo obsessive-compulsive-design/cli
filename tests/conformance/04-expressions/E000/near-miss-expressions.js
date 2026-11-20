@@ -17,7 +17,7 @@ const g = typeof typeof a
 
 const h = a ? b : c ? d : e
 
-const k = new Map().size
+const k = new Map([[1, 2]]).size
 
 const m = a & b | a ^ ~b << 1 >> 1 >>> 1
 
@@ -45,7 +45,7 @@ const q = o?.[0]?.()
 
 const s = String.raw`${a}\n`
 
-const u = new Map().size + new Map().size
+const u = new Map([[1, 2]]).size + new Set([1]).size
 
 const w = await import("./w.js")
 

@@ -21,6 +21,12 @@ pub struct Facts {
     pub methods: BTreeMap<ClassId, BTreeSet<String>>,
     /// The class a class extends.
     pub superclass: BTreeMap<ClassId, ClassId>,
+    /// The declarations whose value the program mutates. Given to
+    /// [`crate::infer_bindings`], the ones mutated from other files; returned by it,
+    /// all of them.
+    pub mutated: BTreeSet<usize>,
+    /// The declarations something is put into: `push`, `set`, `add`, `name[i] = v`.
+    pub filled: BTreeSet<usize>,
     /// The names of the classes, for findings.
     pub class_names: BTreeMap<ClassId, String>,
 }
@@ -613,6 +619,7 @@ pub fn check_expressions(
             judge.object(node);
         }
         judge.member_access(node, &children);
+        judge.empty_untyped(node);
         if node.kind() == NodeKind::TemplateLit {
             judge.template(node.span().byte_start, &children);
         }

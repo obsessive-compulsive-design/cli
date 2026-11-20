@@ -13,7 +13,7 @@ const r = { ["__proto__"]: p }
 
 const t = {}
 
-const u = []
+const u = [0]
 
 const v = [1, ...u, ...u]
 

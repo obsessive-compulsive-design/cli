@@ -69,7 +69,7 @@ fn a_const_has_the_type_of_its_value() {
     assert_eq!(one("const x = \"a\"\n"), "\"a\"");
     assert_eq!(one("const x = 1.5\n"), "1.5");
     assert_eq!(one("const x = undefined\n"), "undefined");
-    assert_eq!(one("const x = [1, 2]\n"), "readonly int32[]");
+    assert_eq!(one("const x = [1, 2]\n"), "[1, 2]");
     assert_eq!(one("export const x = `a${1}`\n"), "string");
     assert_eq!(
         one("const x = { kind: \"circle\", r: 1, \"a-b\": true }\n"),
@@ -369,8 +369,8 @@ fn a_pattern_takes_from_a_tuple_or_an_array_by_place() {
             "const [[a, { b }], ...[c]] = [[1, { b: \"x\" }], true]\n",
             &["a", "b", "c"]
         ),
-        ["?", "?", "boolean | readonly (int32 | { b: \"x\" })[] | undefined"],
-        "an array literal is an array, not a tuple: its elements are a union, any of them maybe absent"
+        ["int32 | { b: \"x\" } | undefined", "?", "boolean"],
+        "the literal a pattern takes from is a tuple; a literal inside it an array, any element maybe absent"
     );
     assert_eq!(
         get("const { p: [a, { q = 5, ...r }], ...s } = { p: t, z: 1 }\nconst [{ deep: [d] }] = xs\n", &["a", "q", "r", "s", "d"]),

@@ -413,7 +413,7 @@ fn a_write_needs_the_key_and_a_value_it_takes() {
         found("one?.k\n;[one.k, one.missing] = [1, 2]\n"),
         ["E121 @1:4 ?.", "E137 @2:14 missing"]
     );
-    assert_eq!(found("stranger.k = 1\nlist[0] = 1\nlist.length = 0\none.k = later()\none[later()] = 1\npoint.norm = 1\none.k.deep = 1\nunknownName.k = 1\npoint.#p = 1\none[anykey] = 1\n"), NONE, "what is not known yet is not judged");
+    assert_eq!(found("stranger.k = 1\nlist[0] = 1\none.k = later()\none[later()] = 1\npoint.norm = 1\none.k.deep = 1\nunknownName.k = 1\npoint.#p = 1\none[anykey] = 1\n"), NONE, "what is not known yet is not judged");
     assert_eq!(
         checked("one.fresh = 1\none.k = \"s\"\neither[kk] = true\n").2,
         [

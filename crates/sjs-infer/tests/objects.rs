@@ -231,10 +231,7 @@ fn a_spread_takes_from_each_kind_of_value() {
         "one member that does not spread"
     );
     assert_eq!(of("{ ...1, ...true, ...\"a\" }").1.len(), 3);
-    assert_eq!(
-        of("[{ ...u, a: 1 }]").0,
-        "readonly ({ a: 1 } | { a: 1, b: string })[]"
-    );
+    assert_eq!(of("[{ ...u, a: 1 }]").0, "[{ a: 1 } | { a: 1, b: string }]");
     assert!(of("{ ...{ ...u, ...u } }").0.contains(" | "));
     let mutated = checked(
         &format!("{head}const x = {{ ...u, kind: \"k\" }}\nx.kind = \"z\"\n"),
@@ -452,7 +449,7 @@ fn an_import_has_the_type_of_what_it_is_bound_to() {
             ],
             &[("entry.js", "a"), ("entry.js", "count"), ("entry.js", "s"), ("entry.js", "box"), ("entry.js", "far"), ("entry.js", "cfg"), ("entry.js", "sum"), ("entry.js", "copy"), ("deep.js", "a"), ("nowhere.js", "a")],
         ),
-        ["1", "number", "\"h\"", "{ kind: \"box\" }", "readonly int32[]", "unknown", "number", "{ kind: \"box\", s: \"h\" }", "1", "?"],
+        ["1", "number", "\"h\"", "{ kind: \"box\" }", "[1]", "unknown", "number", "{ kind: \"box\", s: \"h\" }", "1", "?"],
         "through re-exports and renames; a JSON import is `unknown`"
     );
 }

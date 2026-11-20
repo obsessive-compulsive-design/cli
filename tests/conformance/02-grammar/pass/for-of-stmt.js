@@ -3,7 +3,7 @@ import { f } from "./names.js"
 
 const xs = [1, 2]
 
-const m = new Map()
+const m = new Map([[1, 2]])
 
 for (const x of xs) {
   f(x)

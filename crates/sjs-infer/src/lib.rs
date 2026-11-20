@@ -8,11 +8,15 @@
 //! E000, E134 and E138 for what they may not hold) and adds [`infer_program`]: the
 //! modules in order, so that an import has the type of what it is bound to and a
 //! namespace the shape of its module's exports. US-086 types property reads and judges
-//! them and property writes (E137, E121, E129, E138).
+//! them and property writes (E137, E121, E129, E138). US-087 follows what the program mutates
+//! and what fills an empty collection: a `const` array literal nothing mutates is a
+//! tuple, an empty `[]`, `new Map()` or `new Set()` is typed by what is put into it and
+//! is E110 when nothing is, and assigning `length` is E133.
 
 mod bindings;
 mod expressions;
 mod members;
+mod mutation;
 mod program;
 
 pub use bindings::infer_bindings;
