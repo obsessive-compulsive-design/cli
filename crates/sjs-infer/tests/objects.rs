@@ -463,7 +463,7 @@ fn a_namespace_import_has_the_shape_of_its_modules_exports() {
                 ("entry.js", "import * as ns from \"./lib.js\"\nimport * as outer from \"./outer.js\"\nimport * as fn from \"./fn.js\"\nimport * as bad from \"./bad.js\"\nimport * as none from \"./nowhere.js\"\nexport const copy = { ...ns, extra: true }\n"),
                 lib,
                 ("outer.js", "import * as inner from \"./lib.js\"\nimport data from \"./c.json\" with { type: \"json\" }\nexport { inner, data }\nexport const own = 2\n"),
-                ("fn.js", "export const typed = 1\nexport function untyped(nothing) {}\n"),
+                ("fn.js", "export const typed = 1\nexport function untyped(nothing) {\n  return nothing.size\n}\n"),
                 ("bad.js", "export const = 1\n"),
                 ("c.json", "[]"),
             ],

@@ -223,7 +223,7 @@ fn an_empty_collection_takes_its_type_from_what_is_put_into_it() {
         "string[]",
         "an index assignment"
     );
-    assert_eq!(typed("const x = []\nconst add = (n) => {\n  const later = () => {\n    x.push(true)\n  }\n}\n"), "boolean[]", "from a nested arrow: it is in the binding's scope");
+    assert_eq!(typed("const x = []\nconst add = () => {\n  const later = () => {\n    x.push(true)\n  }\n}\n"), "boolean[]", "from a nested arrow: it is in the binding's scope");
     assert_eq!(
         typed("const x = []\nx.push({ kind: \"a\" })\nx.push([1])\n"),
         "({ kind: string } | readonly int32[])[]",

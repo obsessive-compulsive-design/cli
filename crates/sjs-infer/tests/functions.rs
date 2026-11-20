@@ -103,7 +103,7 @@ fn the_examples_of_the_spec_infer_their_signatures() {
         clean(greet, "greet"),
         "greet(name: string, opts: { loud: boolean }): string"
     );
-    let parse = "const config = load()\nconst failure = load()\nexport function parse(text) {\n  if (text === \"\") {\n    return { ok: false, error: failure }\n  }\n  return { ok: true, value: config }\n}\nparse(\"a\")\n";
+    let parse = "const config = load()\nconst failure = load()\nexport function parse(text) {\n  if (text.length === 0) {\n    return { ok: false, error: failure }\n  }\n  return { ok: true, value: config }\n}\nparse(\"a\")\n";
     assert_eq!(
         clean(parse, "parse"),
         "parse(text: string): { ok: true, value: Config } | { ok: false, error: ParseError }"
@@ -112,7 +112,7 @@ fn the_examples_of_the_spec_infer_their_signatures() {
 
 #[test]
 fn a_parameter_is_what_is_passed_for_it_at_every_call() {
-    let partly = checked("const j = (a) => a\nj(1)\nj(...xs)\nconst k = (a) => a\nk(1)\nk(later())\nconst m = (a = later()) => a\nm(1)\nconst n = (a, b) => a\nn(1)\n");
+    let partly = checked("const j = (a) => -a\nj(1)\nj(...xs)\nconst k = (a) => -a\nk(1)\nk(later())\nconst m = (a = later()) => a\nm(1)\nconst n = (a, b) => -b\nn(1)\n");
     assert_eq!(
         [partly.of("j"), partly.of("k"), partly.of("m"), partly.of("n")],
         ["?", "?", "?", "?"],
@@ -120,30 +120,30 @@ fn a_parameter_is_what_is_passed_for_it_at_every_call() {
     );
     assert_eq!(partly.found, ["E136 @10:1 n(1)"]);
     assert_eq!(
-        clean("const f = (a) => a\nf(1)\nf(\"s\")\nf(2)\n", "f"),
+        clean("let f = (a) => a\nf(1)\nf(\"s\")\nf(2)\n", "f"),
         "f(a: int32 | string): int32 | string"
     );
     assert_eq!(
         clean(
-            "function f(a, b) {\n  return b\n}\nf(1, true)\nconst g = () => f(1.5, false)\n",
+            "function f(a, b) {\n  return a > 0 ? b : !b\n}\nf(1, true)\nconst g = () => f(1.5, false)\n",
             "f"
         ),
         "f(a: number, b: boolean): boolean",
         "from any scope"
     );
     assert_eq!(
-        clean("const f = (a) => a\nf({ kind: \"k\" })\nf([1])\n", "f"),
+        clean("let f = (a) => a\nf({ kind: \"k\" })\nf([1])\n", "f"),
         "f(a: { kind: string } | readonly int32[]): { kind: string } | readonly int32[]",
         "what is passed holds no literals"
     );
     assert_eq!(
         clean("const f = (a, b = 0) => b\nf(1, \"s\")\nf(2)\n", "f"),
-        "f(a: int32, b?: int32 | string): int32 | string",
+        "f<T>(a: T, b?: int32 | string): int32 | string",
         "the default joins; optional when a call leaves it out"
     );
     assert_eq!(
         clean("const f = (a, b = 0) => b\nf(1, 2)\n", "f"),
-        "f(a: int32, b: int32): int32",
+        "f<T>(a: T, b: int32): int32",
         "passed at every call: not optional"
     );
     assert_eq!(
@@ -156,14 +156,14 @@ fn a_parameter_is_what_is_passed_for_it_at_every_call() {
             "const f = (a, ...rest) => rest\nf(1, 2, \"s\")\nf(1)\n",
             "f"
         ),
-        "f(a: int32, ...rest: (int32 | string)[]): readonly (int32 | string)[]"
+        "f<T>(a: T, ...rest: (int32 | string)[]): readonly (int32 | string)[]"
     );
     assert_eq!(
         clean("const f = (...rest) => rest\nf()\n", "f"),
         "f(...rest: never[]): readonly never[]",
         "a rest nothing is passed for"
     );
-    let untyped = checked("const f = (a) => 1\nconst g = (a, { b }) => a\ng(1, { b: 2 })\nconst h = (a) => a\nh(later())\nconst i = (a, ...rest) => a\ni(...xs)\ni(1, ...xs)\n");
+    let untyped = checked("const f = (a) => -a\nconst g = (a, { b }) => a\ng(1, { b: 2 })\nconst h = (a) => -a\nh(later())\nconst i = (a, ...rest) => a\ni(...xs)\ni(1, ...xs)\n");
     assert_eq!(
         [
             untyped.of("f"),
@@ -176,7 +176,7 @@ fn a_parameter_is_what_is_passed_for_it_at_every_call() {
     );
     assert_eq!(untyped.found, NONE);
     assert_eq!(
-        clean("const f = (a) => 1\nconst x = f\n", "x"),
+        clean("const f = (a) => -a\nconst x = f\n", "x"),
         "?",
         "a function with a parameter of no type has no type yet"
     );
@@ -200,7 +200,7 @@ fn a_parameter_is_what_is_passed_for_it_at_every_call() {
 fn a_function_returns_the_union_of_its_returns() {
     assert_eq!(
         clean("const f = (a) => {\n  if (a === 1) {\n    return 1\n  } else if (a === 2) {\n    return 2\n  } else if (a === 3) {\n    return 3\n  } else {\n    return \"s\"\n  }\n}\nf(1)\n", "f"),
-        "f(a: int32): int32 | string",
+        "f<T>(a: T): int32 | string",
         "a chain of `else if`s that ends in an `else`"
     );
     assert_eq!(
@@ -304,7 +304,7 @@ fn a_value_on_some_paths_only_is_e111() {
         ["E111 @3:5 return 1"]
     );
     assert_eq!(found("class K {\n  m(a) {\n    if (a) {\n      return 1\n    }\n  }\n  get g() {\n    return 1\n  }\n}\nconst o = function (a) {\n  if (a) {\n    return 1\n  }\n}\n"), ["E111 @4:7 return 1", "E111 @13:5 return 1"], "a method and a function expression too");
-    assert_eq!(found("function f(a) {\n  if (a) {\n    return\n  }\n  later()\n}\nconst g = (a) => {\n  if (a) {\n    throw new Error(\"no\")\n  }\n  return 1\n}\nconst h = () => {}\nconst i = (a) => a\n"), NONE);
+    assert_eq!(found("function f(a) {\n  if (a) {\n    return\n  }\n  later()\n}\nconst g = (a) => {\n  if (a) {\n    throw new Error(\"no\")\n  }\n  return 1\n}\nconst h = () => {}\nconst i = (a) => -a\n"), NONE);
     assert_eq!(
         checked("function f(a) {\n  if (a) {\n    return 1\n  }\n}\n").diagnostics.iter().map(|d| d.message.clone()).collect::<Vec<_>>(),
         ["this function returns a value on some paths and nothing on others: return a value on every path, or on none (SPEC.md §4.3)"]
@@ -353,13 +353,13 @@ fn a_call_has_the_type_of_what_it_calls() {
     assert_eq!(clean("const a = () => 1\nconst b = () => \"s\"\nconst pick = later() ? a : b\nconst x = pick()\n", "x"), "int32 | string", "through a union of two functions");
     assert_eq!(
         clean("const f = () => () => 1\nconst x = f()()\n", "x"),
-        "?",
-        "an arrow that is a value has no type yet"
+        "int32",
+        "an arrow that is a value is typed from its body"
     );
     assert_eq!(
         clean("const o = { f: () => 1 }\nconst x = o.f()\n", "x"),
-        "?",
-        "a function in a literal is a later pass's"
+        "int32",
+        "a function in a literal too"
     );
     assert_eq!(
         clean("const x = [later(), list.map(later), ns.f(1)]\n", "x"),
@@ -624,7 +624,7 @@ fn an_imported_function_is_called_as_it_is_declared() {
     assert_eq!(of("lib.js size"), Some("(a: string): int32"));
     assert_eq!(
         of("lib.js pair"),
-        Some("(a: int32, b: int32 | string): readonly (int32 | string)[]")
+        Some("<T>(a: T, b: int32 | string): readonly (int32 | string | T)[]")
     );
     let entry = typed
         .iter()
@@ -645,7 +645,7 @@ fn an_imported_function_is_called_as_it_is_declared() {
 #[test]
 fn ten_thousand_call_sites_resolve_in_linear_time() {
     let sites = |count: usize| -> String {
-        let mut text = String::from("const f = (a) => a\n");
+        let mut text = String::from("let f = (a) => a\n");
         for at in 0..count {
             text.push_str(if at % 2 == 0 { "f(1)\n" } else { "f(\"s\")\n" });
         }

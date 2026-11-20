@@ -3170,7 +3170,44 @@ builtin's signature; a function that only throws returns `never`; a recursive re
 type; 10 000 call sites resolve in linear time.
 
 #### US-090 Generalization and instantiation
-§3.2, §4.4, E112 · After: US-089 · Size: M · M1
+§3.2, §4.4, E112 · After: US-089 · Size: M · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-infer` (`generics.rs`, with changes to `functions.rs`,
+> `bindings.rs`, `expressions.rs`, `operators.rs`, `members.rs`): how a body uses each
+> parameter is classified; one used only opaquely is a type parameter of its
+> function, one read only by place an array of one, and each call instantiates the
+> function with what it passes. An arrow that is a value (in a literal, returned,
+> passed) is typed from its body alone. **Decisions:** (1) `xs[0]` generalizes only
+> when what is read is itself used opaquely; the type prints as `readonly T[]`, the
+> printer's form of an array nothing mutates; (2) "uncalled" means no call anywhere
+> in sight: E112 is for a function that is not exported, not named as a value and
+> never called, so it always comes with E115; a `let` function gets it too; (3) a
+> function exported or named as a value generalizes even when called; a parameter
+> the body never uses is opaque; (4) a parameter stored into something declared
+> outside the function (a method call on it, or `=` into it) is not generalized: it
+> is what the calls pass, so a module-level `Map` holds what is put, not `T`; (5) a
+> parameter only ordered is, with no call, what it is ordered against (`a < 10` is a
+> number) or `number | bigint | string`, and ordering two such parameters against
+> each other is no E138; with calls, the call sites say; (6) an opaque parameter
+> passed to a declared function takes that function's parameter type when it is not
+> generic there, and then a call passing something else is E138 at the argument (the
+> one place arguments are checked: elsewhere a parameter is the union of its calls);
+> passed to itself it says nothing, and two functions passing to each other stay
+> untyped; (7) `compose(f, g)`: a parameter that is called is constrained, so it is
+> what the calls pass (monomorphic); exported and uncalled it has no type yet
+> (US-091); (8) type parameters are numbered in order, skipping those of the
+> enclosing functions the body names, so a nested generic prints `<U>` inside
+> `<T>`; a function type keeps its own type parameters through substitution; (9) a
+> call of a union of functions instantiates each; a call that leaves a type
+> parameter unbound (a spread, an argument of no type) has no type; what a type
+> parameter is bound to is widened, never a literal; (10) methods and function
+> expressions are not generalized yet. Older tests whose parameters were opaque
+> were rewritten to constrain them or expect the generic signature;
+> `02-grammar/pass/postfix-expr.js` imports its object now that literals with arrows
+> are typed. Fixtures: `04-functions/E112` (3), `04-functions/E138/passed-on.js`.
+> Verified: fmt, both clippy passes, audit, tests, doc tests, 100% line and region
+> coverage, `cargo mutants --in-diff` 0 missed, 1 timeout (the search for a fresh
+> type variable made endless).
 
 **Done when**
 - A parameter is opaque when every use is: passed through, returned, stored (field,

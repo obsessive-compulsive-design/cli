@@ -46,6 +46,14 @@ pub struct Facts {
     pub external_sites: BTreeMap<usize, Vec<Site>>,
     /// The arguments this file passes to functions it imports.
     pub passed: Vec<Passed>,
+    /// The parameters nothing says anything of (E112): the body treats each
+    /// opaquely, nothing calls its function, and the function is not exported.
+    pub unconstrained: BTreeSet<usize>,
+    /// The parameters that are a number, a bigint or a string for being ordered,
+    /// with no call to say which.
+    pub ordered: BTreeSet<usize>,
+    /// The parameters that are what the functions they are passed to take.
+    pub pinned: BTreeSet<usize>,
     /// The names of the classes, for findings.
     pub class_names: BTreeMap<ClassId, String>,
 }
@@ -62,6 +70,10 @@ pub struct Typer<'a> {
     json: BTreeSet<usize>,
     /// The expressions already judged, by where each begins and ends.
     pub(crate) judged: BTreeSet<(usize, usize)>,
+    /// The types of the parameters of the arrows typed as values, by declaration.
+    pub(crate) locals: BTreeMap<usize, TypeId>,
+    /// Those of them that are a number, a bigint or a string for being ordered.
+    pub(crate) loose: BTreeSet<usize>,
     diagnostics: Diagnostics,
 }
 
@@ -122,6 +134,8 @@ impl<'a> Typer<'a> {
                 .map(|(at, _)| at)
                 .collect(),
             judged: BTreeSet::new(),
+            locals: BTreeMap::new(),
+            loose: BTreeSet::new(),
             diagnostics: Diagnostics::new(),
         }
     }
@@ -163,7 +177,9 @@ impl<'a> Typer<'a> {
     fn name(&self, start: usize, text: &str) -> Option<TypeId> {
         let reference = self.references.get(&start);
         let declaration = reference.and_then(|&at| self.bindings.references[at].declaration);
+        let local = declaration.and_then(|declaration| self.locals.get(&declaration).copied());
         match (declaration, text) {
+            _ if local.is_some() => local,
             (Some(declaration), _) if self.json.contains(&declaration) => Some(TypeId::UNKNOWN),
             (Some(declaration), _) => self.facts.declarations.get(&declaration).copied(),
             (None, "undefined") => Some(TypeId::UNDEFINED),
@@ -261,6 +277,7 @@ impl<'a> Typer<'a> {
                     _ => self.call(node, &children),
                 }
             }
+            NodeKind::ArrowFunction => self.arrow(node),
             NodeKind::NewExpr => {
                 self.construction(node, &children);
                 None
@@ -659,6 +676,19 @@ pub fn check_expressions(
                 found.push(Diagnostic::new(Code::E100, source.path(), span, message));
             }
         }
+    }
+    for &parameter in &facts.unconstrained {
+        let declared = &bindings.declarations[parameter];
+        let message = format!(
+            "nothing says what `{}` is: the body does nothing with it that tells, and nothing calls the function (SPEC.md §4.4)",
+            declared.name
+        );
+        found.push(Diagnostic::new(
+            Code::E112,
+            source.path(),
+            declared.span,
+            message,
+        ));
     }
     found.extend(judge.finish().iter().cloned());
     found

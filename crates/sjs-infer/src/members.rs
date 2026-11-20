@@ -36,6 +36,12 @@ fn is_member(node: NodeRef<'_>) -> bool {
 }
 
 impl Typer<'_> {
+    /// Whether a value of the type `from` may go where a `to` is taken (§3.3).
+    pub(crate) fn assignable(&self, from: TypeId, to: TypeId) -> bool {
+        let superclass = |class: ClassId| self.facts.superclass.get(&class).copied();
+        Assignability::new(self.types, &superclass).assignable(from, to)
+    }
+
     pub(crate) fn print_type(&self, id: TypeId) -> String {
         self.print(id)
     }
@@ -375,8 +381,7 @@ impl Typer<'_> {
                 }
             });
             let wider = self.types.union(wider);
-            let superclass = |class: ClassId| self.facts.superclass.get(&class).copied();
-            if !Assignability::new(self.types, &superclass).assignable(given, wider) {
+            if !self.assignable(given, wider) {
                 let message = format!(
                     "a `{}` is assigned to `{}`, which holds a `{}` (SPEC.md §3.2)",
                     self.print(given),

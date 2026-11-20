@@ -348,7 +348,9 @@ impl Typer<'_> {
         );
         let (result, takes) = match sign {
             Punct::Lt | Punct::Gt | Punct::LtEq | Punct::GtEq => {
-                let fits = both_numbers || both(Kind::BigInt) || both(Kind::String);
+                // A parameter nothing calls is whichever the other side is.
+                let any = operands.iter().any(|operand| self.any_order(operand));
+                let fits = both_numbers || both(Kind::BigInt) || both(Kind::String) || any;
                 (
                     fits.then_some(TypeId::BOOLEAN),
                     "two numbers, two bigints or two strings",

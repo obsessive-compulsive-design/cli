@@ -4,6 +4,7 @@
 
 use crate::expressions::{element_span_of, nodes, punct, Facts, Typer};
 use crate::functions::{declared_in, Call, Declared, Passed, Site};
+use crate::generics::Says;
 use crate::mutation::{arguments, settled, uses_of, Fill};
 use sjs_bind::{Bindings, DeclKind};
 use sjs_diag::SourceFile;
@@ -311,6 +312,10 @@ fn held(typer: &mut Typer<'_>, value: Element<'_>, holder: &Holder<'_, '_>) -> O
         };
         return Some(typer.types_mut().intern(ty));
     }
+    // A function declared by name is typed from its calls, not as a value.
+    if matches!(value, Element::Node(node) if node.kind() == NodeKind::ArrowFunction) {
+        return None;
+    }
     let literal = match value {
         Element::Node(node) if node.kind() == NodeKind::ArrayLit => Some(node),
         _ => None,
@@ -466,10 +471,17 @@ fn typed_function(
     (known, unknown): (&Facts, &BTreeSet<usize>),
     (next, partial): (&mut Facts, &mut BTreeSet<usize>),
 ) {
-    for (parameter, ty, complete, sites) in judge.parameter_types(function, inputs.calls, known) {
-        next.sites.insert(parameter, sites);
+    for typed in judge.parameter_types(function, inputs.calls, known) {
+        let parameter = typed.declaration;
+        next.sites.insert(parameter, typed.sites);
         if unknown.contains(&parameter) {
             continue;
+        }
+        match typed.says {
+            Says::Nothing => next.unconstrained.extend([parameter]),
+            Says::AnyOrder => next.ordered.extend([parameter]),
+            Says::Pinned => next.pinned.extend([parameter]),
+            Says::Typed => {}
         }
         // From the calls that have a type so far: one that has none yet may be a
         // call of the function by itself, which the next round types.
@@ -477,7 +489,7 @@ fn typed_function(
             .parameters
             .iter()
             .any(|p| p.rest && p.declaration == Some(parameter));
-        let held = ty.map(|ty| {
+        let held = typed.ty.map(|ty| {
             if is_rest {
                 next.rest.insert(parameter, ty);
                 let rest = Type::Array {
@@ -490,7 +502,7 @@ fn typed_function(
             }
         });
         next.declarations.extend(held.map(|held| (parameter, held)));
-        if !complete {
+        if !typed.complete {
             partial.insert(parameter);
         }
     }
@@ -597,15 +609,15 @@ fn rounds(
     (known, dropped)
 }
 
-/// Records in `known` what the file passes to the functions it imports, and the
-/// parameters of its own functions, for the other files of the program.
+/// Records in `known` what the file passes to the functions it imports, for the
+/// other files of the program.
 fn outgoing(
     source: &SourceFile,
     tree: &SyntaxTree,
     bindings: &Bindings,
     known: &mut Facts,
     types: &mut Types,
-    (functions, calls): (&[Declared<'_>], &[Call<'_>]),
+    calls: &[Call<'_>],
 ) {
     let mut passed = Vec::new();
     let facts = known.clone();
@@ -628,17 +640,6 @@ fn outgoing(
         }
     }
     known.passed = passed;
-    let listed = |function: &Declared<'_>| -> Vec<Option<usize>> {
-        let plain = function
-            .parameters
-            .iter()
-            .filter(|parameter| !parameter.rest);
-        plain.map(|parameter| parameter.declaration).collect()
-    };
-    known.parameters = functions
-        .iter()
-        .map(|function| (function.name, listed(function)))
-        .collect();
 }
 
 /// The type of each `const` and `let` of the file that has a value, added to `facts`:
@@ -686,6 +687,21 @@ pub fn infer_bindings(
         .filter(|at| !unknown.contains(at))
         .collect();
     let (functions, calls) = declared_in(source, tree, bindings);
+    // The parameters of the file's functions: for one passed on to another, and for
+    // the other files of the program.
+    let listed = |function: &Declared<'_>| -> Vec<Option<usize>> {
+        let plain = function
+            .parameters
+            .iter()
+            .filter(|parameter| !parameter.rest);
+        plain.map(|parameter| parameter.declaration).collect()
+    };
+    let mut facts = facts.clone();
+    facts.parameters = functions
+        .iter()
+        .map(|function| (function.name, listed(function)))
+        .collect();
+    let facts = &facts;
     let inputs = Inputs {
         source,
         tree,
@@ -708,14 +724,7 @@ pub fn infer_bindings(
             break settled;
         }
     };
-    outgoing(
-        source,
-        tree,
-        bindings,
-        &mut known,
-        types,
-        (&functions, &calls),
-    );
+    outgoing(source, tree, bindings, &mut known, types, &calls);
     for at in unknown {
         known.declarations.remove(&at);
     }

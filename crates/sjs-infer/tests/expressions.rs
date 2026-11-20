@@ -210,7 +210,6 @@ fn the_other_literals_and_what_is_plain_from_the_text() {
         "[]",
         "[x]",
         "[...xs]",
-        "() => 1",
         "x ?? 1",
         "1 ?? x",
         "-x",
@@ -280,7 +279,8 @@ fn names_have_the_types_that_are_known_of_them() {
         "?",
         "a `JSON` the file declares is not the global"
     );
-    assert_eq!(typed("(a) => a"), "?");
+    assert_eq!(typed("(a) => a"), "<T>(a: T): T");
+    assert_eq!(typed("() => 1"), "(): int32");
 }
 
 #[test]

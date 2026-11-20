@@ -7,11 +7,12 @@
 //! (E111).
 
 use crate::expressions::{element_span_of, nodes, punct, Facts, Typer};
+use crate::generics::{uses_in, Says};
 use crate::mutation::arguments;
 use sjs_bind::{Bindings, DeclKind};
 use sjs_diag::{Code, SourceFile, Span};
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
-use sjs_types::{Function, Param, Type, TypeId};
+use sjs_types::{Function, Param, Type, TypeId, VarId};
 use std::collections::BTreeMap;
 
 /// One call site of a parameter: where the argument is, and its type.
@@ -51,8 +52,41 @@ pub(crate) struct Declared<'t> {
     pub parameters: Vec<Parameter<'t>>,
     /// The block of its body, or the expression an arrow gives.
     pub body: Element<'t>,
-    pub asynchronous: bool,
-    pub generator: bool,
+    pub flavor: Flavor,
+    /// The function itself: the declaration, or the arrow.
+    pub node: NodeRef<'t>,
+    /// Whether its parameters may be type parameters: not for a `let`, which may come
+    /// to hold another function.
+    pub generalizes: bool,
+    /// Whether it is exported, or named as a value: whether it may be called from
+    /// where the calls are not seen.
+    pub exported: bool,
+}
+
+/// What a function is, beyond a function.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Flavor {
+    Plain,
+    /// `async`: it returns a promise.
+    Async,
+    /// `function*`, `async` or not.
+    Generator,
+}
+
+/// What a round finds of one parameter.
+pub(crate) struct Typed {
+    /// The declaration of the parameter.
+    pub declaration: usize,
+    /// Its type so far; of its elements, for a rest parameter.
+    pub ty: Option<TypeId>,
+    /// Whether every call that passes something for it has a type.
+    pub complete: bool,
+    /// Its call sites.
+    pub sites: Vec<Site>,
+    /// Whether nothing says what it is (the body treats it opaquely, nothing calls
+    /// the function, and the function is not exported: E112), or only that it is
+    /// ordered.
+    pub says: Says,
 }
 
 /// A call of a name.
@@ -223,6 +257,14 @@ pub(crate) fn declared_in<'t>(
         first.and_then(|span| source.slice(&span)) == Some(text)
     };
     let parameters = |function: NodeRef<'t>| parameters_of(function, &declared_at);
+    // Exported, or named as a value: then what calls it is not all in sight.
+    let exported = |name: usize| {
+        let escapes = bindings
+            .references
+            .iter()
+            .any(|r| !r.call && r.declaration == Some(name));
+        bindings.declarations[name].exported || escapes
+    };
     let mut functions = Vec::new();
     let mut calls = Vec::new();
     let mut pending = vec![tree.root()];
@@ -240,8 +282,14 @@ pub(crate) fn declared_in<'t>(
                     name,
                     parameters: parameters(node),
                     body,
-                    asynchronous: word(node, "async"),
-                    generator,
+                    flavor: match (generator, word(node, "async")) {
+                        (true, _) => Flavor::Generator,
+                        (false, true) => Flavor::Async,
+                        (false, false) => Flavor::Plain,
+                    },
+                    node,
+                    generalizes: true,
+                    exported: exported(name),
                 }));
             }
             NodeKind::ConstDecl | NodeKind::LetDecl => {
@@ -258,8 +306,14 @@ pub(crate) fn declared_in<'t>(
                             name,
                             parameters: parameters(arrow),
                             body,
-                            asynchronous: word(arrow, "async"),
-                            generator: false,
+                            flavor: if word(arrow, "async") {
+                                Flavor::Async
+                            } else {
+                                Flavor::Plain
+                            },
+                            node: arrow,
+                            generalizes: node.kind() == NodeKind::ConstDecl,
+                            exported: exported(name),
                         }),
                 );
             }
@@ -289,7 +343,12 @@ impl Typer<'_> {
     /// values without their literals, `undefined` for a body that returns none, `never`
     /// for one that only throws; a promise of that for an `async` function.
     pub(crate) fn returned(&mut self, function: &Declared<'_>) -> Option<TypeId> {
-        let ty = match function.body {
+        self.returned_from(function.body, function.flavor)
+    }
+
+    /// [`Typer::returned`], of a body.
+    pub(crate) fn returned_from(&mut self, body: Element<'_>, flavor: Flavor) -> Option<TypeId> {
+        let ty = match body {
             Element::Node(block) if block.kind() == NodeKind::Block => {
                 let mut types = Vec::new();
                 let returns = returns_of(block);
@@ -311,12 +370,11 @@ impl Typer<'_> {
                 self.widened(ty)
             }
         };
-        let ty = if function.asynchronous {
-            self.types.intern(Type::Promise(ty))
-        } else {
-            ty
-        };
-        (!function.generator).then_some(ty)
+        match flavor {
+            Flavor::Plain => Some(ty),
+            Flavor::Async => Some(self.types.intern(Type::Promise(ty))),
+            Flavor::Generator => None,
+        }
     }
 
     /// The sites of each parameter of `function` in this file, with what `known` has
@@ -329,8 +387,10 @@ impl Typer<'_> {
         function: &Declared<'_>,
         calls: &[Call<'_>],
         known: &Facts,
-    ) -> Vec<(usize, Option<TypeId>, bool, Vec<Site>)> {
+    ) -> Vec<Typed> {
         let mut typed = Vec::new();
+        // The type parameters the parameters before have made.
+        let mut taken: Vec<VarId> = Vec::new();
         for (place, parameter) in function.parameters.iter().enumerate() {
             let Some(declaration) = parameter.declaration else {
                 continue;
@@ -374,10 +434,79 @@ impl Typer<'_> {
             // A rest nothing is passed for holds nothing; a parameter nothing is
             // passed for has no type.
             let empty_rest = parameter.rest && called;
-            let ty = (!given.is_empty() || empty_rest).then(|| self.types.union(given));
-            typed.push((declaration, ty, all_known, sites));
+            let from_calls = (!given.is_empty() || empty_rest).then(|| self.types.union(given));
+            let variable = self.fresh_variable(function.node, &taken);
+            let (ty, complete, says) = self.generalized(
+                function,
+                parameter,
+                variable,
+                (from_calls, all_known),
+                !called,
+            );
+            let mut variables = Vec::new();
+            if let Some(ty) = ty {
+                self.variables(ty, &mut variables);
+            }
+            taken.extend(variables.contains(&variable).then_some(variable));
+            typed.push(Typed {
+                declaration,
+                ty,
+                complete,
+                sites,
+                says,
+            });
         }
         typed
+    }
+
+    /// The type of a parameter by how the body uses it, when that says more than the
+    /// calls do: its type, whether it is complete, and whether nothing at all says
+    /// what it is. Opaque, it is what the functions it is passed to take, or a type
+    /// parameter; read by place only, an array of a type parameter; ordered only and
+    /// never passed, a number, bigint or string. Else what the calls pass.
+    fn generalized(
+        &mut self,
+        function: &Declared<'_>,
+        parameter: &Parameter<'_>,
+        variable: VarId,
+        from_calls: (Option<TypeId>, bool),
+        uncalled: bool,
+    ) -> (Option<TypeId>, bool, Says) {
+        let declaration = parameter.declaration.unwrap_or_default();
+        let uses = uses_in(self, function.node, declaration);
+        let calls = (from_calls.0, from_calls.1, Says::Typed);
+        if parameter.rest || parameter.default.is_some() || self.escapes(function.node, &uses) {
+            return calls;
+        }
+        if uses.opaque() {
+            // Not until the functions it is passed to say what they take.
+            let Some(pins) = self.pinned(declaration, &uses) else {
+                return (None, false, Says::Typed);
+            };
+            return match (pins.is_empty(), uncalled && !function.exported) {
+                (false, _) => (Some(self.types.union(pins)), true, Says::Pinned),
+                (true, true) => (None, true, Says::Nothing),
+                (true, false) if function.generalizes => {
+                    let variable = self.types.intern(Type::Var(variable));
+                    (Some(variable), true, Says::Typed)
+                }
+                (true, false) => calls,
+            };
+        }
+        if function.generalizes && uses.indexed && !uses.is_ordered() && !uses.constrained {
+            let element = self.types.intern(Type::Var(variable));
+            let array = Type::Array {
+                element,
+                mutated: false,
+            };
+            return (Some(self.types.intern(array)), true, Says::Typed);
+        }
+        if uncalled && uses.is_ordered() && !uses.indexed && !uses.constrained {
+            let (ty, any) = self.ordered_as(&uses);
+            let says = if any { Says::AnyOrder } else { Says::Typed };
+            return (Some(ty), true, says);
+        }
+        calls
     }
 
     /// The type of a function whose parameters and return are known, and how many
@@ -425,11 +554,16 @@ impl Typer<'_> {
             let declaration = rest.declaration;
             declaration.and_then(|declaration| known.rest.get(&declaration).copied())
         });
+        // Its type parameters: the type variables of its parameters.
+        let mut type_params = Vec::new();
+        for param in &params {
+            self.variables(param.ty, &mut type_params);
+        }
         let ty = returns
             .filter(|_| rest_element != Some(None))
             .map(|returns| {
                 self.types.intern(Type::Function(Function {
-                    type_params: Vec::new(),
+                    type_params,
                     params,
                     rest: rest_element.flatten(),
                     returns,
@@ -438,8 +572,39 @@ impl Typer<'_> {
         (ty, arity)
     }
 
+    /// What is passed for a parameter that is what another function takes is to be
+    /// that (E138): the calls do not say what such a parameter is.
+    fn fitted(
+        &mut self,
+        first: bool,
+        name: &str,
+        declaration: Option<usize>,
+        passed: &[Element<'_>],
+    ) {
+        let parameters =
+            declaration.and_then(|declaration| self.facts.parameters.get(&declaration));
+        let parameters = parameters.cloned().unwrap_or_default();
+        for (parameter, argument) in parameters.iter().zip(passed) {
+            let pinned = parameter.filter(|parameter| self.facts.pinned.contains(parameter));
+            let taken = pinned.and_then(|pinned| self.facts.declarations.get(&pinned).copied());
+            let given = self.type_of(*argument).map(|ty| self.loosened(ty));
+            let unfit = taken
+                .zip(given)
+                .filter(|&(taken, given)| !self.assignable(given, taken));
+            if let Some((taken, given)) = unfit {
+                let message = format!(
+                    "a `{}` is passed where `{name}` takes a `{}` (SPEC.md §4.4)",
+                    self.print_type(given),
+                    self.print_type(taken)
+                );
+                self.report(first, Code::E138, element_span_of(argument), message);
+            }
+        }
+    }
+
     /// The type of a call, and what is wrong with it: a callee that is no function
-    /// (E139), a count of arguments it does not take (E136).
+    /// (E139), a count of arguments it does not take (E136), an argument it does
+    /// not take (E138).
     pub(crate) fn call(&mut self, node: NodeRef<'_>, children: &[Element<'_>]) -> Option<TypeId> {
         let first = self.first_time(node);
         let passed = arguments(children);
@@ -505,6 +670,23 @@ impl Typer<'_> {
                 );
                 self.report(first, Code::E136, node.span(), message);
             }
+        }
+        self.fitted(first, &name, declaration.filter(|_| !spread), &passed);
+        // A generic function gives what it returns for what this call passes.
+        if functions
+            .iter()
+            .any(|function| !function.type_params.is_empty())
+        {
+            let given: Vec<Option<TypeId>> = passed
+                .iter()
+                .map(|argument| self.type_of(*argument))
+                .collect();
+            let each: Option<Vec<TypeId>> = functions
+                .iter()
+                .map(|function| self.instantiated(function, &given))
+                .collect();
+            let each = each.filter(|_| !spread);
+            return each.map(|each| self.types.union(each));
         }
         let returned =
             declaration.and_then(|declaration| self.facts.returns.get(&declaration).copied());

@@ -14,11 +14,14 @@
 //! is E110 when nothing is, and assigning `length` is E133. US-088 types the operators
 //! of SPEC.md §4.1 and judges their operands (E138, E104, E105, E120). US-089 infers the
 //! signatures of functions declared by name, from their bodies and from every call
-//! of them, and judges calls (E111, E136, E139).
+//! of them, and judges calls (E111, E136, E139). US-090 generalizes: a parameter the body
+//! treats opaquely is a type parameter, each call its own instance (E112 when nothing
+//! says what a parameter is).
 
 mod bindings;
 mod expressions;
 mod functions;
+mod generics;
 mod members;
 mod mutation;
 mod operators;
