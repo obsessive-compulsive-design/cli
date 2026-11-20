@@ -51,8 +51,15 @@ pub fn check_files(files: &[InputFile]) -> Diagnostics {
                     // What the expressions say of themselves (US-083): E100 for a
                     // `null` the program writes, E125 for a template filled with what
                     // is no text.
-                    let facts = sjs_infer::Facts::default();
                     let mut types = sjs_types::Types::new();
+                    // The types of the `const` and `let` bindings (US-084).
+                    let facts = sjs_infer::infer_bindings(
+                        &source,
+                        &tree,
+                        &bindings,
+                        &sjs_infer::Facts::default(),
+                        &mut types,
+                    );
                     let found_typed =
                         sjs_infer::check_expressions(&source, &tree, &bindings, &facts, &mut types);
                     diagnostics.extend(found_typed.iter().cloned());

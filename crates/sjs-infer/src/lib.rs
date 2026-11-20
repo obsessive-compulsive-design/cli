@@ -3,8 +3,11 @@
 //! results of `JSON.parse` and of a JSON import. [`Typer::type_of`] gives the type of
 //! an expression when it can be told yet; [`check_expressions`] reports `null` written
 //! where a program may not write it (E100) and a template filled with a value that is
-//! no text (E125).
+//! no text (E125). US-084 adds [`infer_bindings`]: the type of each `const` and `let`,
+//! through destructuring too.
 
+mod bindings;
 mod expressions;
 
+pub use bindings::infer_bindings;
 pub use expressions::{check_expressions, Facts, Typer};

@@ -3,7 +3,7 @@
 use sjs_bind::Bindings;
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile};
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
-use sjs_types::{ClassId, Integer, Literal, Number, Printer, Type, TypeId, Types};
+use sjs_types::{ClassId, Integer, Literal, Number, Printer, Property, Type, TypeId, Types};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// What is known of a file's names before its expressions are typed. Later passes
@@ -14,6 +14,8 @@ pub struct Facts {
     pub declarations: BTreeMap<usize, TypeId>,
     /// What the `toString()` of a class returns, for the classes that have one.
     pub to_string: BTreeMap<ClassId, TypeId>,
+    /// The types of the public fields of a class, by name.
+    pub fields: BTreeMap<ClassId, BTreeMap<String, TypeId>>,
     /// The names of the classes, for findings.
     pub class_names: BTreeMap<ClassId, String>,
 }
@@ -33,14 +35,14 @@ pub struct Typer<'a> {
     diagnostics: Diagnostics,
 }
 
-fn nodes(node: NodeRef<'_>) -> impl Iterator<Item = NodeRef<'_>> {
+pub(crate) fn nodes(node: NodeRef<'_>) -> impl Iterator<Item = NodeRef<'_>> {
     node.children().filter_map(|child| match child {
         Element::Node(inner) => Some(inner),
         Element::Token(_) => None,
     })
 }
 
-fn punct(element: Option<&Element<'_>>) -> Option<Punct> {
+pub(crate) fn punct(element: Option<&Element<'_>>) -> Option<Punct> {
     match element {
         Some(Element::Token(token)) => match token.token().kind {
             TokenKind::Punct(punct) => Some(punct),
@@ -83,6 +85,16 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// The types the typer interns in.
+    pub(crate) fn types(&self) -> &Types {
+        self.types
+    }
+
+    /// The types the typer interns in, to intern more.
+    pub(crate) fn types_mut(&mut self) -> &mut Types {
+        self.types
+    }
+
     /// What typing found: E125 for each template filled with what is no text.
     #[must_use]
     pub fn finish(self) -> Diagnostics {
@@ -90,7 +102,7 @@ impl<'a> Typer<'a> {
     }
 
     /// A type without its literals: each literal as its primitive.
-    fn widened(&mut self, id: TypeId) -> TypeId {
+    pub(crate) fn widened(&mut self, id: TypeId) -> TypeId {
         let members: Vec<TypeId> = match self.types.get(id) {
             Type::Union(members) => members.clone(),
             _ => vec![id],
@@ -177,9 +189,24 @@ impl<'a> Typer<'a> {
                         Some(self.types.union([present, right]))
                     }
                     (Some(Punct::EqEqEq | Punct::BangEqEq), _) => Some(TypeId::BOOLEAN),
+                    (
+                        Some(
+                            operator @ (Punct::Plus
+                            | Punct::Minus
+                            | Punct::Star
+                            | Punct::Slash
+                            | Punct::Percent
+                            | Punct::StarStar),
+                        ),
+                        Some((left, right)),
+                    ) => {
+                        let (left, right) = (self.type_of(left)?, self.type_of(right)?);
+                        self.arithmetic(operator == Punct::Plus, left, right)
+                    }
                     _ => None,
                 }
             }
+            NodeKind::ObjectLit => self.object(&children),
             NodeKind::ArrayLit => {
                 let elements: Vec<Element<'_>> = children
                     .iter()
@@ -214,8 +241,57 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// The type of an arithmetic operation on two types: `number` for numbers (an
+    /// `int32` may leave its range), `bigint` for bigints, and for `+` on strings
+    /// `string`; `None` for operands the checker judges.
+    pub(crate) fn arithmetic(&mut self, plus: bool, left: TypeId, right: TypeId) -> Option<TypeId> {
+        let (left, right) = (self.widened(left), self.widened(right));
+        let within =
+            |sides: [TypeId; 2], kinds: &[TypeId]| sides.iter().all(|side| kinds.contains(side));
+        let sides = [left, right];
+        if within(sides, &[TypeId::NUMBER, TypeId::INT32]) {
+            Some(TypeId::NUMBER)
+        } else if within(sides, &[TypeId::BIGINT]) {
+            Some(TypeId::BIGINT)
+        } else {
+            (plus && within(sides, &[TypeId::STRING])).then_some(TypeId::STRING)
+        }
+    }
+
+    /// The shape of an object literal whose keys are names or strings with a value
+    /// each, or names alone; `None` for one with a spread, a computed key or a method.
+    fn object(&mut self, children: &[Element<'_>]) -> Option<TypeId> {
+        let mut properties = Vec::new();
+        let members = children.iter().filter_map(|child| match child {
+            Element::Node(member) => Some(*member),
+            Element::Token(_) => None,
+        });
+        for property in members {
+            let parts: Vec<Element<'_>> = property.children().collect();
+            let key = property.tokens().first().and_then(|key| match &key.kind {
+                TokenKind::Ident => self.source.slice(&key.span).map(str::to_owned),
+                TokenKind::String(value) => Some(value.to_string()),
+                _ => None,
+            });
+            // `key` alone, for the binding of that name, or `key: value`. What else
+            // has three parts, a method, has a body there, which has no type.
+            let value = match parts.as_slice() {
+                [name] => Some(*name),
+                [_, _, value] => Some(*value),
+                _ => None,
+            };
+            let ty = self.type_of(value?)?;
+            properties.push(Property {
+                key: key?,
+                ty,
+                literal: matches!(self.types.get(ty), Type::Literal(_)),
+            });
+        }
+        Some(self.types.intern(Type::Object(properties)))
+    }
+
     /// A type without `undefined` and `null`: what `??` lets through from its left.
-    fn present(&mut self, id: TypeId) -> TypeId {
+    pub(crate) fn present(&mut self, id: TypeId) -> TypeId {
         let members: Vec<TypeId> = match self.types.get(id) {
             Type::Union(members) => members.clone(),
             _ => vec![id],

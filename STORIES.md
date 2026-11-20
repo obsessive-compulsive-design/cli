@@ -2855,7 +2855,36 @@ its element union only when the array is unmutated; fewer params assignable to m
 is int32; `2147483648` is number.
 
 #### US-084 Binding types and destructuring
-§3.2, §12 (`let x = undefined`) · After: US-083, US-063 · Size: M · M1
+§3.2, §12 (`let x = undefined`) · After: US-083, US-063 · Size: M · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-infer::bindings`: `infer_bindings(source, tree, bindings, facts,
+> types)` returns `facts` with the type of every `const` and `let` that has a value
+> and whose type can be told; `check_files` runs it before `check_expressions`, so
+> E125 now sees the types of bindings. A `const` has the type of its value, literal
+> kept; a `let` is the union of the value it is declared with and every value
+> assigned to it (`=`, `+=` and the like, `??=`, `++`/`--`, from nested functions
+> too), without literals. The types are worked out in rounds until they no longer
+> change, so a binding may be known from one declared later and a `let` assigned
+> `x + 1` settles at `number`. Patterns: a key of a shape, of a class instance's
+> public fields (`Facts::fields`) or of a dictionary (`T | undefined`); a place of a
+> tuple or of an array (`T | undefined`); a default joins the type where `undefined`
+> can come and is dead where it cannot; a rest is the remaining shape, the remaining
+> tuple, or an unmutated array; patterns nest. To have values to take from, the typer
+> gained object literals of plain keys and shorthand names (a literal value is a
+> retained literal; US-085 completes them) and arithmetic (`number` for numbers,
+> `bigint` for bigints, `string` for `+` on strings; US-116 refines `int32`).
+> **Decisions:** (1) what a pattern binds is widened, `const` or not, as the story's
+> `const { a = 1 } = { a: "x" }` is `string`; (2) a binding given anything whose type
+> is not known yet has no type yet, and neither has what depends on it; (3) a binding
+> written in a way not followed here (a destructuring assignment, a parenthesised
+> target) has no type yet; nor has a loop's variable, which is declared with no value;
+> (4) a type that grows without end (`let x = 1; x = [x]`) is given up on after as
+> many rounds as there are bindings (eight at least), alone; (5) `x ??= v` is `x`
+> without `undefined` and `null`, with `v`: the union still holds what `x` was
+> declared with; (6) what `facts` holds already is kept as it is. Fixtures: three
+> more under `04-expressions/E125`. Verified: fmt, both clippy passes, audit, tests,
+> doc tests, 100% line and region coverage, `cargo mutants --in-diff` 63 caught, 0
+> missed, 6 unviable.
 
 **Done when**
 - `const x = 1` is literal `1`; `let x = 1` is `int32`, `number` after a non-int32
