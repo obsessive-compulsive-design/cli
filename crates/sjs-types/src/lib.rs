@@ -5,11 +5,14 @@
 //! A union is a normalized set: flat, without duplicates, without a member another
 //! member already holds, in an order that depends on the types alone, and never of
 //! fewer than two members. [`Printer`] writes a type in the readable notation of
-//! SPEC.md §13.7 (US-081).
+//! SPEC.md §13.7 (US-081). [`Assignability`] decides whether one type may go where
+//! another is expected (SPEC.md §3.3, US-082).
 
+mod assign;
 mod literal;
 mod printer;
 
+pub use assign::Assignability;
 pub use literal::{Integer, Literal, Number};
 pub use printer::Printer;
 use std::cmp::Ordering;

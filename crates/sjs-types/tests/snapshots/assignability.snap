@@ -1,0 +1,100 @@
+Each type, and the types of this list it is assignable to besides itself.
+
+number
+    => unknown; number | string
+int32
+    => number; unknown; number | string
+bigint
+    => unknown
+string
+    => unknown; string | undefined; number | string
+boolean
+    => unknown
+undefined
+    => unknown; string | undefined
+null
+    => unknown
+unknown
+    => 
+never
+    => number; int32; bigint; string; boolean; undefined; null; unknown; 1; 1.5; "a"; true; 1n; {}; { a: number }; { a: int32 }; { a: number, b: string }; { a: 1 }; { [key: string]: number }; { [key: string]: int32 }; number[]; int32[]; readonly number[]; readonly int32[]; [int32, int32]; [number, string]; [int32]; (): number; (a: number): number; (a: int32): int32; (a?: number): number; (...rest: number[]): number; (a: number, b: string): number; <T>(a: T): T; Base; Derived; Other; T; Promise<number>; Promise<int32>; Iterator<number>; AsyncIterator<number>; Generator<int32, string>; Map<string, number>; Set<int32>; string | undefined; number | string; 1 | "a"
+1
+    => number; int32; unknown; number | string; 1 | "a"
+1.5
+    => number; unknown; number | string
+"a"
+    => string; unknown; string | undefined; number | string; 1 | "a"
+true
+    => boolean; unknown
+1n
+    => bigint; unknown
+{}
+    => unknown
+{ a: number }
+    => unknown; {}
+{ a: int32 }
+    => unknown; {}; { a: number }
+{ a: number, b: string }
+    => unknown; {}; { a: number }
+{ a: 1 }
+    => unknown; {}; { a: number }; { a: int32 }
+{ [key: string]: number }
+    => unknown
+{ [key: string]: int32 }
+    => unknown; { [key: string]: number }
+number[]
+    => unknown
+int32[]
+    => unknown
+readonly number[]
+    => unknown
+readonly int32[]
+    => unknown; readonly number[]
+[int32, int32]
+    => unknown; readonly number[]; readonly int32[]
+[number, string]
+    => unknown
+[int32]
+    => unknown; readonly number[]; readonly int32[]
+(): number
+    => unknown; (a: number): number; (a?: number): number; (...rest: number[]): number; (a: number, b: string): number
+(a: number): number
+    => unknown; (a: number, b: string): number
+(a: int32): int32
+    => unknown
+(a?: number): number
+    => unknown; (a: number): number; (...rest: number[]): number; (a: number, b: string): number
+(...rest: number[]): number
+    => unknown
+(a: number, b: string): number
+    => unknown
+<T>(a: T): T
+    => unknown
+Base
+    => unknown
+Derived
+    => unknown; Base
+Other
+    => unknown
+T
+    => unknown
+Promise<number>
+    => unknown
+Promise<int32>
+    => unknown; Promise<number>
+Iterator<number>
+    => unknown
+AsyncIterator<number>
+    => unknown
+Generator<int32, string>
+    => unknown; Iterator<number>
+Map<string, number>
+    => unknown
+Set<int32>
+    => unknown
+string | undefined
+    => unknown
+number | string
+    => unknown
+1 | "a"
+    => unknown; number | string

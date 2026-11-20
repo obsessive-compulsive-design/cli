@@ -2762,7 +2762,33 @@ interned set. Edge: a self-referential class prints by name; an empty `{}`; a ke
 not an identifier prints quoted.
 
 #### US-082 Assignability
-§3.3 · After: US-080 · Size: M · M1
+§3.3 · After: US-080 · Size: M · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-types::assign`: `Assignability::new(&types, &superclass)` and
+> `assignable(from, to)`, with every rule of the story. **Decisions:** (1) a class is
+> assignable to itself and to the classes it extends, however far up (`superclass` is
+> given by the caller; classes that extend one another end); (2) an array the program
+> mutates anywhere is assignable only to itself: not to an unmutated array of the same
+> elements either, and no unmutated array or tuple goes to a mutated one (inference
+> marks an array mutated program-wide, so the two flags never meet for one array);
+> (3) **functions hide no parameter**: fewer parameters do for more, an optional
+> parameter takes one that is passed, a caller that may leave an argument out needs
+> the parameter optional (`T | undefined` is not that), but a parameter or a rest the
+> target never passes is refused even when optional, so `(a?: T)` is no `()` and
+> `(...xs: T[])` goes only where rest arguments are passed. Without that
+> assignability is not transitive (`(a?: bigint)` to `()` to `(a: string)`), which the
+> property test found; (4) generic functions are compared over the same type
+> variables only: instantiation is inference's; a type variable is assignable only to
+> itself; (5) a retained-literal key is judged by its type alone; (6) promises,
+> iterators, generators and dictionaries are covariant in what they hold, a generator
+> is an iterator of what it yields, async and sync never mix; `Map`, `Set` and
+> `WeakMap` are mutable, so only to themselves; (7) a union source is taken apart
+> before a union target. E101 is not decided here. Tests: the matrix of 49
+> representative types as a snapshot for review
+> (`tests/snapshots/assignability.snap`), the edges of the story, and property tests
+> for reflexivity and transitivity over generated types and what they build together
+> (run at 20 000 cases too). Verified: fmt, both clippy passes, audit, tests, doc
+> tests, 100% line and region coverage, `cargo mutants --in-diff` 40 caught, 0 missed.
 
 **Done when**
 - Structural for objects (width), arrays (invariant when mutated anywhere, covariant
