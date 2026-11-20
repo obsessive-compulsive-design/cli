@@ -10,7 +10,7 @@ const o = {
   b: 2,
   "c-d": 3,
   [k]: 4,
-  ...a,
+  ...f,
 }
 
 const empty = {}

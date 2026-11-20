@@ -2,7 +2,7 @@
 //! back. Printing is total, depends on the type alone, and tells any two types apart
 //! as long as the classes are given names that differ.
 
-use crate::{Builtin, ClassId, Function, Literal, Number, Property, Type, TypeId, Types, VarId};
+use crate::{Builtin, ClassId, Function, Literal, Property, Type, TypeId, Types, VarId};
 
 /// Prints the types of a [`Types`], naming classes as it is told to.
 pub struct Printer<'a> {
@@ -22,21 +22,6 @@ fn quoted(text: &str) -> String {
         c => c.to_string(),
     });
     format!("\"{}\"", escaped.collect::<String>())
-}
-
-/// A number as JavaScript prints one: `1`, `1.5`, `-0`, `1e+21`, `1.5e-7`, `NaN`.
-fn number(number: Number) -> String {
-    let value = number.value();
-    let size = value.abs();
-    if value.is_nan() {
-        "NaN".to_owned()
-    } else if value.is_infinite() {
-        format!("{}Infinity", if value < 0.0 { "-" } else { "" })
-    } else if size != 0.0 && !(1e-6..1e21).contains(&size) {
-        format!("{value:e}").replace('e', "e+").replace("e+-", "e-")
-    } else {
-        format!("{value}")
-    }
 }
 
 fn is_identifier(key: &str) -> bool {
@@ -84,7 +69,7 @@ impl<'a> Printer<'a> {
             Type::Undefined => "undefined".to_owned(),
             Type::Unknown => "unknown".to_owned(),
             Type::Never => "never".to_owned(),
-            Type::Literal(Literal::Number(value)) => number(*value),
+            Type::Literal(Literal::Number(value)) => value.text(),
             Type::Literal(Literal::BigInt(value)) => format!("{}n", value.decimal()),
             Type::Literal(Literal::String(value)) => quoted(value),
             Type::Literal(Literal::Boolean(value)) => value.to_string(),

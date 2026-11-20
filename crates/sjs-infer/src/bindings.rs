@@ -50,6 +50,8 @@ struct Collector<'a, 't> {
     given: BTreeMap<usize, Vec<Given<'t>>>,
     /// The writes that are accounted for, by where the name begins.
     handled: BTreeSet<usize>,
+    /// The declarations whose object is written into: `name.key = …`, `name[…]++`.
+    mutated: BTreeSet<usize>,
 }
 
 fn value_of(node: NodeRef<'_>) -> Option<Element<'_>> {
@@ -134,9 +136,23 @@ impl<'t> Collector<'_, 't> {
                 }
                 _ => children.first().and_then(name),
             };
-            let declaration = written
-                .and_then(|start| self.referenced_at.get(&start))
-                .and_then(|&at| self.bindings.references[at].declaration);
+            let declared = |start: usize| {
+                let reference = self.referenced_at.get(&start);
+                reference.and_then(|&at| self.bindings.references[at].declaration)
+            };
+            let declaration = written.and_then(declared);
+            let writes = matches!(
+                node.kind(),
+                NodeKind::AssignExpr | NodeKind::UpdateExpr | NodeKind::ForUpdate
+            );
+            // A write into a member, however deep, changes the object the name holds.
+            let into = nodes(node)
+                .find(|target| matches!(target.kind(), NodeKind::MemberExpr | NodeKind::IndexExpr));
+            let object = into
+                .filter(|_| writes)
+                .and_then(|target| target.tokens().first());
+            let object = object.and_then(|name| declared(name.span.byte_start));
+            self.mutated.extend(object);
             match node.kind() {
                 NodeKind::ConstDecl | NodeKind::LetDecl => {
                     let bound = children.get(1).copied();
@@ -227,7 +243,7 @@ fn contributed(
     typer: &mut Typer<'_>,
     known: &Facts,
     given: &Given<'_>,
-    is_let: bool,
+    loose: bool,
     own: Option<TypeId>,
 ) -> Option<TypeId> {
     match given {
@@ -236,13 +252,19 @@ fn contributed(
             for step in path {
                 ty = ty.and_then(|from| taken(typer, known, from, step));
             }
-            // What a pattern takes is no literal any more, nor is a `let`.
-            let widen = is_let || !path.is_empty();
-            ty.map(|ty| if widen { typer.widened(ty) } else { ty })
+            // What a pattern takes is no literal any more; a `let` holds none at all.
+            let ty = ty.map(|ty| {
+                if path.is_empty() {
+                    ty
+                } else {
+                    typer.widened(ty)
+                }
+            });
+            ty.map(|ty| if loose { typer.loosened(ty) } else { ty })
         }
-        Given::Assigned(value) => typer.type_of(*value).map(|ty| typer.widened(ty)),
+        Given::Assigned(value) => typer.type_of(*value).map(|ty| typer.loosened(ty)),
         Given::Defaulted(value) => {
-            let value = typer.type_of(*value).map(|ty| typer.widened(ty));
+            let value = typer.type_of(*value).map(|ty| typer.loosened(ty));
             let present = own.map(|own| typer.present(own));
             present
                 .zip(value)
@@ -294,6 +316,7 @@ pub fn infer_bindings(
         ),
         given: BTreeMap::new(),
         handled: BTreeSet::new(),
+        mutated: BTreeSet::new(),
     };
     collector.collect(tree.root());
     // A binding written in a way that is not followed here has no type yet.
@@ -327,7 +350,9 @@ pub fn infer_bindings(
         let mut next = facts.clone();
         for &at in &followed {
             let given = &collector.given[&at];
-            let is_let = bindings.declarations[at].kind == DeclKind::Let;
+            // A `let` and an object written into hold no literal types.
+            let loose =
+                bindings.declarations[at].kind == DeclKind::Let || collector.mutated.contains(&at);
             let mut judge = Typer::new(source, tree, bindings, &known, types);
             let own = known.declarations.get(&at).copied();
             // In the first round a binding is what it is declared with.
@@ -335,7 +360,7 @@ pub fn infer_bindings(
                 .iter()
                 .filter(|given| round > 0 || matches!(given, Given::Declared(..)));
             let parts: Option<Vec<TypeId>> = counted
-                .map(|given| contributed(&mut judge, &known, given, is_let, own))
+                .map(|given| contributed(&mut judge, &known, given, loose, own))
                 .collect();
             // A binding given something of no type yet has none yet either.
             let ty = parts.map(|parts| types.union(parts));

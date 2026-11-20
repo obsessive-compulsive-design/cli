@@ -294,6 +294,7 @@ fn null_is_written_only_to_the_right_of_a_strict_comparison() {
             "E100 @5:3 null",
             "E100 @6:12 null",
             "E100 @7:16 null",
+            "E000 @8:14 null",
             "E100 @8:14 null",
             "E100 @9:1 null",
             "E100 @11:7 null",

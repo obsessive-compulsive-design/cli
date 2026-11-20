@@ -4,10 +4,15 @@
 //! an expression when it can be told yet; [`check_expressions`] reports `null` written
 //! where a program may not write it (E100) and a template filled with a value that is
 //! no text (E125). US-084 adds [`infer_bindings`]: the type of each `const` and `let`,
-//! through destructuring too.
+//! through destructuring too. US-085 completes object literals (spreads, computed keys,
+//! E000, E134 and E138 for what they may not hold) and adds [`infer_program`]: the
+//! modules in order, so that an import has the type of what it is bound to and a
+//! namespace the shape of its module's exports.
 
 mod bindings;
 mod expressions;
+mod program;
 
 pub use bindings::infer_bindings;
 pub use expressions::{check_expressions, Facts, Typer};
+pub use program::{infer_program, ModuleTypes};

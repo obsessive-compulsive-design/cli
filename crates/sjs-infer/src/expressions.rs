@@ -1,7 +1,7 @@
 //! The types of literal and primitive expressions (SPEC.md §3.1, §4.1).
 
 use sjs_bind::Bindings;
-use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile};
+use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
 use sjs_types::{ClassId, Integer, Literal, Number, Printer, Property, Type, TypeId, Types};
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,8 +30,8 @@ pub struct Typer<'a> {
     references: BTreeMap<usize, usize>,
     /// The declarations that are default imports: the one such form is a JSON module.
     json: BTreeSet<usize>,
-    /// The templates already judged, by where each begins.
-    templates: BTreeSet<usize>,
+    /// The templates and object literals already judged, by where each begins.
+    judged: BTreeSet<usize>,
     diagnostics: Diagnostics,
 }
 
@@ -40,6 +40,13 @@ pub(crate) fn nodes(node: NodeRef<'_>) -> impl Iterator<Item = NodeRef<'_>> {
         Element::Node(inner) => Some(inner),
         Element::Token(_) => None,
     })
+}
+
+fn element_span(element: &Element<'_>) -> Span {
+    match element {
+        Element::Node(node) => node.span(),
+        Element::Token(token) => token.token().span,
+    }
 }
 
 pub(crate) fn punct(element: Option<&Element<'_>>) -> Option<Punct> {
@@ -80,7 +87,7 @@ impl<'a> Typer<'a> {
                 .filter(|(_, declaration)| starts.contains(&declaration.span.byte_start))
                 .map(|(at, _)| at)
                 .collect(),
-            templates: BTreeSet::new(),
+            judged: BTreeSet::new(),
             diagnostics: Diagnostics::new(),
         }
     }
@@ -206,7 +213,7 @@ impl<'a> Typer<'a> {
                     _ => None,
                 }
             }
-            NodeKind::ObjectLit => self.object(&children),
+            NodeKind::ObjectLit => self.object(node),
             NodeKind::ArrayLit => {
                 let elements: Vec<Element<'_>> = children
                     .iter()
@@ -258,36 +265,198 @@ impl<'a> Typer<'a> {
         }
     }
 
-    /// The shape of an object literal whose keys are names or strings with a value
-    /// each, or names alone; `None` for one with a spread, a computed key or a method.
-    fn object(&mut self, children: &[Element<'_>]) -> Option<TypeId> {
-        let mut properties = Vec::new();
-        let members = children.iter().filter_map(|child| match child {
-            Element::Node(member) => Some(*member),
-            Element::Token(_) => None,
-        });
-        for property in members {
-            let parts: Vec<Element<'_>> = property.children().collect();
-            let key = property.tokens().first().and_then(|key| match &key.kind {
-                TokenKind::Ident => self.source.slice(&key.span).map(str::to_owned),
-                TokenKind::String(value) => Some(value.to_string()),
-                _ => None,
-            });
-            // `key` alone, for the binding of that name, or `key: value`. What else
-            // has three parts, a method, has a body there, which has no type.
-            let value = match parts.as_slice() {
-                [name] => Some(*name),
-                [_, _, value] => Some(*value),
-                _ => None,
-            };
-            let ty = self.type_of(value?)?;
-            properties.push(Property {
-                key: key?,
-                ty,
-                literal: matches!(self.types.get(ty), Type::Literal(_)),
-            });
+    /// Pushes a finding, the first time the literal that begins at `start` is typed.
+    fn report(&mut self, first: bool, code: Code, span: Span, message: String) {
+        if first {
+            let found = Diagnostic::new(code, self.source.path(), span, message);
+            self.diagnostics.push(found);
         }
-        Some(self.types.intern(Type::Object(properties)))
+    }
+
+    /// The type of an object literal (SPEC.md §4.6): its exact shape, a key with a
+    /// literal value retaining it. A spread merges what it spreads, later keys
+    /// winning: a shape key by key, a class instance by its public fields, `undefined`
+    /// nothing, a union each member in turn (so the literal is a union of shapes);
+    /// anything else is E138. A computed key is the literal its expression is (E000
+    /// when the expression is known to be none), and E134 when the key is spelled
+    /// already, as a key spelled outright after a computed one is. `None` while a
+    /// part of it has no type yet.
+    fn object(&mut self, node: NodeRef<'_>) -> Option<TypeId> {
+        let first = self.judged.insert(node.span().byte_start);
+        // Each shape the literal may be: more than one after a union is spread.
+        let mut shapes: Vec<Vec<Property>> = vec![Vec::new()];
+        // The keys spelled since the start or the last spread: whether outright, and
+        // whether computed.
+        let mut spelled: BTreeMap<String, (bool, bool)> = BTreeMap::new();
+        let mut known = true;
+        for member in nodes(node) {
+            let parts: Vec<Element<'_>> = member.children().collect();
+            let value = parts.last().copied();
+            let ty = value.and_then(|value| self.type_of(value));
+            if member.kind() == NodeKind::SpreadElement {
+                spelled.clear();
+                let spread = ty.and_then(|ty| self.spread(first, member, ty, &shapes));
+                known &= spread.is_some();
+                shapes = spread.unwrap_or(shapes);
+                continue;
+            }
+            let computed = parts.len() == 5;
+            let key = if computed {
+                let written = self.type_of(parts[1]);
+                let key = written.and_then(|written| match self.types.get(written) {
+                    Type::Literal(Literal::String(value)) => Some(value.clone()),
+                    Type::Literal(Literal::Number(value)) => Some(value.text()),
+                    Type::Literal(Literal::BigInt(value)) => Some(value.decimal()),
+                    Type::Literal(Literal::Boolean(value)) => Some(value.to_string()),
+                    _ => None,
+                });
+                if written.is_some() && key.is_none() {
+                    let message = "a computed key must be a literal the checker can tell: a string, number, bigint or boolean literal, or a `const` of one (SPEC.md §4.6)";
+                    self.report(
+                        first,
+                        Code::E000,
+                        element_span(&parts[1]),
+                        message.to_owned(),
+                    );
+                }
+                key
+            } else {
+                member.tokens().first().map(|key| match &key.kind {
+                    TokenKind::String(value) => value.to_string(),
+                    TokenKind::Number(value) => Number::new(value.value).text(),
+                    TokenKind::BigInt(digits) => digits.to_string(),
+                    _ => self.source.slice(&key.span).unwrap_or_default().to_owned(),
+                })
+            };
+            let Some(key) = key else {
+                known = false;
+                continue;
+            };
+            let before = spelled.entry(key.clone()).or_default();
+            // A key spelled outright twice is the parser's finding already.
+            let repeated = if computed {
+                before.0 || before.1
+            } else {
+                before.1 && !before.0
+            };
+            *before = (before.0 || !computed, before.1 || computed);
+            if repeated {
+                let at = if computed {
+                    element_span(&parts[1])
+                } else {
+                    element_span(&parts[0])
+                };
+                let message =
+                    format!("the key `{key}` is spelled twice in this literal (SPEC.md §4.6)");
+                self.report(first, Code::E134, at, message);
+            }
+            let Some(ty) = ty else {
+                known = false;
+                continue;
+            };
+            let literal = matches!(self.types.get(ty), Type::Literal(_));
+            for shape in &mut shapes {
+                shape.retain(|property| property.key != key);
+                shape.push(Property {
+                    key: key.clone(),
+                    ty,
+                    literal,
+                });
+            }
+        }
+        let shapes: Vec<TypeId> = shapes
+            .into_iter()
+            .map(|shape| self.types.intern(Type::Object(shape)))
+            .collect();
+        known.then(|| self.types.union(shapes))
+    }
+
+    /// The shapes after a value of type `ty` is spread into each of `shapes`; `None`
+    /// when what it spreads cannot be told, or is nothing that spreads (E138).
+    fn spread(
+        &mut self,
+        first: bool,
+        member: NodeRef<'_>,
+        ty: TypeId,
+        shapes: &[Vec<Property>],
+    ) -> Option<Vec<Vec<Property>>> {
+        let members: Vec<TypeId> = match self.types.get(ty) {
+            Type::Union(members) => members.clone(),
+            _ => vec![ty],
+        };
+        let mut spread: Vec<Vec<Property>> = Vec::new();
+        for member_type in members {
+            let added: Vec<Property> = match self.types.get(member_type) {
+                Type::Undefined => Vec::new(),
+                Type::Object(properties) => properties.clone(),
+                Type::Class(class) => {
+                    let fields = self.facts.fields.get(class)?;
+                    let field = |(key, ty): (&String, &TypeId)| Property {
+                        key: key.clone(),
+                        ty: *ty,
+                        literal: false,
+                    };
+                    fields.iter().map(field).collect()
+                }
+                // A dictionary spreads keys no shape can name.
+                Type::Dictionary(_) => return None,
+                _ => {
+                    let name = |class: ClassId| self.class_name(class);
+                    let message = format!(
+                        "a `{}` is spread into an object literal: only a shape, a class instance or `undefined` spreads there (SPEC.md §4.6)",
+                        Printer::new(self.types, &name).print(ty)
+                    );
+                    self.report(first, Code::E138, member.span(), message);
+                    return None;
+                }
+            };
+            for shape in shapes {
+                let mut merged: Vec<Property> = shape
+                    .iter()
+                    .filter(|property| !added.iter().any(|new| new.key == property.key))
+                    .cloned()
+                    .collect();
+                merged.extend(added.iter().cloned());
+                spread.push(merged);
+            }
+        }
+        // A literal that may be one of very many shapes is given up on.
+        (spread.len() <= 64).then_some(spread)
+    }
+
+    /// The name of a class, for findings.
+    fn class_name(&self, class: ClassId) -> String {
+        let name = self.facts.class_names.get(&class);
+        name.map_or(format!("class #{}", class.0), Clone::clone)
+    }
+
+    /// A type as a `let` or a mutated object holds it: without its literals, the
+    /// keys of its shapes without theirs.
+    pub(crate) fn loosened(&mut self, id: TypeId) -> TypeId {
+        let members: Vec<TypeId> = match self.types.get(id) {
+            Type::Union(members) => members.clone(),
+            _ => vec![id],
+        };
+        let mut loosened = Vec::new();
+        for member in members {
+            let ty = match self.types.get(member).clone() {
+                Type::Literal(literal) => literal.primitive(),
+                Type::Object(properties) => {
+                    let mut wider = Vec::new();
+                    for property in properties {
+                        wider.push(Property {
+                            ty: self.loosened(property.ty),
+                            literal: false,
+                            key: property.key,
+                        });
+                    }
+                    self.types.intern(Type::Object(wider))
+                }
+                _ => member,
+            };
+            loosened.push(ty);
+        }
+        self.types.union(loosened)
     }
 
     /// A type without `undefined` and `null`: what `??` lets through from its left.
@@ -365,7 +534,7 @@ impl<'a> Typer<'a> {
     /// Types what fills a template; E125 for what is no text.
     fn template(&mut self, start: usize, children: &[Element<'_>]) {
         // Once: a template inside another is reached from both.
-        if !self.templates.insert(start) {
+        if !self.judged.insert(start) {
             return;
         }
         let is_piece = |child: &Element<'_>| matches!(child, Element::Token(token) if matches!(token.token().kind, TokenKind::Template(_)));
@@ -377,10 +546,7 @@ impl<'a> Typer<'a> {
                 Element::Node(node) => node.span(),
                 Element::Token(token) => token.token().span,
             };
-            let name = |class: ClassId| {
-                let name = self.facts.class_names.get(&class);
-                name.map_or(format!("class #{}", class.0), Clone::clone)
-            };
+            let name = |class: ClassId| self.class_name(class);
             let message = format!(
                 "a template is filled with a `{}`: it takes a string, a number, a bigint or a boolean, or an object whose `toString()` returns a string (SPEC.md §4.1)",
                 Printer::new(self.types, &name).print(ty)
@@ -407,6 +573,9 @@ pub fn check_expressions(
     while let Some(node) = pending.pop() {
         let children: Vec<Element<'_>> = node.children().collect();
         pending.extend(nodes(node));
+        if node.kind() == NodeKind::ObjectLit {
+            judge.object(node);
+        }
         if node.kind() == NodeKind::TemplateLit {
             judge.template(node.span().byte_start, &children);
         }

@@ -21,6 +21,23 @@ impl Number {
         f64::from_bits(self.0)
     }
 
+    /// The number as JavaScript prints one, which is how it spells a key: `1`, `1.5`,
+    /// `-0`, `1e+21`, `1.5e-7`, `NaN`.
+    #[must_use]
+    pub fn text(self) -> String {
+        let value = self.value();
+        let size = value.abs();
+        if value.is_nan() {
+            "NaN".to_owned()
+        } else if value.is_infinite() {
+            format!("{}Infinity", if value < 0.0 { "-" } else { "" })
+        } else if size != 0.0 && !(1e-6..1e21).contains(&size) {
+            format!("{value:e}").replace('e', "e+").replace("e+-", "e-")
+        } else {
+            format!("{value}")
+        }
+    }
+
     /// Whether it is an `int32`: an integer in [-2³¹, 2³¹), and not `-0`.
     #[must_use]
     pub fn is_int32(self) -> bool {

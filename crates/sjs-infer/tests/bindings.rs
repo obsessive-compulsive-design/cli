@@ -103,7 +103,6 @@ fn a_const_has_the_type_of_its_value() {
         "const x = { ...o }\n",
         "const x = { [k]: 1 }\n",
         "const x = { m() {} }\n",
-        "const x = { 1: 2 }\n",
         "const x = { a: f() }\n",
         "const x = \"a\" - \"b\"\n",
         "const x = 1 + \"a\"\n",
@@ -182,7 +181,7 @@ fn a_let_is_the_union_of_what_it_is_assigned_without_literals() {
         ["int32 | string", "int32 | string"]
     );
     assert_eq!(one("let x = [1]\n"), "readonly int32[]");
-    assert_eq!(one("let x = { a: 1 }\n"), "{ a: 1 }");
+    assert_eq!(one("let x = { a: 1 }\n"), "{ a: int32 }");
     for later in [
         "let x = 1\nx = f()\n",
         "let x = 1\nx += \"a\"\n",

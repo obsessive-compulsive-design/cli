@@ -152,6 +152,13 @@ fn an_import_binds_to_the_declaration_through_re_exports() {
     assert_eq!(p.export("d4.js", "d"), "nothing");
     assert_eq!(p.export("c.json", "a"), "nothing");
     assert_eq!(p.export("nowhere.js", "a"), "nothing");
+    assert_eq!(p.links.exports(&p.base.join("lib.js")), ["a", "deep", "r"]);
+    assert_eq!(p.links.exports(&p.base.join("d4.js")), ["deep"]);
+    assert_eq!(p.links.exports(&p.base.join("c.json")), Vec::<&str>::new());
+    assert_eq!(
+        p.links.exports(&p.base.join("nowhere.js")),
+        Vec::<&str>::new()
+    );
 }
 
 #[test]

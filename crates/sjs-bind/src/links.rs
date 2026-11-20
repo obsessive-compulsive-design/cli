@@ -62,6 +62,16 @@ impl Links {
         self.follow(&Source::Named(module.to_path_buf(), name.to_owned()))
     }
 
+    /// The names the module at `module` exports, in order; none for a module whose
+    /// exports cannot be told.
+    #[must_use]
+    pub fn exports(&self, module: &Path) -> Vec<&str> {
+        let linked = self.modules.get(module);
+        linked.map_or(Vec::new(), |linked| {
+            linked.exports.keys().map(String::as_str).collect()
+        })
+    }
+
     /// What the name `local`, bound by an `import` of the module at `module`, is bound
     /// to.
     #[must_use]

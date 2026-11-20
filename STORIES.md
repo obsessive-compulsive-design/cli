@@ -2897,7 +2897,40 @@ error here); destructuring a class instance's public fields; a `let` assigned `x
 a loop stays `number`.
 
 #### US-085 Object literal typing
-§3.2, §4.6 · After: US-084 · Size: M · M1
+§3.2, §4.6 · After: US-084 · Size: M · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-infer`. The typer's object literal is complete: every key as ES
+> spells it (`1`, `1.5`, `0x10` as `16`, `2n`, strings, reserved words), a literal
+> value retained, nested literals too; a spread merges with later keys winning: a
+> shape key by key, a class instance by its public fields, `undefined` nothing, a
+> union each member in turn, so the literal is then a union of shapes; a computed key
+> is the literal its expression is. Findings, each literal judged once: `E138` for a
+> spread of anything else (`{ ...[1] }`, a string, `unknown`), `E000` for a computed
+> key known to be no literal, `E134` for a computed key spelled already and for a key
+> spelled outright after a computed one. In `infer_bindings` a `let` and an object
+> written into (`o.k = v`, `o.k++`, `o.a.b += v`, `o[k] ??= v`, from a nested function
+> too) hold no literals: the keys of their shapes are widened, at every depth.
+> `infer_program(graph, links, types)` infers the modules in evaluation order, so an
+> imported name has the type of the declaration it is bound to (through re-exports),
+> a namespace import the shape of its module's exports and a JSON import `unknown`;
+> `Links::exports` lists a module's export names; `Number::text` is a number as ES
+> prints it. **Decisions:** (1) a computed key whose expression has no type yet is
+> not judged yet (`E000` is for one known to be no literal: a `let`, an array, a
+> sum); the story's "known key of the resulting shape" is not checked apart from
+> that; (2) a key spelled outright twice stays the parser's `E134` alone, and as
+> there, a spread starts the keys anew; (3) a literal that may be one of more than 64
+> shapes has no type; so has one that spreads a dictionary or a class whose fields
+> are not known; (4) any write into a member of a binding loosens the whole object
+> the binding holds; passing it to a function that mutates is a later story's;
+> (5) a namespace has a shape only once every export of its module has a type (so
+> not yet for a module that exports a function), never for a module the grammar
+> rejects, for modules that import one another, or for a namespace that holds
+> itself; (6) `infer_program` is not yet part of `check_files`, which sees one file
+> at a time: the findings above are per file. Fixtures: `04-objects/E134` (3 more),
+> `04-objects/E000/computed-key-not-literal.js`, `04-objects/E138` (3);
+> `02-grammar/pass/object-lit.js` spread a number, now a name of no type yet.
+> Verified: fmt, both clippy passes, audit, tests, doc tests, 100% line and region
+> coverage, `cargo mutants --in-diff` 66 caught, 0 missed, 9 unviable.
 
 **Done when**
 - `{ kind: "circle", r: 1 }` retains literal types for its keys; properties widen when
