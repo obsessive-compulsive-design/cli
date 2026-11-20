@@ -11,7 +11,8 @@
 //! is bound to ([`Links`]), with E206 for a name a module does not export and E137 for
 //! a namespace read by a key that is no string literal.
 //! US-068 adds [`ambient`]: the table of globals (`ambient/globals.toml`), against which
-//! [`bind`] judges every name a file does not declare (E204, E133, E138).
+//! [`bind`] judges every name a file does not declare (E204, E133, E138). US-069 has
+//! [`bind`] judge every `this`: E126 where there is none, E000 before `super()`.
 
 pub mod ambient;
 mod cycles;
@@ -19,6 +20,7 @@ mod graph;
 mod host;
 mod json;
 mod links;
+mod receiver;
 mod scopes;
 mod unreachable;
 

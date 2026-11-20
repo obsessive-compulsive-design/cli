@@ -179,6 +179,9 @@ pub fn bind(source: &SourceFile, tree: &SyntaxTree) -> (Bindings, Diagnostics) {
     };
     binder.node(tree.root(), None, None);
     binder.resolve();
+    binder
+        .diagnostics
+        .extend(crate::receiver::judge(source, tree));
     (binder.out, binder.diagnostics)
 }
 
@@ -261,7 +264,7 @@ fn is_node(element: Option<&Element<'_>>, kind: NodeKind) -> bool {
 }
 
 /// The child of `node` of the given kind, if it has one.
-fn child(node: NodeRef<'_>, kind: NodeKind) -> Option<NodeRef<'_>> {
+pub(crate) fn child(node: NodeRef<'_>, kind: NodeKind) -> Option<NodeRef<'_>> {
     node.children().find_map(|child| match child {
         Element::Node(inner) if inner.kind() == kind => Some(inner),
         _ => None,
@@ -311,7 +314,7 @@ fn is_write(node: NodeRef<'_>, children: &[Element<'_>], at: usize) -> bool {
 
 /// Whether the identifier at `children[at]` of `node`, which declares nothing, is a use
 /// of a name, and not a key, a property name or a contextual word.
-fn is_use(node: NodeRef<'_>, children: &[Element<'_>], at: usize) -> bool {
+pub(crate) fn is_use(node: NodeRef<'_>, children: &[Element<'_>], at: usize) -> bool {
     let kind = node.kind();
     let before = at.checked_sub(1).and_then(|before| children.get(before));
     let after = children.get(at + 1);

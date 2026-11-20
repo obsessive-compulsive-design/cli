@@ -2595,7 +2595,25 @@ runtime is `E204` naming the runtime; a member in the removed column is `E133` w
 `Symbol.iterator` is fine; `encodeURI` E133 while `encodeURIComponent` is fine.
 
 #### US-069 `this`, `super`, defaults and E126
-§4.4, §4.5 · After: US-063, US-025 · Size: S · M1
+§4.4, §4.5 · After: US-063, US-025 · Size: S · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-bind::receiver`, run by `bind`: a walk of the tree that knows, at
+> every `this`, whether there is one. A method, an accessor, a field's value and a
+> `static` block have `this`, and so do the arrows in them; the module, a `function`
+> (declaration or expression, in a method too), a method of an object literal and what
+> a class `extends` have none: `E126`. A class declared inside a method has its own
+> again. **Decisions:** (1) a parameter's default is `E126` wherever the function is,
+> a method, an accessor and a constructor included, and so is an arrow written in a
+> default; its message says it is a default; (2) in the constructor of a class with
+> `extends`, a `this` that begins before the end of the constructor's first `super()`
+> call, as the text reads, is `E000`: that includes the arguments of the call
+> (`super(this.x)`) and the arrows of the constructor; (3) a derived constructor that
+> calls no `super()` has every `this` reported, since none comes after one; a
+> `super()` of a class nested in the constructor is not the constructor's;
+> (4) `super.x` before `super()` is left to US-110; (5) a key named `this`
+> (`o.this`, `{ this: 1 }`) is no `this`. Verified: fmt, both clippy passes, audit,
+> tests, doc tests, 100% line and region coverage, `cargo mutants --in-diff` 26 caught,
+> 0 missed, 1 unviable (three survivors of the first run killed or removed).
 
 **Done when**
 - `this` at module level, in a `function` declaration, or in an arrow outside a class is
