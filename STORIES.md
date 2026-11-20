@@ -2669,7 +2669,37 @@ affect order; a JSON module is pure.
 ### Epic 5 · Types and inference
 
 #### US-080 Type representation and normalization
-§3.1, §3.2, §11.1 · After: US-003 · Size: M · M1
+§3.1, §3.2, §11.1 · After: US-003 · Size: M · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-types` (the placeholder is gone): `Types`, an interner whose
+> `intern` puts every type in its one canonical form, so `TypeId` equality is type
+> equality; `Type` with every kind of the scope (`Iterator` and `Generator` carry an
+> `asynchronous` flag, `Builtin` is `Map`/`Set`/`WeakMap` with type arguments);
+> `Literal` over `Number` (the bits of a double), `Integer` (a bigint of any size),
+> strings and booleans; `Types::union`, the normalizer; `Types::compare`, the
+> canonical order. The primitives are interned at fixed ids (`TypeId::NUMBER` …).
+> **Decisions:** (1) the canonical order is structural, never by id, so the members of
+> a union are in one order whatever was interned first (the printer of US-081 and
+> §3.2's order-independence need that): primitives, literals by value (numbers,
+> bigints, strings, `false`, `true`), shapes, dictionaries, arrays, tuples, functions,
+> classes, variables, promises, iterators, generators, collections, then `null` and
+> `undefined` last, so `string | undefined` reads that way; (2) `true | false` is
+> `boolean`: without it one set of values would have two ids; (3) a number literal's
+> primitive is `int32` when it is an integer in range and not `-0`, else `number`;
+> an int32 literal is absorbed by `int32` and by `number`, any other number literal
+> by `number` only; (4) a shape is interned with its keys sorted, and of a key given
+> twice the last stays (E134 is the checker's); (5) `Type::Union` given to `intern`
+> goes through the normalizer, so no unnormalized union can be interned; (6) a mutated
+> and an unmutated array of one element type are two types, as are an optional
+> parameter and a `T | undefined` one; (7) `Types::count` and no `is_empty`: an
+> interner is never empty. Tests: `tests/types.rs` (the laws of the story, the edges,
+> the order pinned over 69 types of every kind) and `tests/prop_types.rs`, a generator
+> of type descriptions with an oracle written apart from the interner that puts a
+> description in normal form as text: interning agrees with it, gives one id per
+> type and no more, and does not depend on what was interned before. `sjs-types` now
+> has `sjs-testkit` as a dev-dependency. Verified: fmt, both clippy passes, audit,
+> tests, doc tests, 100% line and region coverage, `cargo mutants --in-diff` 38
+> caught, 0 missed, 18 unviable.
 
 As the inference and checker passes I want interned, immutable types with unions kept as
 normalized sets, so equality is pointer equality and every later rule is written once.

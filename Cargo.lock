@@ -78,3 +78,6 @@ version = "0.1.0"
 [[package]]
 name = "sjs-types"
 version = "0.1.0"
+dependencies = [
+ "sjs-testkit",
+]

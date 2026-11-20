@@ -6,5 +6,8 @@ license.workspace = true
 publish.workspace = true
 description = "Type representation, normalization, assignability and printer."
 
+[dev-dependencies]
+sjs-testkit = { path = "../sjs-testkit" }
+
 [lints]
 workspace = true
