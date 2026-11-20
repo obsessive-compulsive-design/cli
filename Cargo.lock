@@ -22,8 +22,10 @@ dependencies = [
  "sjs-bind",
  "sjs-diag",
  "sjs-format",
+ "sjs-infer",
  "sjs-syntax",
  "sjs-testkit",
+ "sjs-types",
 ]
 
 [[package]]
@@ -46,6 +48,13 @@ dependencies = [
 [[package]]
 name = "sjs-infer"
 version = "0.1.0"
+dependencies = [
+ "sjs-bind",
+ "sjs-diag",
+ "sjs-syntax",
+ "sjs-testkit",
+ "sjs-types",
+]
 
 [[package]]
 name = "sjs-lint"

@@ -46,8 +46,16 @@ pub fn check_files(files: &[InputFile]) -> Diagnostics {
                     .iter()
                     .any(|d| matches!(d.code, Code::E000 | Code::E001 | Code::E002));
                 if !rejected {
-                    let (_, bound) = sjs_bind::bind(&source, &tree);
+                    let (bindings, bound) = sjs_bind::bind(&source, &tree);
                     diagnostics.extend(bound.iter().cloned());
+                    // What the expressions say of themselves (US-083): E100 for a
+                    // `null` the program writes, E125 for a template filled with what
+                    // is no text.
+                    let facts = sjs_infer::Facts::default();
+                    let mut types = sjs_types::Types::new();
+                    let found_typed =
+                        sjs_infer::check_expressions(&source, &tree, &bindings, &facts, &mut types);
+                    diagnostics.extend(found_typed.iter().cloned());
                 }
             }
         }

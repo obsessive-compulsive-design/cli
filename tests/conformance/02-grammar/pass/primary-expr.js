@@ -9,7 +9,7 @@ class A {
   }
 }
 
-const a = [1, "s", true, null, 2n, /re/v]
+const a = [1, "s", true, undefined, 2n, /re/v]
 
 const b = a
 

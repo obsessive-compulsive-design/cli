@@ -2805,7 +2805,39 @@ mutated in one module is invariant program-wide; a tuple is assignable to an arr
 its element union only when the array is unmutated; fewer params assignable to more.
 
 #### US-083 Literal and primitive expression typing
-§3.1, §4.1, E100, E125 · After: US-080, US-029 · Size: S · M1
+§3.1, §4.1, E100, E125 · After: US-080, US-029 · Size: S · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-infer` (the placeholder is gone): `Typer::type_of(expression)`,
+> the type of an expression when it can be told yet and `None` for one a later pass
+> types; `check_expressions`, which reports `E100` and `E125`; `Facts`, what is known
+> of a file's names before its expressions are typed (the types of declarations, what
+> a class's `toString()` returns), empty until US-084 and the stories after fill it.
+> `check_files` runs `check_expressions` on every file the binder ran on. Typed here:
+> number, bigint, string and boolean literals, a template without holes (its text), a
+> template (`string`), `undefined`, `NaN` and `Infinity`, `null`, `-` on a literal
+> (the literal of the negated value) and on `number`/`int32`/`bigint`, `!`, `typeof`,
+> `===`/`!==`, `??`, an array literal of typed elements, parentheses, `JSON.parse(…)`
+> of the global `JSON` and a JSON default import (both `unknown`), and a name whose
+> declaration's type `Facts` holds. **Decisions:** (1) every exact number literal
+> keeps its literal type; what the story calls `int32` and `number` is the literal's
+> primitive: `1e3`, `1.0`, `0x7fffffff` and `-2147483648` are `int32` literals,
+> `2147483648`, `1.5` and `-0` are `number` ones; an integer past 2⁵³, which the
+> double does not hold, is plain `number`; (2) `E100` is decided from the text alone:
+> a `null` token that is not the right operand of `===`/`!==` directly (`x ===
+> (null)` and `x ?? null` are `E100`); a key named `null` (`o.null`, `{ null: 1 }`, a
+> class member) is no `null`; (3) `x ?? y` is the left without `undefined` and `null`,
+> with the right; `-` of an `int32` is `number` (the least one has no negation);
+> (4) an array literal is an unmutated array of its elements' types with literals
+> widened; an empty one is left to E110's story; (5) `E125` is reported only when the
+> type of what fills the template is known: `undefined`, `null`, `unknown`, arrays,
+> and a class with no `toString()` seen to return a string; an expression a later
+> pass types is not judged yet, so the check grows with inference; (6) a default
+> import is typed `unknown` because the one default import the grammar accepts is a
+> JSON module. Fixtures: `03-values/E100` (5), `04-expressions/E125` (3);
+> `02-grammar/pass/primary-expr.js` lost the `null` in its array. `sjs-cli` now
+> depends on `sjs-infer` and `sjs-types`. Verified: fmt, both clippy passes, audit,
+> tests, doc tests, 100% line and region coverage, `cargo mutants --in-diff` 75 caught,
+> 0 missed, 9 unviable.
 
 **Done when**
 - Integer literals in [−2³¹, 2³¹) are `int32` literals (including `1e3`, `1.0`,
