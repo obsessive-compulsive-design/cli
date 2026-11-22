@@ -68,8 +68,8 @@ fn the_examples_of_the_spec_print_exactly() {
         t.literal(Literal::Boolean(false)),
     );
     let (config, error) = (
-        t.intern(Type::Class(ClassId(0))),
-        t.intern(Type::Class(ClassId(1))),
+        t.intern(Type::Class(ClassId(0), Vec::new())),
+        t.intern(Type::Class(ClassId(1), Vec::new())),
     );
     let ok = t.intern(Type::Object(vec![
         property("ok", yes, true),
@@ -187,7 +187,12 @@ fn composite(t: &mut Types) -> Vec<TypeId> {
     let literals = t.union([a, one]);
     let or_undefined = t.union([s, TypeId::UNDEFINED]);
     let mixed = t.union([a, n]);
-    let node = t.intern(Type::Class(ClassId(2)));
+    let node = t.intern(Type::Class(ClassId(2), Vec::new()));
+    let boxed = t.intern(Type::Class(ClassId(2), vec![n, s]));
+    assert_eq!(
+        Printer::new(t, &class).print(boxed),
+        format!("{}<number, string>", class(ClassId(2)))
+    );
     let (var_t, var_u) = (t.intern(Type::Var(VarId(0))), t.intern(Type::Var(VarId(1))));
     let numbers = t.intern(Type::Array {
         element: n,
@@ -284,7 +289,7 @@ fn composite(t: &mut Types) -> Vec<TypeId> {
         function(t, &[7, 6], &[], None, n),
         function(t, &[], &vec![(n, false); 28], None, n),
         node,
-        t.intern(Type::Class(ClassId(9))),
+        t.intern(Type::Class(ClassId(9), Vec::new())),
         var_t,
         var_u,
         t.intern(Type::Var(VarId(6))),

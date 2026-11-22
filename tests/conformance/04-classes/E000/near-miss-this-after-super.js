@@ -9,6 +9,7 @@ export class Derived extends Base {
 }
 
 export class Plain {
+  size
   constructor(size) {
     this.size = size
   }

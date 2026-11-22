@@ -38,7 +38,7 @@ fn checked(text: &str) -> Checked {
     let mut facts = Facts::default();
     for (name, class) in [("config", 0), ("failure", 1)] {
         let declaration = bindings.declarations.iter().position(|d| d.name == name);
-        let ty = types.intern(Type::Class(ClassId(class)));
+        let ty = types.intern(Type::Class(ClassId(class), Vec::new()));
         facts
             .declarations
             .extend(declaration.map(|declaration| (declaration, ty)));

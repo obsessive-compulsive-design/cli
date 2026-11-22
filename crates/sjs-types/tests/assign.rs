@@ -65,7 +65,7 @@ fn function(
 }
 
 fn class(t: &mut Types, id: u32) -> TypeId {
-    t.intern(Type::Class(ClassId(id)))
+    t.intern(Type::Class(ClassId(id), Vec::new()))
 }
 
 fn yes(t: &Types, from: TypeId, to: TypeId) -> bool {
@@ -271,6 +271,31 @@ fn shapes_are_structural_and_classes_nominal() {
     assert!(
         !yes(&t, base, empty) && !yes(&t, empty, base),
         "a class is no shape"
+    );
+    // A generic class: to itself with the same type arguments only, for what an
+    // instance holds is written as well as read; up to what it extends whatever they
+    // are.
+    let of = |t: &mut Types, id: u32, arguments: &[TypeId]| {
+        t.intern(Type::Class(ClassId(id), arguments.to_vec()))
+    };
+    let (ints, numbers, strings) = (
+        of(&mut t, 1, &[I]),
+        of(&mut t, 1, &[N]),
+        of(&mut t, 1, &[S]),
+    );
+    let (pair, other_pair) = (of(&mut t, 1, &[I, S]), of(&mut t, 1, &[I, I]));
+    assert!(yes(&t, ints, ints) && yes(&t, pair, pair), "the same");
+    assert!(
+        !yes(&t, ints, numbers) && !yes(&t, numbers, ints) && !yes(&t, ints, strings),
+        "invariant in what it holds"
+    );
+    assert!(
+        !yes(&t, pair, other_pair) && !yes(&t, ints, pair) && !yes(&t, pair, ints),
+        "argument by argument, and as many"
+    );
+    assert!(
+        yes(&t, ints, base) && !yes(&t, base, ints),
+        "up to its base"
     );
     let looping = |class: ClassId| Some(ClassId(1 - class.0));
     let judge = Assignability::new(&t, &looping);

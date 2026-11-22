@@ -3273,7 +3273,49 @@ constrains by its parameter type.
 callback; fewer params than expected (fine) or more (E136); nested callbacks.
 
 #### US-092 Classes
-§4.5, E114, E129, E138 · After: US-090, US-069 · Size: L · M1
+§4.5, E114, E129, E138 · After: US-090, US-069 · Size: L · M1 · **Status: complete** (2026-11-22)
+
+> Delivered in `sjs-infer` (`classes.rs`, with changes to `members.rs`,
+> `functions.rs`, `generics.rs`, `bindings.rs`, `expressions.rs`, `operators.rs`,
+> `program.rs`) and `sjs-types` (`Type::Class` carries type arguments, printed
+> `Box<int32>`; `Types::function`). A field is the union of its initializer and of
+> every `this.name = v` of the class body (`Class.name = v` for a static one); a
+> method, an accessor and the constructor are functions typed from their bodies and
+> their calls (`o.m(…)`, `o.k = v` for a setter, `new C(…)` and `super(…)`); the
+> class as a value has its constructor's type. **Decisions:** (1) the static members
+> are the members of a second class, the static side (`typeof A`, the class id after
+> the class's), which `A.name` and a static `this` read, so E137/E129/E138 on them
+> are the ordinary member rules; (2) a constructor parameter is a type parameter of
+> the class when the constructor stores it in a field and every read of that field
+> in the class is opaque; a type parameter no member holds is dropped from the class
+> (`A<T, U>(a: T, b: U): A<T>`); (3) E114 is at the field, for one without an
+> initializer that no top-level statement of the constructor assigns with `=`; (4)
+> "base must be a class" is E138 at the name extended, for a function or anything
+> that has a type and is no class; a base that is no class of the program (`Error`,
+> `ns.Base`, an unresolved import) makes inherited members unknown, not missing; (5)
+> an override is compared with its type parameters renamed place by place and with
+> `int32` taken as `number` on both sides, as a setter is against its getter;
+> (6) a class called without `new` is E139, `new` is allowed on any value that is a
+> function giving an instance (a class held in a binding or passed as an argument),
+> and `instanceof` takes such a value on its right; (7) a private name is a key like
+> another (`#x` with its `#`), so `o.#x` on what lacks it is E137/E129; (8) assignability
+> between instances of one generic class is invariant in the type arguments, and an
+> instance goes to a class it extends whatever the arguments (they are not compared
+> upward); (9) a parameter passed for a sibling parameter of its own function that
+> has no type yet no longer waits on it (`swap() { return new Pair(this.b, this.a) }`
+> used to leave `Pair` untyped), which also applies to plain functions; (10) classes
+> are one class program-wide: `infer_program` numbers them and carries what is known
+> of them to the modules inferred later. **Limits:** method and setter call sites
+> are those of the declaring module only; a field holding an empty `[]`/`Map`/`Set`
+> has no type yet; compound assignments (`this.n += 1`) do not widen a field; a
+> spread of an instance takes its own class's public fields only; generators have no
+> type. **Older fixtures and tests changed** because they broke the new rules:
+> `02-grammar/pass/class-member.js` and `field-decl.js`, and
+> `04-classes/E000/near-miss-this-after-super.js` now declare or assign their fields;
+> tests in `collections.rs`, `members.rs`, `operators.rs`, `generics.rs` expect the
+> class findings. Fixtures: `04-classes/E114/` (3), `E129/` (1), `E137/` (2),
+> `E138/` (6). Verified: fmt, both clippy passes, audit, tests, doc tests, 100% line
+> and region coverage, `cargo mutants --in-diff` 281 caught, 0 missed, 57 unviable, no timeout.
 
 **Done when**
 - Fields typed from initializers or constructor assignments; fields without initializer

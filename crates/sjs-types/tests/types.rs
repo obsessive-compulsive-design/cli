@@ -74,12 +74,30 @@ fn the_primitives_are_interned_at_their_ids() {
 }
 
 #[test]
+fn a_function_type_is_told_from_any_other() {
+    let mut t = Types::new();
+    let function = Function {
+        type_params: Vec::new(),
+        params: Vec::new(),
+        rest: None,
+        returns: TypeId::NUMBER,
+    };
+    let id = t.intern(Type::Function(function.clone()));
+    assert_eq!(t.function(id), Some(&function));
+    assert_eq!(t.function(TypeId::NUMBER), None);
+}
+
+#[test]
 fn a_union_is_a_normalized_set() {
     let mut t = Types::new();
     let a = string(&mut t, "a");
-    let class = t.intern(Type::Class(ClassId(1)));
+    let class = t.intern(Type::Class(ClassId(1), Vec::new()));
+    let of_numbers = t.intern(Type::Class(ClassId(1), vec![TypeId::NUMBER]));
+    let of_strings = t.intern(Type::Class(ClassId(1), vec![TypeId::STRING]));
     for (x, y) in [
         (a, class),
+        (class, of_numbers),
+        (of_numbers, of_strings),
         (TypeId::NUMBER, TypeId::STRING),
         (TypeId::NULL, a),
     ] {
@@ -302,13 +320,13 @@ fn one_id_for_one_type_and_another_for_any_other() {
     assert_ne!(optional, t.intern(function(&[(n, true)], None, s)));
     assert_eq!(optional, t.intern(function(&[(n, true)], None, n)));
     assert_ne!(
-        t.intern(Type::Class(ClassId(0))),
-        t.intern(Type::Class(ClassId(1))),
+        t.intern(Type::Class(ClassId(0), Vec::new())),
+        t.intern(Type::Class(ClassId(1), Vec::new())),
         "classes are nominal"
     );
     assert_ne!(
         t.intern(Type::Var(VarId(0))),
-        t.intern(Type::Class(ClassId(0)))
+        t.intern(Type::Class(ClassId(0), Vec::new()))
     );
     assert_ne!(t.intern(Type::Promise(n)), t.intern(Type::Dictionary(n)));
     assert_ne!(
@@ -458,8 +476,8 @@ fn larger_in_order(t: &mut Types) -> Vec<TypeId> {
         generic(vec![VarId(0)], vec![], None, n),
         generic(vec![VarId(1)], vec![], None, n),
         generic(vec![VarId(0), VarId(1)], vec![], None, n),
-        Type::Class(ClassId(0)),
-        Type::Class(ClassId(1)),
+        Type::Class(ClassId(0), Vec::new()),
+        Type::Class(ClassId(1), Vec::new()),
         Type::Var(VarId(0)),
         Type::Var(VarId(1)),
         Type::Promise(n),

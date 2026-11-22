@@ -349,10 +349,10 @@ fn a_template_is_filled_with_text() {
             TypeId::BOOLEAN,
         ]);
         let (shown, hidden, numbered, plain) = (
-            types.intern(Type::Class(ClassId(0))),
-            types.intern(Type::Class(ClassId(1))),
-            types.intern(Type::Class(ClassId(2))),
-            types.intern(Type::Class(ClassId(3))),
+            types.intern(Type::Class(ClassId(0), Vec::new())),
+            types.intern(Type::Class(ClassId(1), Vec::new())),
+            types.intern(Type::Class(ClassId(2), Vec::new())),
+            types.intern(Type::Class(ClassId(3), Vec::new())),
         );
         let either = types.union([shown, TypeId::NUMBER]);
         let neither = types.union([hidden, TypeId::NUMBER]);

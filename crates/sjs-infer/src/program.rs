@@ -8,7 +8,7 @@ use crate::mutation::{settled, uses_of};
 use sjs_bind::{bind, Bindings, Bound, Content, DeclKind, Links, Module, ModuleGraph};
 use sjs_diag::{Code, SourceFile};
 use sjs_syntax::SyntaxTree;
-use sjs_types::{Property, Type, TypeId, Types};
+use sjs_types::{ClassId, Property, Type, TypeId, Types};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -155,6 +155,16 @@ fn mutated_anywhere(
     settled(outright, &calls, &parameter)
 }
 
+/// Copies what is known of the classes from one module's facts into another's: a
+/// class is one class wherever it is imported.
+fn share_classes(from: &Facts, to: &mut Facts) {
+    to.fields.clone_from(&from.fields);
+    to.methods.clone_from(&from.methods);
+    to.superclass.clone_from(&from.superclass);
+    to.class_names.clone_from(&from.class_names);
+    to.classes.clone_from(&from.classes);
+}
+
 /// Infers every module of the program, each after the modules it imports
 /// ([`ModuleGraph::evaluation_order`]): an imported name has the type of the
 /// declaration it is bound to, a namespace import the shape of its module's exports
@@ -165,6 +175,8 @@ fn mutated_anywhere(
 /// function mutates, is mutated wherever it is imported. A function's parameters
 /// are what every module passes for them: the modules are inferred in rounds, each
 /// with the call sites the round before found in the others, until nothing changes.
+/// A class is one class in every module: an import of it names it, and what is known
+/// of the classes goes from each module to those inferred after it.
 pub fn infer_program(
     graph: &ModuleGraph,
     links: &Links,
@@ -200,6 +212,21 @@ pub fn infer_program(
         found.unwrap_or((at, declaration))
     };
     let mutated = mutated_anywhere(&scanned, &canonical);
+    // The classes of the program: each a class of its own, with its static side
+    // after it.
+    let mut free = 0;
+    let mut class_of: Vec<BTreeMap<usize, ClassId>> = Vec::new();
+    for (.., bindings) in &scanned {
+        let mut classes = BTreeMap::new();
+        for (index, declaration) in bindings.declarations.iter().enumerate() {
+            if declaration.kind == DeclKind::Class {
+                classes.insert(index, ClassId(free));
+                free += 2;
+            }
+        }
+        class_of.push(classes);
+    }
+    let mut shared = Facts::default();
     // A parameter is what every module passes for it, and what a module passes
     // depends on the others: the modules are inferred until nothing changes.
     let mut previous: BTreeMap<PathBuf, ModuleTypes> = BTreeMap::new();
@@ -217,6 +244,8 @@ pub fn infer_program(
                 .filter(|&declaration| mutated.contains(&canonical(at, declaration)))
                 .collect();
             facts.external_sites = std::mem::take(&mut external[at]);
+            facts.class_of.clone_from(&class_of[at]);
+            share_classes(&shared, &mut facts);
             for (index, declaration) in bindings.declarations.iter().enumerate() {
                 if declaration.kind != DeclKind::Import {
                     continue;
@@ -228,6 +257,8 @@ pub fn infer_program(
                 facts.declarations.extend(ty.map(|ty| (index, ty)));
                 // A function imported is called as it is declared.
                 let (home, function) = canonical(at, index);
+                let class = class_of[home].get(&function);
+                facts.class_of.extend(class.map(|&class| (index, class)));
                 let declared = program.modules.get(&scanned[home].0.path);
                 let returns = declared.and_then(|inferred| inferred.facts.returns.get(&function));
                 let arity = declared.and_then(|inferred| inferred.facts.arity.get(&function));
@@ -237,6 +268,7 @@ pub fn infer_program(
                 facts.arity.extend(arity.map(|&arity| (index, arity)));
             }
             let facts = infer_bindings(source, tree, bindings, &facts, types);
+            share_classes(&facts, &mut shared);
             let inferred = ModuleTypes {
                 bindings: bindings.clone(),
                 facts,

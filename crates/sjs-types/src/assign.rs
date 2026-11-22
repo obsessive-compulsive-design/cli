@@ -36,7 +36,8 @@ impl<'a> Assignability<'a> {
     ///   fewer parameters do for more, but none is hidden: a parameter or a rest the
     ///   other never passes is refused, optional or not, or assignability would not
     ///   be transitive) and returns what the other returns.
-    /// - A class to itself and to the classes it extends.
+    /// - A class to itself and to the classes it extends; a generic one to itself
+    ///   only with the same type arguments.
     /// - A promise, an iterator, a generator and a dictionary by what they hold; a
     ///   generator is an iterator of what it yields. `Map`, `Set` and `WeakMap` are
     ///   mutable, so only to themselves, like a type variable.
@@ -83,7 +84,15 @@ impl<'a> Assignability<'a> {
                 },
             ) => given.iter().all(|&held| self.assignable(held, *element)),
             (Type::Function(given), Type::Function(wanted)) => self.callable_as(given, wanted),
-            (Type::Class(given), Type::Class(wanted)) => self.extends(*given, *wanted),
+            (Type::Class(given, held), Type::Class(wanted, slots)) => {
+                // Of one class, what its type parameters are is to be the same: what
+                // an instance holds is written as well as read.
+                let same = held.len() == slots.len()
+                    && held.iter().zip(slots).all(|(&held, &slot)| {
+                        self.assignable(held, slot) && self.assignable(slot, held)
+                    });
+                self.extends(*given, *wanted) && (given != wanted || same)
+            }
             (
                 Type::Iterator {
                     item: given,

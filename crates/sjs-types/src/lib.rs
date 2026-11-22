@@ -129,8 +129,8 @@ pub enum Type {
     Tuple(Vec<TypeId>),
     /// A function.
     Function(Function),
-    /// An instance of a class.
-    Class(ClassId),
+    /// An instance of a class, with what its type parameters are.
+    Class(ClassId, Vec<TypeId>),
     /// A type variable.
     Var(VarId),
     /// `Promise<T>`.
@@ -238,6 +238,15 @@ impl Types {
     #[must_use]
     pub fn get(&self, id: TypeId) -> &Type {
         &self.types[id.0 as usize]
+    }
+
+    /// The function a type is, when it is one.
+    #[must_use]
+    pub fn function(&self, id: TypeId) -> Option<&Function> {
+        match self.get(id) {
+            Type::Function(function) => Some(function),
+            _ => None,
+        }
     }
 
     /// The id of a type in canonical form, which is new only if no equal type was
@@ -356,7 +365,10 @@ impl Types {
                 inside.push(function.returns);
                 (10, atoms, inside)
             }
-            Type::Class(class) => (11, vec![Atom::Id(class.0)], Vec::new()),
+            Type::Class(class, arguments) => {
+                let atoms = vec![Atom::Id(class.0), Atom::Count(arguments.len())];
+                (11, atoms, arguments.clone())
+            }
             Type::Var(var) => (12, vec![Atom::Id(var.0)], Vec::new()),
             Type::Promise(value) => (13, Vec::new(), vec![*value]),
             Type::Iterator { item, asynchronous } => {

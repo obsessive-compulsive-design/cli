@@ -166,8 +166,8 @@ fn a_spread_takes_from_each_kind_of_value() {
         );
         let either = types.union([one, two]);
         let maybe = types.union([one, TypeId::UNDEFINED]);
-        let instance = types.intern(Type::Class(ClassId(0)));
-        let other = types.intern(Type::Class(ClassId(1)));
+        let instance = types.intern(Type::Class(ClassId(0), Vec::new()));
+        let other = types.intern(Type::Class(ClassId(1), Vec::new()));
         let dictionary = types.intern(Type::Dictionary(TypeId::NUMBER));
         let numbers = types.intern(Type::Array {
             element: TypeId::NUMBER,
@@ -249,7 +249,7 @@ fn an_array_of_class_instances_does_not_spread() {
     let unspreadable = checked(
         &format!("{head}const ks = f()\nconst x = {{ ...ks }}\n"),
         &|types: &mut Types| {
-            let instance = types.intern(Type::Class(ClassId(0)));
+            let instance = types.intern(Type::Class(ClassId(0), Vec::new()));
             let instances = types.intern(Type::Array {
                 element: instance,
                 mutated: true,

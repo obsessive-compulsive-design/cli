@@ -352,7 +352,7 @@ fn a_field_is_filled_anywhere_in_its_class_body() {
             "E110 @4:11 new Set()"
         ]
     );
-    assert_eq!(class("  items = []\n  m(v) {\n    this.items.push()\n    this.items.pop()\n    this.other.push(v)\n    items.push(v)\n    this.items.add(v)\n    this.items[0] += v\n    this.items.length\n  }\n"), ["E110 @2:11 []"], "nothing here puts anything into `items`");
+    assert_eq!(class("  items = []\n  m(v) {\n    this.items.push()\n    this.items.pop()\n    this.other.push(v)\n    items.push(v)\n    this.items.add(v)\n    this.items[0] += v\n    this.items.length\n  }\n"), ["E110 @2:11 []", "E137 @6:10 other"], "nothing here puts anything into `items`, and `other` is no field");
     assert_eq!(class("  seen = new Set()\n  names = new Map()\n  m(v) {\n    this.seen.push(v)\n    this.seen[0] = v\n    this.names.add(v)\n  }\n"), ["E110 @2:10 new Set()", "E110 @3:11 new Map()"]);
     assert_eq!(found("class K {\n  items = []\n}\nclass L {\n  items = [1]\n  m(v) {\n    this.items.push(v)\n  }\n}\n"), ["E110 @2:11 []"], "another class's body is not this one's");
     assert_eq!(

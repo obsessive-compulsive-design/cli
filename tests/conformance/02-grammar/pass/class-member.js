@@ -1,5 +1,6 @@
 // ClassMember: a field, a method, an accessor and a static block.
 class A {
+  static count = 1
   static {
     A.count = 0
   }

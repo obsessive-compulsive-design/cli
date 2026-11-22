@@ -12,7 +12,7 @@ use crate::mutation::arguments;
 use sjs_bind::{Bindings, DeclKind};
 use sjs_diag::{Code, SourceFile, Span};
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
-use sjs_types::{Function, Param, Type, TypeId, VarId};
+use sjs_types::{ClassId, Function, Param, Type, TypeId, VarId};
 use std::collections::BTreeMap;
 
 /// One call site of a parameter: where the argument is, and its type.
@@ -61,6 +61,9 @@ pub(crate) struct Declared<'t> {
     /// Whether it is exported, or named as a value: whether it may be called from
     /// where the calls are not seen.
     pub exported: bool,
+    /// The class it is a method of, when it is one that is not static: the type
+    /// parameters of the class are no type parameters of its own.
+    pub class: Option<ClassId>,
 }
 
 /// What a function is, beyond a function.
@@ -89,7 +92,8 @@ pub(crate) struct Typed {
     pub says: Says,
 }
 
-/// A call of a name.
+/// A call of a name, or of what stands for a method.
+#[derive(Clone)]
 pub(crate) struct Call<'t> {
     pub callee: usize,
     pub passed: Vec<Element<'t>>,
@@ -200,7 +204,7 @@ fn ends_statement(statement: NodeRef<'_>) -> bool {
 }
 
 /// The parameters of a function, as they are written.
-fn parameters_of<'t>(
+pub(crate) fn parameters_of<'t>(
     function: NodeRef<'t>,
     declared_at: &BTreeMap<usize, usize>,
 ) -> Vec<Parameter<'t>> {
@@ -225,29 +229,21 @@ fn parameters_of<'t>(
         .collect()
 }
 
+/// The place of each thing among its like, by where it starts.
+pub(crate) fn places(starts: impl Iterator<Item = usize>) -> BTreeMap<usize, usize> {
+    starts.enumerate().map(|(at, start)| (start, at)).collect()
+}
+
 /// The functions a file declares by name and the calls of names in it.
 pub(crate) fn declared_in<'t>(
     source: &SourceFile,
     tree: &'t SyntaxTree,
     bindings: &Bindings,
 ) -> (Vec<Declared<'t>>, Vec<Call<'t>>) {
-    let at = |starts: Vec<usize>| -> BTreeMap<usize, usize> {
-        starts
-            .into_iter()
-            .enumerate()
-            .map(|(at, start)| (start, at))
-            .collect()
-    };
-    let declared_at = at(bindings
-        .declarations
-        .iter()
-        .map(|d| d.span.byte_start)
-        .collect());
-    let referenced_at = at(bindings
-        .references
-        .iter()
-        .map(|r| r.span.byte_start)
-        .collect());
+    let declarations = bindings.declarations.iter();
+    let references = bindings.references.iter();
+    let declared_at = places(declarations.map(|d| d.span.byte_start));
+    let referenced_at = places(references.map(|r| r.span.byte_start));
     let declares = |element: Option<&Element<'t>>| match element {
         Some(Element::Token(name)) => declared_at.get(&name.token().span.byte_start).copied(),
         _ => None,
@@ -290,6 +286,7 @@ pub(crate) fn declared_in<'t>(
                     node,
                     generalizes: true,
                     exported: exported(name),
+                    class: None,
                 }));
             }
             NodeKind::ConstDecl | NodeKind::LetDecl => {
@@ -314,6 +311,7 @@ pub(crate) fn declared_in<'t>(
                             node: arrow,
                             generalizes: node.kind() == NodeKind::ConstDecl,
                             exported: exported(name),
+                            class: None,
                         }),
                 );
             }
@@ -389,8 +387,10 @@ impl Typer<'_> {
         known: &Facts,
     ) -> Vec<Typed> {
         let mut typed = Vec::new();
-        // The type parameters the parameters before have made.
-        let mut taken: Vec<VarId> = Vec::new();
+        // The type parameters that are taken: those of the class of a method, and
+        // those the parameters before have made.
+        let shape = function.class.and_then(|class| known.classes.get(&class));
+        let mut taken: Vec<VarId> = shape.map(|shape| shape.params.clone()).unwrap_or_default();
         for (place, parameter) in function.parameters.iter().enumerate() {
             let Some(declaration) = parameter.declaration else {
                 continue;
@@ -562,11 +562,14 @@ impl Typer<'_> {
             let declaration = rest.declaration;
             declaration.and_then(|declaration| known.rest.get(&declaration).copied())
         });
-        // Its type parameters: the type variables of its parameters.
+        // Its type parameters: the type variables of its parameters that are not
+        // those of its class.
         let mut type_params = Vec::new();
         for param in &params {
             self.variables(param.ty, &mut type_params);
         }
+        let shape = function.class.and_then(|class| known.classes.get(&class));
+        type_params.retain(|param| !shape.is_some_and(|shape| shape.params.contains(param)));
         let ty = returns
             .filter(|_| rest_element != Some(None))
             .map(|returns| {
@@ -610,14 +613,53 @@ impl Typer<'_> {
         }
     }
 
+    /// Judges what a call calls as a class or as none: `new` on what is no class, a
+    /// class called without `new` (E139). Whether the call has no type for that, or
+    /// for making what has no type yet.
+    fn misused(
+        &mut self,
+        first: bool,
+        made: bool,
+        callee: &Element<'_>,
+        callee_type: Option<TypeId>,
+        declaration: Option<usize>,
+    ) -> bool {
+        let at = element_span_of(callee);
+        let name = self.source.slice(&at).unwrap_or_default();
+        let kind = declaration.map(|declaration| self.bindings.declarations[declaration].kind);
+        let is_class =
+            declaration.is_some_and(|declaration| self.facts.class_of.contains_key(&declaration));
+        // A class is made, or what holds one: a function that gives an instance. A
+        // function declared is no class, whatever it gives.
+        let holds = callee_type.is_some_and(|ty| self.is_class(ty));
+        let no_class = kind == Some(DeclKind::Function) || (callee_type.is_some() && !holds);
+        if made && no_class {
+            let message = format!("`new` on `{name}`, which is no class (SPEC.md §4.4)");
+            self.report(first, Code::E139, at, message);
+        }
+        if !made && is_class {
+            let message = format!(
+                "`{name}` is a class, and is called: an instance is made with `new` (SPEC.md §4.5)"
+            );
+            self.report(first, Code::E139, at, message);
+        }
+        if made {
+            no_class || callee_type.is_none()
+        } else {
+            is_class
+        }
+    }
+
     /// The type of a call, and what is wrong with it: a callee that is no function
     /// (E139), a count of arguments it does not take (E136), an argument it does
     /// not take (E138).
     pub(crate) fn call(&mut self, node: NodeRef<'_>, children: &[Element<'_>]) -> Option<TypeId> {
         let first = self.first_time(node);
         let passed = arguments(children);
-        // A call begins with what is called.
-        let callee = children[0];
+        // What is called comes first, or after `new`.
+        let made = node.kind() == NodeKind::NewExpr;
+        let callee = children.get(usize::from(made)).copied();
+        let callee = callee.unwrap_or(children[0]);
         let name = self
             .source
             .slice(&element_span_of(&callee))
@@ -628,7 +670,7 @@ impl Typer<'_> {
             Element::Node(_) => None,
         };
         let declaration = declaration.and_then(|at| self.bindings.references[at].declaration);
-        let callee_type = self.type_of(callee);
+        let callee_type = self.called_type(&callee);
         let members = callee_type
             .map(|ty| self.members_of(ty))
             .unwrap_or_default();
@@ -639,6 +681,10 @@ impl Typer<'_> {
                 _ => None,
             })
             .collect();
+        let kind = declaration.map(|declaration| self.bindings.declarations[declaration].kind);
+        if self.misused(first, made, &callee, callee_type, declaration) {
+            return None;
+        }
         if let Some(ty) = callee_type.filter(|_| functions.len() < members.len()) {
             let message = format!(
                 "`{name}` is called, and is a `{}`: only a function is called (SPEC.md §4.4)",
@@ -652,7 +698,6 @@ impl Typer<'_> {
             declaration.and_then(|declaration| self.facts.arity.get(&declaration).copied());
         // A parameter is each function passed for it: one of them may take less
         // than the parameter is given (a callback need not name all it is passed).
-        let kind = declaration.map(|declaration| self.bindings.declarations[declaration].kind);
         let callback = kind == Some(DeclKind::Param);
         let by_type = functions
             .first()
@@ -704,31 +749,6 @@ impl Typer<'_> {
             let returns: Vec<TypeId> = functions.iter().map(|function| function.returns).collect();
             (!returns.is_empty()).then(|| self.types.union(returns))
         })
-    }
-
-    /// E139 for `new` on what is no class: a function, or a value that has a type.
-    pub(crate) fn construction(&mut self, node: NodeRef<'_>, children: &[Element<'_>]) {
-        let first = self.first_time(node);
-        // What is made comes after `new`.
-        let class = children.get(1).copied().unwrap_or(children[0]);
-        let name = self
-            .source
-            .slice(&element_span_of(&class))
-            .unwrap_or_default()
-            .to_owned();
-        let declaration = match class {
-            Element::Token(name) => self.references.get(&name.token().span.byte_start).copied(),
-            Element::Node(_) => None,
-        };
-        let declaration = declaration.and_then(|at| self.bindings.references[at].declaration);
-        let kind = declaration.map(|declaration| self.bindings.declarations[declaration].kind);
-        // A function is no class; nor is a value that has a type, for a class as a
-        // value has none yet.
-        let is_function = kind == Some(DeclKind::Function);
-        if is_function || self.type_of(class).is_some() {
-            let message = format!("`new` on `{name}`, which is no class (SPEC.md §4.4)");
-            self.report(first, Code::E139, element_span_of(&class), message);
-        }
     }
 
     /// E111 for a function that returns a value on some paths and nothing on others:

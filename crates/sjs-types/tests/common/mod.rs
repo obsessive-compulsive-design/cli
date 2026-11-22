@@ -135,7 +135,7 @@ pub fn intern(types: &mut Types, desc: &Desc) -> TypeId {
             rest: rest.as_ref().map(|rest| inner(rest)),
             returns: inner(returns),
         }),
-        Desc::Class(id) => Type::Class(ClassId(*id)),
+        Desc::Class(id) => Type::Class(ClassId(*id), Vec::new()),
         Desc::Var(id) => Type::Var(VarId(*id)),
         Desc::Promise(value) => Type::Promise(inner(value)),
         Desc::Iterator(item, asynchronous) => Type::Iterator {

@@ -273,7 +273,7 @@ fn a_pattern_takes_from_a_shape_by_key() {
     );
     let known = |types: &mut Types| {
         let or_undefined = types.union([TypeId::STRING, TypeId::UNDEFINED]);
-        let instance = types.intern(Type::Class(ClassId(0)));
+        let instance = types.intern(Type::Class(ClassId(0), Vec::new()));
         let dictionary = types.intern(Type::Dictionary(TypeId::NUMBER));
         let either = types.union([instance, TypeId::UNDEFINED]);
         let names = vec![

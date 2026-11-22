@@ -227,7 +227,7 @@ fn written(types: &Types, id: TypeId, sorted: bool) -> String {
                 inner(&function.returns)
             )
         }
-        Type::Class(id) => format!("class{}", id.0),
+        Type::Class(id, _) => format!("class{}", id.0),
         Type::Var(id) => format!("var{}", id.0),
         Type::Promise(value) => format!("promise<{}>", inner(value)),
         Type::Iterator { item, asynchronous } => format!("iter{asynchronous}<{}>", inner(item)),

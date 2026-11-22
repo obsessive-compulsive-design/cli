@@ -253,8 +253,8 @@ impl Typer<'_> {
         let (lt, rt) = (self.type_of(left), self.type_of(right));
         let at = element_span_of(&operator);
         let Some(sign) = punct(Some(&operator)) else {
-            // `instanceof`: a typed value on the right is no class.
-            if let Some(ty) = rt {
+            // `instanceof`: a typed value on the right that is no class.
+            if let Some(ty) = rt.filter(|&ty| !self.is_class(ty)) {
                 let message = format!(
                     "the right of `instanceof` is a class: this is a `{}` (SPEC.md §4.1)",
                     self.print_type(ty)

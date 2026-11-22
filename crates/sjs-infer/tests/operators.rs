@@ -40,7 +40,7 @@ fn known(types: &mut Types) -> Vec<(&'static str, TypeId)> {
         ("nullable", types.union([TypeId::NUMBER, TypeId::NULL])),
         ("obj", shape),
         ("fun", function),
-        ("point", types.intern(Type::Class(ClassId(0)))),
+        ("point", types.intern(Type::Class(ClassId(0), Vec::new()))),
         ("one_two", types.union([one, two])),
         ("two_three", types.union([two, three])),
         ("three", three),
@@ -561,7 +561,8 @@ fn a_place_compared_with_or_assigned_to_itself_is_e120() {
     );
     let source = SourceFile::new(
         "a.js",
-        b"class K {\n  m() {\n    this.x = this.x\n    return this === this\n  }\n}\n".to_vec(),
+        b"class K {\n  x = 1\n  m() {\n    this.x = this.x\n    return this === this\n  }\n}\n"
+            .to_vec(),
     )
     .expect("utf-8");
     let (tree, _) = parse(&source);
@@ -573,5 +574,5 @@ fn a_place_compared_with_or_assigned_to_itself_is_e120() {
         .iter()
         .map(|d| (d.code.as_str(), d.span.start.line))
         .collect();
-    assert_eq!(codes, [("E120", 3), ("E120", 4)], "`this` is a place too");
+    assert_eq!(codes, [("E120", 4), ("E120", 5)], "`this` is a place too");
 }

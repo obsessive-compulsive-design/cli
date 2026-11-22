@@ -38,7 +38,7 @@ fn checked(text: &str) -> Checked {
     let mut facts = Facts::default();
     for (name, class) in [("config", 0), ("failure", 1)] {
         let declaration = bindings.declarations.iter().position(|d| d.name == name);
-        let ty = types.intern(Type::Class(ClassId(class)));
+        let ty = types.intern(Type::Class(ClassId(class), Vec::new()));
         facts
             .declarations
             .extend(declaration.map(|declaration| (declaration, ty)));
@@ -560,9 +560,9 @@ fn a_function_in_a_generic_function_has_type_parameters_of_its_own() {
     );
     assert_eq!(nested.found, NONE);
     assert_eq!(
-        clean("class Box {}\nexport const f = (x) => new Box(x)\n", "x"),
+        clean("export const f = (x) => new Box(x)\n", "x"),
         "T",
-        "passed to `new`"
+        "passed to `new`, of a class that is not the file's"
     );
     assert_eq!(
         clean("export const f = async (x) => x\nconst p = f(1)\n", "p"),

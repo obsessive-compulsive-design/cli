@@ -2,12 +2,16 @@
 //! A read needs the key on every member of the receiver's type (E137) and gives the
 //! union of what the members hold; `?.` on a receiver that is never nullish is E121;
 //! a write needs the key there already (E129) and a value the key takes (E138); a
-//! method is called, not read (E138).
+//! method is called, not read (E138). A member of a class instance is looked for in
+//! its class and then in the classes that one extends; a key with a getter and no
+//! setter is not written (E138).
 
+use crate::classes::statics_of;
 use crate::expressions::{element_span_of, punct, Typer};
 use sjs_diag::{Code, Span};
-use sjs_syntax::{Element, NodeKind, NodeRef, Punct, TokenKind};
-use sjs_types::{Assignability, ClassId, Literal, Printer, Property, Type, TypeId};
+use sjs_syntax::{Element, NodeKind, NodeRef, Punct};
+use sjs_types::{Assignability, ClassId, Literal, Printer, Property, Type, TypeId, VarId};
+use std::collections::BTreeMap;
 
 /// What a member of a receiver's type holds at a key.
 enum Held {
@@ -15,8 +19,8 @@ enum Held {
     Value(TypeId),
     /// Nothing: the key is not there.
     Missing,
-    /// A method, which is called and not read.
-    Method,
+    /// A method, which is called and not read: its type, when that is known.
+    Method(Option<TypeId>),
     /// Not known yet: a type a later pass gives members.
     Unknown,
 }
@@ -28,6 +32,16 @@ enum Indexed {
     Missing(String),
     /// The key is no literal of the member's keys, nor a place of it.
     Unreadable,
+    Unknown,
+}
+
+/// Where a key of a class instance is declared.
+pub(crate) enum Owner {
+    /// In this class, whose type parameters are these there.
+    At(ClassId, BTreeMap<VarId, TypeId>),
+    /// Nowhere.
+    Missing,
+    /// Not known: a class nothing is known of is on the way.
     Unknown,
 }
 
@@ -69,35 +83,28 @@ impl Typer<'_> {
                 let property = properties.iter().find(|property| property.key == key);
                 property.map_or(Held::Missing, |property| Held::Value(property.ty))
             }
-            Type::Class(class) => {
-                // The class and the classes it extends, the nearest first.
-                let mut at = Some(class);
-                let mut seen = Vec::new();
-                while let Some(class) = at.filter(|class| !seen.contains(class)) {
-                    seen.push(class);
-                    let field = self
-                        .facts
-                        .fields
-                        .get(&class)
-                        .and_then(|fields| fields.get(key));
-                    if let Some(&field) = field {
-                        return Held::Value(field);
+            Type::Class(class, arguments) => match self.owner(class, &arguments, key) {
+                Owner::Missing => Held::Missing,
+                Owner::Unknown => Held::Unknown,
+                Owner::At(owner, bound) => {
+                    let shape = self.facts.classes.get(&owner);
+                    let fields = self.facts.fields.get(&owner);
+                    let field = fields.and_then(|fields| fields.get(key)).copied();
+                    let getter = shape.and_then(|shape| shape.getters.get(key));
+                    let signature = shape.and_then(|shape| shape.signatures.get(key)).copied();
+                    let methods = self.facts.methods.get(&owner);
+                    let method = methods.is_some_and(|methods| methods.contains(key));
+                    match field.or(getter.copied().flatten()) {
+                        Some(ty) => Held::Value(self.substituted(ty, &bound)),
+                        None if method => {
+                            let signature = signature.map(|ty| self.substituted(ty, &bound));
+                            Held::Method(signature)
+                        }
+                        // Declared, with no type yet.
+                        None => Held::Unknown,
                     }
-                    if self
-                        .facts
-                        .methods
-                        .get(&class)
-                        .is_some_and(|methods| methods.contains(key))
-                    {
-                        return Held::Method;
-                    }
-                    if !self.facts.fields.contains_key(&class) {
-                        return Held::Unknown;
-                    }
-                    at = self.facts.superclass.get(&class).copied();
                 }
-                Held::Missing
-            }
+            },
             Type::Array { .. }
             | Type::Tuple(_)
             | Type::String
@@ -110,6 +117,109 @@ impl Typer<'_> {
             Type::Unknown | Type::Undefined | Type::Null => Held::Missing,
             _ => Held::Unknown,
         }
+    }
+
+    /// Where `key` is declared for an instance of `class` with the type arguments
+    /// `arguments`: in the class or in the classes it extends, the nearest first.
+    pub(crate) fn owner(&mut self, class: ClassId, arguments: &[TypeId], key: &str) -> Owner {
+        let mut at = class;
+        let mut arguments = arguments.to_vec();
+        let mut seen = Vec::new();
+        while !seen.contains(&at) {
+            seen.push(at);
+            let shape = self.facts.classes.get(&at);
+            let params = shape.map(|shape| shape.params.clone());
+            let params = params.unwrap_or_default().into_iter();
+            let bound: BTreeMap<VarId, TypeId> = params.zip(arguments).collect();
+            let fields = self.facts.fields.get(&at);
+            let methods = self.facts.methods.get(&at);
+            let declared = fields.is_some_and(|fields| fields.contains_key(key))
+                || methods.is_some_and(|methods| methods.contains(key))
+                || shape.is_some_and(|shape| shape.declared.contains(key));
+            if declared {
+                return Owner::At(at, bound);
+            }
+            if fields.is_none() {
+                return Owner::Unknown;
+            }
+            let Some(base) = self.facts.superclass.get(&at).copied() else {
+                break;
+            };
+            // What the class extended is given for its type parameters.
+            let passed = shape.map_or(Some(Vec::new()), |shape| shape.base_arguments.clone());
+            let Some(passed) = passed else {
+                return Owner::Unknown;
+            };
+            arguments = Vec::new();
+            for ty in passed {
+                arguments.push(self.substituted(ty, &bound));
+            }
+            at = base;
+        }
+        Owner::Missing
+    }
+
+    /// What `member` takes at `key` when it is written: what its setter takes, when
+    /// it has one; `None` when it has a getter alone, and is not written.
+    fn taking(&mut self, member: TypeId, key: &str) -> Option<Held> {
+        if let Type::Class(class, arguments) = self.types.get(member).clone() {
+            if let Owner::At(owner, bound) = self.owner(class, &arguments, key) {
+                let shape = self.facts.classes.get(&owner);
+                let setter = shape.and_then(|shape| shape.setters.get(key)).copied();
+                let got = shape.is_some_and(|shape| shape.getters.contains_key(key));
+                match (setter, got) {
+                    (Some(Some(taken)), _) => {
+                        return Some(Held::Value(self.substituted(taken, &bound)))
+                    }
+                    (Some(None), _) => return Some(Held::Unknown),
+                    (None, true) => return None,
+                    (None, false) => {}
+                }
+            }
+        }
+        Some(self.held(member, key))
+    }
+
+    /// What is read from a value of the type `from` at `key`, when it holds a value
+    /// there.
+    pub(crate) fn read(&mut self, from: TypeId, key: &str) -> Option<TypeId> {
+        match self.held(from, key) {
+            Held::Value(ty) => Some(ty),
+            _ => None,
+        }
+    }
+
+    /// The type of the method `name` of a value of the type `instance`, when it has
+    /// that method and its type is known.
+    pub(crate) fn method_of(&mut self, instance: TypeId, name: &str) -> Option<TypeId> {
+        match self.held(instance, name) {
+            Held::Method(signature) => signature,
+            _ => None,
+        }
+    }
+
+    /// A type that takes any number where it takes an `int32`: `int32` is inferred,
+    /// never asked for.
+    pub(crate) fn any_number(&mut self, taken: TypeId) -> TypeId {
+        let members = self.members(taken);
+        let wider = members.into_iter().map(|member| {
+            if member == TypeId::INT32 {
+                TypeId::NUMBER
+            } else {
+                member
+            }
+        });
+        self.types.union(wider)
+    }
+
+    /// The class a name names, when `element` is the name of one.
+    fn named_class(&self, element: &Element<'_>) -> Option<ClassId> {
+        let Element::Token(name) = element else {
+            return None;
+        };
+        let reference = self.references.get(&name.token().span.byte_start);
+        let declared = reference.and_then(|&at| self.bindings.references[at].declaration);
+        declared.and_then(|declared| self.facts.class_of.get(&declared).copied())
     }
 
     /// The keys a type names, when it is a literal or a union of literals.
@@ -132,7 +242,7 @@ impl Typer<'_> {
             Indexed::Value(typer.types.union([ty, TypeId::UNDEFINED]))
         };
         match self.types.get(member).clone() {
-            Type::Object(_) | Type::Class(_) => {
+            Type::Object(_) | Type::Class(..) => {
                 let Some(keys) = self.keys(key) else {
                     return Indexed::Unreadable;
                 };
@@ -141,7 +251,7 @@ impl Typer<'_> {
                     match self.held(member, &key) {
                         Held::Value(ty) => values.push(ty),
                         Held::Missing => return Indexed::Missing(key),
-                        Held::Method | Held::Unknown => return Indexed::Unknown,
+                        Held::Method(_) | Held::Unknown => return Indexed::Unknown,
                     }
                 }
                 Indexed::Value(self.types.union(values))
@@ -185,12 +295,17 @@ impl Typer<'_> {
     /// The type of what a member access reads from, without `undefined` and `null`
     /// when it is read by `?.`, and whether a `?.` so far may have found nothing.
     /// E121 for a `?.` on a receiver that is never nullish.
-    fn receiver(&mut self, node: NodeRef<'_>, first: bool) -> Option<(TypeId, bool)> {
+    pub(crate) fn receiver(&mut self, node: NodeRef<'_>, first: bool) -> Option<(TypeId, bool)> {
         let children: Vec<Element<'_>> = node.children().collect();
         let first_child = children.first().copied();
         let (receiver, short) = first_child.and_then(|child| match child {
             Element::Node(inner) if is_member(inner) => self.chain(inner),
-            other => self.type_of(other).map(|ty| (ty, false)),
+            // A class by name: what its static members are members of.
+            other => {
+                let class = self.named_class(&other);
+                let side = class.map(|class| self.instance(statics_of(class)));
+                side.or_else(|| self.type_of(other)).map(|ty| (ty, false))
+            }
         })?;
         if punct(children.get(1)) != Some(Punct::QuestionDot) {
             return Some((receiver, short));
@@ -207,14 +322,12 @@ impl Typer<'_> {
         Some((present, short || present != receiver))
     }
 
-    /// The key of `o.key`, and where it is written; `None` for a private name.
-    fn key_of(&self, node: NodeRef<'_>) -> Option<(String, Span)> {
-        let named = |key: &&sjs_syntax::Token| !matches!(key.kind, TokenKind::PrivateName(_));
-        let key = node.tokens().last().filter(named);
-        key.map(|key| {
-            let text = self.source.slice(&key.span).unwrap_or_default();
-            (text.to_owned(), key.span)
-        })
+    /// The key of `o.key`, and where it is written: a private name with its `#`.
+    pub(crate) fn key_of(&self, node: NodeRef<'_>) -> (String, Span) {
+        let key = node.tokens().last();
+        let span = key.map_or(node.span(), |key| key.span);
+        let text = self.source.slice(&span).unwrap_or_default();
+        (text.to_owned(), span)
     }
 
     /// The type a member access gives, before a `?.` earlier in its chain is counted
@@ -227,7 +340,7 @@ impl Typer<'_> {
         let mut values = Vec::new();
         let mut known = true;
         if node.kind() == NodeKind::MemberExpr {
-            let (key, span) = self.key_of(node)?;
+            let (key, span) = self.key_of(node);
             for member in members {
                 match self.held(member, &key) {
                     Held::Value(ty) => values.push(ty),
@@ -244,7 +357,7 @@ impl Typer<'_> {
                         self.report_about(first, Code::E137, span, message, &operands);
                         return None;
                     }
-                    Held::Method => {
+                    Held::Method(signature) => {
                         // A method is read only to be called on the spot.
                         let parent = node
                             .parent()
@@ -256,8 +369,10 @@ impl Typer<'_> {
                                 "the method `{key}` is read as a value: call it, or wrap the call in an arrow (SPEC.md §12)"
                             );
                             self.report(first, Code::E138, span, message);
+                            return None;
                         }
-                        return None;
+                        known &= signature.is_some();
+                        values.extend(signature);
                     }
                 }
             }
@@ -326,11 +441,8 @@ impl Typer<'_> {
         };
         let children: Vec<Element<'_>> = target.children().collect();
         let (keys, span) = if target.kind() == NodeKind::MemberExpr {
-            let key = self.key_of(target);
-            (
-                key.clone().map(|(key, _)| vec![key]),
-                key.map(|(_, span)| span),
-            )
+            let (key, span) = self.key_of(target);
+            (Some(vec![key]), Some(span))
         } else {
             let written = children.iter().rev().nth(1).copied();
             let key = written.and_then(|written| self.type_of(written));
@@ -356,9 +468,16 @@ impl Typer<'_> {
         let mut takes = Vec::new();
         for member in self.members(receiver) {
             for key in &keys {
-                match self.held(member, key) {
-                    Held::Value(ty) => takes.push(ty),
-                    Held::Missing => {
+                match self.taking(member, key) {
+                    Some(Held::Value(ty)) => takes.push(ty),
+                    None => {
+                        let message = format!(
+                            "`{key}` has a getter and no setter: it is read, not written (SPEC.md §4.5)"
+                        );
+                        self.report(first, Code::E138, span, message);
+                        return;
+                    }
+                    Some(Held::Missing) => {
                         let message = format!(
                             "`{key}` is not a key of `{}`: a key is not added after the object is made (SPEC.md §3.2)",
                             self.print(member)
@@ -366,7 +485,7 @@ impl Typer<'_> {
                         self.report(first, Code::E129, span, message);
                         return;
                     }
-                    Held::Method | Held::Unknown => return,
+                    Some(Held::Method(_) | Held::Unknown) => return,
                 }
             }
         }
@@ -375,16 +494,7 @@ impl Typer<'_> {
             return;
         };
         for taken in takes {
-            // `int32` is inferred, never asked for: such a key takes any number.
-            let members = self.members(taken);
-            let wider = members.into_iter().map(|m| {
-                if m == TypeId::INT32 {
-                    TypeId::NUMBER
-                } else {
-                    m
-                }
-            });
-            let wider = self.types.union(wider);
+            let wider = self.any_number(taken);
             if !self.assignable(given, wider) {
                 let message = format!(
                     "a `{}` is assigned to `{}`, which holds a `{}` (SPEC.md §3.2)",

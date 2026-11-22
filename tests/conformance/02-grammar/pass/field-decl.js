@@ -7,6 +7,10 @@ class A {
   y = 1
   #z
   #w = 2
+  constructor() {
+    this.x = 1
+    this.#z = 2
+  }
 }
 
 export { A }

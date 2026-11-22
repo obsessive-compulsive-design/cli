@@ -43,9 +43,12 @@ fn known(types: &mut Types) -> Vec<(&'static str, TypeId)> {
         ("nullable", types.union([wide, TypeId::NULL])),
         ("deep", types.union([outer, absent])),
         ("outer", outer),
-        ("point", types.intern(Type::Class(ClassId(0)))),
-        ("point3", types.intern(Type::Class(ClassId(1)))),
-        ("stranger", types.intern(Type::Class(ClassId(2)))),
+        ("point", types.intern(Type::Class(ClassId(0), Vec::new()))),
+        ("point3", types.intern(Type::Class(ClassId(1), Vec::new()))),
+        (
+            "stranger",
+            types.intern(Type::Class(ClassId(2), Vec::new())),
+        ),
         (
             "list",
             types.intern(Type::Array {
@@ -177,7 +180,6 @@ fn a_read_gives_what_every_member_holds() {
         "stranger.field",
         "unknownName.k",
         "one.k.toFixed",
-        "point.#secret",
         "f().k",
         "console.log",
     ] {
@@ -413,7 +415,12 @@ fn a_write_needs_the_key_and_a_value_it_takes() {
         found("one?.k\n;[one.k, one.missing] = [1, 2]\n"),
         ["E121 @1:4 ?.", "E137 @2:14 missing"]
     );
-    assert_eq!(found("stranger.k = 1\nlist[0] = 1\none.k = later()\none[later()] = 1\npoint.norm = 1\none.k.deep = 1\nunknownName.k = 1\npoint.#p = 1\none[anykey] = 1\n"), NONE, "what is not known yet is not judged");
+    assert_eq!(found("stranger.k = 1\nlist[0] = 1\none.k = later()\none[later()] = 1\npoint.norm = 1\none.k.deep = 1\nunknownName.k = 1\none[anykey] = 1\n"), NONE, "what is not known yet is not judged");
+    assert_eq!(
+        found("point.#p = 1\nconst s = point.#secret\n"),
+        ["E129 @1:7 #p", "E137 @2:17 #secret"],
+        "a private name is a key like another"
+    );
     assert_eq!(
         checked("one.fresh = 1\none.k = \"s\"\neither[kk] = true\n").2,
         [

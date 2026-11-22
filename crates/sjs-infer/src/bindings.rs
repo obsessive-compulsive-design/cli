@@ -2,6 +2,7 @@
 //! the union of every value assigned to it, without their literals; a name a pattern
 //! declares, what the pattern takes from the value it is given.
 
+use crate::classes::{classes_in, Class};
 use crate::expressions::{element_span_of, nodes, punct, Facts, Typer};
 use crate::functions::{declared_in, Call, Declared, Passed, Site};
 use crate::generics::Says;
@@ -9,7 +10,7 @@ use crate::mutation::{arguments, settled, uses_of, Fill};
 use sjs_bind::{Bindings, DeclKind};
 use sjs_diag::SourceFile;
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
-use sjs_types::{Builtin, Property, Type, TypeId, Types};
+use sjs_types::{Builtin, ClassId, Property, Type, TypeId, Types};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// How many times the types of the bindings are worked out anew from one another
@@ -173,16 +174,13 @@ impl<'t> Collector<'_, 't> {
 }
 
 /// What a step takes from a value of type `from`.
-fn taken(typer: &mut Typer<'_>, facts: &Facts, from: TypeId, step: &Step<'_>) -> Option<TypeId> {
+fn taken(typer: &mut Typer<'_>, from: TypeId, step: &Step<'_>) -> Option<TypeId> {
     let (found, default) = match (typer.types().get(from).clone(), step) {
         (Type::Object(properties), Step::Key(key, default)) => {
             let property = properties.iter().find(|property| &property.key == key);
             (property.map(|property| property.ty), default)
         }
-        (Type::Class(class), Step::Key(key, default)) => {
-            let fields = facts.fields.get(&class);
-            (fields.and_then(|fields| fields.get(key)).copied(), default)
-        }
+        (Type::Class(..), Step::Key(key, default)) => (typer.read(from, key), default),
         (Type::Dictionary(value), Step::Key(_, default)) => (
             Some(typer.types_mut().union([value, TypeId::UNDEFINED])),
             default,
@@ -374,7 +372,6 @@ fn as_mutated(typer: &mut Typer<'_>, id: TypeId) -> TypeId {
 /// The type one thing gives a binding whose type so far is `own`.
 fn contributed(
     typer: &mut Typer<'_>,
-    known: &Facts,
     given: &Given<'_>,
     holder: &Holder<'_, '_>,
     own: Option<TypeId>,
@@ -395,7 +392,7 @@ fn contributed(
             };
             let mut ty = held(typer, *value, &apart);
             for step in path {
-                ty = ty.and_then(|from| taken(typer, known, from, step));
+                ty = ty.and_then(|from| taken(typer, from, step));
             }
             // What a pattern takes is no literal any more.
             let ty = ty.map(|ty| typer.widened(ty));
@@ -467,11 +464,11 @@ fn collected<'a, 't>(
 fn typed_function(
     judge: &mut Typer<'_>,
     function: &Declared<'_>,
-    inputs: &Inputs<'_, '_>,
+    calls: &[Call<'_>],
     (known, unknown): (&Facts, &BTreeSet<usize>),
     (next, partial): (&mut Facts, &mut BTreeSet<usize>),
 ) {
-    for typed in judge.parameter_types(function, inputs.calls, known) {
+    for typed in judge.parameter_types(function, calls, known) {
         let parameter = typed.declaration;
         next.sites.insert(parameter, typed.sites);
         if unknown.contains(&parameter) {
@@ -507,7 +504,7 @@ fn typed_function(
         }
     }
     // How many arguments it takes is plain from how it is written.
-    let (ty, arity) = judge.signature(function, known, inputs.calls);
+    let (ty, arity) = judge.signature(function, known, calls);
     next.arity.insert(function.name, arity);
     if unknown.contains(&function.name) {
         return;
@@ -536,6 +533,11 @@ struct Inputs<'a, 't> {
     fills: &'a BTreeMap<usize, Vec<Fill<'t>>>,
     functions: &'a [Declared<'t>],
     calls: &'a [Call<'t>],
+    classes: &'a [Class<'t>],
+    /// What stands for each method and setter among the declarations.
+    keys: &'a BTreeMap<(ClassId, String), usize>,
+    /// One past the last of the declarations and of what stands for members.
+    extent: usize,
 }
 
 /// Types every declaration but the `unknown` ones, round after round until nothing
@@ -576,28 +578,37 @@ fn rounds(
                 .iter()
                 .filter(|given| round > 0 || matches!(given, Given::Declared(..)));
             let parts: Option<Vec<TypeId>> = counted
-                .map(|given| contributed(&mut judge, &known, given, &holder, own))
+                .map(|given| contributed(&mut judge, given, &holder, own))
                 .collect();
             // A binding given something of no type yet has none yet either.
             let ty = parts.map(|parts| judge.types_mut().union(parts));
             next.declarations.extend(ty.map(|ty| (at, ty)));
         }
+        // The calls of the methods are found by what their receivers are so far.
+        let mut calls = inputs.calls.to_vec();
+        calls.extend(judge.member_calls(inputs.tree.root(), inputs.keys));
         for function in inputs.functions {
             typed_function(
                 &mut judge,
                 function,
-                inputs,
+                &calls,
                 (&known, unknown),
                 (&mut next, &mut partial),
             );
         }
-        let all = 0..bindings.declarations.len();
-        let changed: Vec<usize> = all
+        judge.classes(inputs.classes, (&known, unknown), (&mut next, &mut partial));
+        let all = 0..inputs.extent;
+        let mut changed: Vec<usize> = all
             .filter(|at| {
                 next.declarations.get(at) != known.declarations.get(at)
                     || next.returns.get(at) != known.returns.get(at)
             })
             .collect();
+        // A class changes with what is known of it beyond its type.
+        let reshaped =
+            |class: &&Class<'_>| next.classes.get(&class.id) != known.classes.get(&class.id);
+        let reshaped = inputs.classes.iter().filter(reshaped);
+        changed.extend(reshaped.map(|class| class.declaration));
         known = next;
         if changed.is_empty() || round == last {
             // Still changing in the last round: a type that grows without end.
@@ -686,7 +697,31 @@ pub fn infer_bindings(
         .copied()
         .filter(|at| !unknown.contains(at))
         .collect();
-    let (functions, calls) = declared_in(source, tree, bindings);
+    let (mut functions, mut calls) = declared_in(source, tree, bindings);
+    // The classes of the file: each a class of its own, with its static side after
+    // it, past every class `facts` knows already.
+    let mut facts = facts.clone();
+    let known = [
+        facts.fields.keys().max(),
+        facts.methods.keys().max(),
+        facts.to_string.keys().max(),
+        facts.class_names.keys().max(),
+        facts.classes.keys().max(),
+        facts.superclass.keys().max(),
+        facts.superclass.values().max(),
+        facts.class_of.values().max(),
+    ];
+    let last = known.into_iter().flatten().max();
+    let mut free = last.map_or(0, |last| last.0 + 2);
+    for (at, declaration) in bindings.declarations.iter().enumerate() {
+        if declaration.kind == DeclKind::Class && !facts.class_of.contains_key(&at) {
+            facts.class_of.insert(at, ClassId(free));
+            free += 2;
+        }
+    }
+    let collected = classes_in(source, tree, bindings, &facts.class_of);
+    functions.extend(collected.functions);
+    calls.extend(collected.calls);
     // The parameters of the file's functions: for one passed on to another, and for
     // the other files of the program.
     let listed = |function: &Declared<'_>| -> Vec<Option<usize>> {
@@ -696,7 +731,6 @@ pub fn infer_bindings(
             .filter(|parameter| !parameter.rest);
         plain.map(|parameter| parameter.declaration).collect()
     };
-    let mut facts = facts.clone();
     facts.parameters = functions
         .iter()
         .map(|function| (function.name, listed(function)))
@@ -713,6 +747,9 @@ pub fn infer_bindings(
         fills: &uses.fills,
         functions: &functions,
         calls: &calls,
+        classes: &collected.classes,
+        keys: &collected.keys,
+        extent: collected.extent,
     };
     // What cannot be settled is given up on, and the rest is settled again without
     // it, so that nothing is typed from a type that was dropped.

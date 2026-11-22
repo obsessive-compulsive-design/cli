@@ -85,7 +85,10 @@ impl<'a> Printer<'a> {
             }
             Type::Tuple(elements) => format!("[{}]", list(elements)),
             Type::Function(function) => self.function(function, &[]),
-            Type::Class(class) => (self.class)(*class),
+            Type::Class(class, arguments) if arguments.is_empty() => (self.class)(*class),
+            Type::Class(class, arguments) => {
+                format!("{}<{}>", (self.class)(*class), list(arguments))
+            }
             Type::Var(var) => variable(*var),
             Type::Promise(value) => format!("Promise<{}>", self.print(*value)),
             Type::Iterator { item, asynchronous } => {

@@ -3,9 +3,29 @@
 use crate::functions::{Passed, Site};
 use sjs_bind::Bindings;
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
-use sjs_syntax::{Element, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
-use sjs_types::{ClassId, Integer, Literal, Number, Printer, Property, Type, TypeId, Types};
+use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
+use sjs_types::{ClassId, Integer, Literal, Number, Printer, Property, Type, TypeId, Types, VarId};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// What is known of a class beyond its fields and the names of its methods.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClassFacts {
+    /// The names of the members it declares itself, typed yet or not.
+    pub declared: BTreeSet<String>,
+    /// The types of its methods, by name.
+    pub signatures: BTreeMap<String, TypeId>,
+    /// What each of its getters gives, when that is known.
+    pub getters: BTreeMap<String, Option<TypeId>>,
+    /// What each of its setters takes, when that is known.
+    pub setters: BTreeMap<String, Option<TypeId>>,
+    /// Its type parameters.
+    pub params: Vec<VarId>,
+    /// What the class it extends is given for its type parameters, in terms of the
+    /// class's own; `None` when that cannot be told.
+    pub base_arguments: Option<Vec<TypeId>>,
+    /// The type of its constructor, which is the type of the class as a value.
+    pub constructor: Option<TypeId>,
+}
 
 /// What is known of a file's names before its expressions are typed. Later passes
 /// fill it in; an empty one knows nothing.
@@ -56,6 +76,11 @@ pub struct Facts {
     pub pinned: BTreeSet<usize>,
     /// The names of the classes, for findings.
     pub class_names: BTreeMap<ClassId, String>,
+    /// The class each declaration names: a class, or an import of one. The class
+    /// after it is its static side, which holds its static members.
+    pub class_of: BTreeMap<usize, ClassId>,
+    /// What is known of each class beyond its fields and the names of its methods.
+    pub classes: BTreeMap<ClassId, ClassFacts>,
 }
 
 /// Types the expressions of one file.
@@ -242,6 +267,11 @@ impl<'a> Typer<'a> {
                     ),
                     TokenKind::Bool(value) => Some(self.types.literal(Literal::Boolean(*value))),
                     TokenKind::Null => Some(TypeId::NULL),
+                    TokenKind::Keyword(Keyword::This) => {
+                        let side = self.side_of(token.parent());
+                        side.map(|side| self.instance(side))
+                    }
+                    TokenKind::Keyword(Keyword::Super) => self.base_of(token.parent()),
                     TokenKind::Ident => {
                         let text = self.source.slice(&span).unwrap_or_default();
                         self.name(span.byte_start, text)
@@ -305,10 +335,7 @@ impl<'a> Typer<'a> {
                 }
             }
             NodeKind::ArrowFunction => self.arrow(node),
-            NodeKind::NewExpr => {
-                self.construction(node, &children);
-                None
-            }
+            NodeKind::NewExpr => self.call(node, &children),
             NodeKind::MemberExpr | NodeKind::IndexExpr => {
                 let (ty, short) = self.chain(node)?;
                 // Past a `?.` that found nothing, the whole chain is `undefined`.
@@ -524,14 +551,24 @@ impl<'a> Typer<'a> {
             let added: Vec<Property> = match self.types.get(member_type) {
                 Type::Undefined => Vec::new(),
                 Type::Object(properties) => properties.clone(),
-                Type::Class(class) => {
-                    let fields = self.facts.fields.get(class)?;
-                    let field = |(key, ty): (&String, &TypeId)| Property {
-                        key: key.clone(),
-                        ty: *ty,
-                        literal: false,
-                    };
-                    fields.iter().map(field).collect()
+                Type::Class(class, arguments) => {
+                    let (class, arguments) = (*class, arguments.clone());
+                    let fields = self.facts.fields.get(&class)?.clone();
+                    let params = self.facts.classes.get(&class);
+                    let params = params.map(|shape| shape.params.clone());
+                    let params = params.unwrap_or_default().into_iter();
+                    let bound: BTreeMap<VarId, TypeId> = params.zip(arguments).collect();
+                    // What is private stays where it is.
+                    let public = fields.into_iter().filter(|(key, _)| !key.starts_with('#'));
+                    let mut spread = Vec::new();
+                    for (key, ty) in public {
+                        spread.push(Property {
+                            key,
+                            ty: self.substituted(ty, &bound),
+                            literal: false,
+                        });
+                    }
+                    spread
                 }
                 // A dictionary spreads keys no shape can name.
                 Type::Dictionary(_) => return None,
@@ -611,8 +648,8 @@ impl<'a> Typer<'a> {
     /// Whether a value of this type may fill a template: a string, a number, a bigint,
     /// a boolean, a union of those, or an instance of a class whose `toString()` is
     /// seen to return a string.
-    fn is_text(&self, id: TypeId) -> bool {
-        match self.types.get(id) {
+    fn is_text(&mut self, id: TypeId) -> bool {
+        match self.types.get(id).clone() {
             Type::String
             | Type::Number
             | Type::Int32
@@ -620,14 +657,19 @@ impl<'a> Typer<'a> {
             | Type::Boolean
             | Type::Literal(_) => true,
             Type::Union(members) => members.iter().all(|&member| self.is_text(member)),
-            Type::Class(class) => {
-                let returns = self.facts.to_string.get(class);
-                returns.is_some_and(|&returns| {
+            Type::Class(class, _) => {
+                let is_string = |typer: &Self, ty: TypeId| {
                     matches!(
-                        self.types.get(returns),
+                        typer.types.get(ty),
                         Type::String | Type::Literal(Literal::String(_))
                     )
-                })
+                };
+                let told = self.facts.to_string.get(&class).copied();
+                let method = self.method_of(id, "toString");
+                let gives = method.is_some_and(|method| {
+                    matches!(self.types.get(method), Type::Function(function) if is_string(self, function.returns))
+                });
+                told.is_some_and(|told| is_string(self, told)) || gives
             }
             _ => false,
         }
@@ -641,7 +683,8 @@ impl<'a> Typer<'a> {
         }
         let is_piece = |child: &Element<'_>| matches!(child, Element::Token(token) if matches!(token.token().kind, TokenKind::Template(_)));
         for filling in children.iter().filter(|child| !is_piece(child)) {
-            let Some(ty) = self.type_of(*filling).filter(|&ty| !self.is_text(ty)) else {
+            let ty = self.type_of(*filling);
+            let Some(ty) = ty.filter(|&ty| !self.is_text(ty)) else {
                 continue;
             };
             let span = match filling {
@@ -682,6 +725,7 @@ pub fn check_expressions(
         judge.empty_untyped(node);
         judge.self_assignment(node, &children);
         judge.mixed_returns(node);
+        judge.class_rules(node);
         let operates = matches!(
             node.kind(),
             NodeKind::BinaryExpr

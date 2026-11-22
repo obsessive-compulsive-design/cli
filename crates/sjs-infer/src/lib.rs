@@ -18,9 +18,12 @@
 //! treats opaquely is a type parameter, each call its own instance (E112 when nothing
 //! says what a parameter is). US-091 types callbacks by what they are expected to be: an
 //! arrow passed, stored in a slot that has a type or returned beside other functions takes
-//! its parameters' types from there.
+//! its parameters' types from there. US-092 types classes: fields, methods, accessors,
+//! constructors and static members, `extends`, and classes generic in what their
+//! constructor is passed (E114, E129, E137, E138).
 
 mod bindings;
+mod classes;
 mod context;
 mod expressions;
 mod functions;
@@ -31,6 +34,6 @@ mod operators;
 mod program;
 
 pub use bindings::infer_bindings;
-pub use expressions::{check_expressions, Facts, Typer};
+pub use expressions::{check_expressions, ClassFacts, Facts, Typer};
 pub use functions::{Passed, Site};
 pub use program::{infer_program, ModuleTypes};

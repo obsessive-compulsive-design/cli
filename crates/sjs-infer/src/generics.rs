@@ -5,8 +5,10 @@
 //! an array; ordered with `<`, a number, bigint or string; passed to a function that
 //! is not generic there, what that function takes.
 
-use crate::expressions::{nodes, punct, Typer};
+use crate::classes::{is_constructor, this_key, within};
+use crate::expressions::{punct, Typer};
 use crate::mutation::arguments;
+use sjs_diag::Span;
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct};
 use sjs_types::{Function, Param, Property, Type, TypeId, VarId};
 use std::collections::BTreeMap;
@@ -26,6 +28,8 @@ pub(crate) struct Uses<'t> {
     /// Stored into something, by a method of it or as a part of it: where the text
     /// of what it is stored into starts.
     pub into: Vec<usize>,
+    /// Stored in a field of the instance, `this.key = it`: the keys.
+    pub fields: Vec<Span>,
 }
 
 /// What is known of a parameter's type by how the body uses it.
@@ -56,9 +60,7 @@ impl Uses<'_> {
 /// How the body of `function` uses the declaration `parameter`.
 pub(crate) fn uses_in<'t>(typer: &Typer<'_>, function: NodeRef<'t>, parameter: usize) -> Uses<'t> {
     let mut uses = Uses::default();
-    let mut pending = vec![function];
-    while let Some(node) = pending.pop() {
-        pending.extend(nodes(node));
+    for node in within(function) {
         for (at, child) in node.children().enumerate() {
             let Element::Token(token) = child else {
                 continue;
@@ -69,6 +71,24 @@ pub(crate) fn uses_in<'t>(typer: &Typer<'_>, function: NodeRef<'t>, parameter: u
                 used(&mut uses, node, at);
             }
         }
+    }
+    // What a constructor stores in a field is used as the field is, all over the
+    // class: a read of the field is a use of the parameter.
+    let keys = uses.fields.iter();
+    let keys: Vec<&str> = keys.filter_map(|key| typer.source.slice(key)).collect();
+    let body = function.parent().filter(|_| !keys.is_empty());
+    for node in body.into_iter().flat_map(within) {
+        let key = this_key(&Element::Node(node)).and_then(|key| typer.source.slice(&key));
+        let mine = typer.side_of(node) == typer.side_of(function);
+        let read = key.is_some_and(|key| keys.contains(&key)) && mine;
+        let Some(parent) = node.parent().filter(|_| read) else {
+            continue;
+        };
+        let mut parts = parent.children();
+        let place = parts
+            .position(|part| matches!(part, Element::Node(inner) if inner.span() == node.span()));
+        // Written, the field is stored in again, which says nothing more.
+        used(&mut uses, parent, place.unwrap_or_default());
     }
     uses
 }
@@ -100,9 +120,10 @@ fn used<'t>(uses: &mut Uses<'t>, node: NodeRef<'t>, at: usize) {
         | NodeKind::ArrowFunction => {}
         NodeKind::ParenExpr => through(uses),
         NodeKind::CondExpr if at > 0 => through(uses),
-        NodeKind::AssignExpr if operator == Some(Punct::Eq) => {
-            uses.into.push(node.span().byte_start);
-        }
+        NodeKind::AssignExpr if operator == Some(Punct::Eq) => match this_key(&children[0]) {
+            Some(key) => uses.fields.push(key),
+            None => uses.into.push(node.span().byte_start),
+        },
         NodeKind::BinaryExpr => match operator {
             Some(Punct::EqEqEq | Punct::BangEqEq) => {}
             Some(Punct::Lt | Punct::Gt | Punct::LtEq | Punct::GtEq) => {
@@ -126,9 +147,11 @@ fn used<'t>(uses: &mut Uses<'t>, node: NodeRef<'t>, at: usize) {
             let place = passed.iter().position(|argument| *argument == me);
             match place {
                 Some(place) => {
-                    uses.passed.push((children[0], place));
+                    // What is called comes first, or after `new`.
+                    let callee = children[usize::from(node.kind() == NodeKind::NewExpr)];
+                    uses.passed.push((callee, place));
                     // To a method: what it is a method of may keep it.
-                    let method = matches!(children[0], Element::Node(callee) if callee.kind() == NodeKind::MemberExpr);
+                    let method = matches!(callee, Element::Node(callee) if callee.kind() == NodeKind::MemberExpr);
                     uses.into.extend(method.then_some(node.span().byte_start));
                 }
                 // Called, or made with `new`.
@@ -151,9 +174,10 @@ impl Typer<'_> {
                 Vec::new()
             }
             Type::Array { element, .. } | Type::Promise(element) => vec![*element],
-            Type::Tuple(members) | Type::Union(members) | Type::Builtin(_, members) => {
-                members.clone()
-            }
+            Type::Tuple(members)
+            | Type::Union(members)
+            | Type::Builtin(_, members)
+            | Type::Class(_, members) => members.clone(),
             Type::Object(properties) => properties.iter().map(|property| property.ty).collect(),
             Type::Function(function) => {
                 let mut inside: Vec<TypeId> =
@@ -214,6 +238,7 @@ impl Typer<'_> {
                 return self.types.union(members);
             }
             Type::Builtin(builtin, members) => Type::Builtin(builtin, each(self, &members)),
+            Type::Class(class, members) => Type::Class(class, each(self, &members)),
             Type::Object(properties) => {
                 let replaced = properties.into_iter().map(|property| Property {
                     ty: self.substituted(property.ty, bound),
@@ -386,12 +411,68 @@ impl Typer<'_> {
     /// whatever the call.
     pub(crate) fn escapes(&self, function: NodeRef<'_>, uses: &Uses<'_>) -> bool {
         let (from, to) = (function.span().byte_start, function.span().byte_end);
-        uses.into.iter().any(|start| {
+        // What a constructor stores in the instance it makes is that instance's
+        // alone; what anything else stores in `this` is not.
+        let kept = !uses.fields.is_empty() && !is_constructor(self.source, function);
+        kept || uses.into.iter().any(|start| {
             let reference = self.references.get(start);
             let declared = reference.and_then(|&at| self.bindings.references[at].declaration);
             let at = declared.map(|declared| self.bindings.declarations[declared].span.byte_start);
             !at.is_some_and(|at| (from..to).contains(&at))
         })
+    }
+
+    /// A function type with each type variable replaced by what `bound` says it is,
+    /// generic in `type_params`, and taking and giving any number where it takes or
+    /// gives an `int32`: `int32` is inferred, never asked for.
+    fn rebuilt(
+        &mut self,
+        function: &Function,
+        bound: &BTreeMap<VarId, TypeId>,
+        type_params: Vec<VarId>,
+    ) -> TypeId {
+        let wider = |typer: &mut Self, ty: TypeId| {
+            let ty = typer.substituted(ty, bound);
+            typer.any_number(ty)
+        };
+        let mut params = Vec::new();
+        for param in &function.params {
+            params.push(Param {
+                ty: wider(self, param.ty),
+                optional: param.optional,
+            });
+        }
+        let rebuilt = Function {
+            params,
+            rest: function.rest.map(|rest| wider(self, rest)),
+            returns: wider(self, function.returns),
+            type_params,
+        };
+        self.types.intern(Type::Function(rebuilt))
+    }
+
+    /// The types of the method `signature` and of the method `like`, as they are
+    /// compared: the type parameters of the first named as those of the second are,
+    /// place by place (two methods generic alike are then alike), and each taking and
+    /// giving any number for an `int32`.
+    pub(crate) fn alike(&mut self, signature: TypeId, like: TypeId) -> (TypeId, TypeId) {
+        let function = self.types.function(signature).cloned();
+        let other = self.types.function(like).cloned();
+        function
+            .zip(other)
+            .map_or((signature, like), |(function, other)| {
+                let mut bound = BTreeMap::new();
+                for (from, to) in function.type_params.iter().zip(&other.type_params) {
+                    bound.insert(*from, self.types.intern(Type::Var(*to)));
+                }
+                // Generic in more, it stays generic in what is left over.
+                let mut named = other.type_params.clone();
+                named.extend(function.type_params.iter().skip(named.len()));
+                let first = self.rebuilt(&function, &bound, named);
+                let nothing = BTreeMap::new();
+                let second = self.rebuilt(&other, &nothing, other.type_params.clone());
+                (first, second)
+            })
     }
 
     /// The parameter a declared function has at `place`, when `callee` names one.
@@ -411,19 +492,25 @@ impl Typer<'_> {
     pub(crate) fn pinned(&mut self, me: usize, uses: &Uses<'_>) -> Option<Vec<TypeId>> {
         let mut pins = Vec::new();
         for (callee, place) in &uses.passed {
-            let taken = match self.parameter_of(callee, *place) {
+            let taken = if let Some(parameter) = self.parameter_of(callee, *place) {
                 // Passed on to itself, it says nothing of itself.
-                Some(parameter) if parameter == me => None,
-                Some(parameter) => Some(self.facts.declarations.get(&parameter).copied()?),
-                None => {
-                    let callee = self.type_of(*callee);
-                    match callee.map(|callee| self.types.get(callee)) {
-                        Some(Type::Function(function)) => {
-                            function.params.get(*place).map(|param| param.ty)
-                        }
-                        _ => None,
-                    }
+                let taken = self.facts.declarations.get(&parameter).copied();
+                let taken = taken.filter(|_| parameter != me);
+                // Passed for another parameter of its own function, which has
+                // no type yet for waiting on this one, it says nothing either.
+                let lists = self.facts.parameters.values();
+                let together = |list: &Vec<Option<usize>>| {
+                    list.contains(&Some(me)) && list.contains(&Some(parameter))
+                };
+                let beside = lists.into_iter().any(together);
+                if taken.is_none() && !beside {
+                    return None;
                 }
+                taken
+            } else {
+                let callee = self.called_type(callee);
+                let function = callee.and_then(|callee| self.types.function(callee));
+                function.and_then(|function| function.params.get(*place).map(|param| param.ty))
             };
             let mut variables = Vec::new();
             if let Some(taken) = taken {
