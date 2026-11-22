@@ -237,7 +237,11 @@ impl Typer<'_> {
                             "`{key}` is not a key of `{}`: every value this may be must have it (SPEC.md §3.2)",
                             self.print(member)
                         );
-                        self.report(first, Code::E137, span, message);
+                        // Of a name: with what says what the name is.
+                        let read = node.children().next();
+                        let name = read.filter(|read| matches!(read, Element::Token(_)));
+                        let operands: Vec<Element<'_>> = name.into_iter().collect();
+                        self.report_about(first, Code::E137, span, message, &operands);
                         return None;
                     }
                     Held::Method => {

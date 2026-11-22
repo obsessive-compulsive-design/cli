@@ -95,7 +95,7 @@ pub(crate) struct Call<'t> {
     pub passed: Vec<Element<'t>>,
 }
 
-fn is_function(node: NodeRef<'_>) -> bool {
+pub(crate) fn is_function(node: NodeRef<'_>) -> bool {
     matches!(
         node.kind(),
         NodeKind::FunctionDecl
@@ -108,7 +108,7 @@ fn is_function(node: NodeRef<'_>) -> bool {
 
 /// The `return`s of a body that are its own: not those of a function inside it.
 /// Each with its value, if it has one.
-fn returns_of(body: NodeRef<'_>) -> Vec<(NodeRef<'_>, Option<Element<'_>>)> {
+pub(crate) fn returns_of(body: NodeRef<'_>) -> Vec<(NodeRef<'_>, Option<Element<'_>>)> {
     let mut found = Vec::new();
     let mut pending = vec![body];
     while let Some(node) = pending.pop() {
@@ -334,7 +334,7 @@ pub(crate) fn declared_in<'t>(
     (functions, calls)
 }
 
-fn is_spread(element: &Element<'_>) -> bool {
+pub(crate) fn is_spread(element: &Element<'_>) -> bool {
     matches!(element, Element::Node(node) if node.kind() == NodeKind::SpreadElement)
 }
 
@@ -411,6 +411,14 @@ impl Typer<'_> {
                     call.passed.get(place).into_iter().collect()
                 };
                 all_known &= !spreads;
+                // A parameter that is what this one is says nothing of this one.
+                let says = |argument: &&Element<'_>| {
+                    let start = element_span_of(argument).byte_start;
+                    let reference = self.references.get(&start);
+                    let named = reference.and_then(|&at| self.bindings.references[at].declaration);
+                    !named.is_some_and(|named| known.pinned.contains(&named))
+                };
+                let taken: Vec<&Element<'_>> = taken.into_iter().filter(says).collect();
                 for argument in taken.into_iter().filter(|_| !spreads) {
                     let ty = self.type_of(*argument).map(|ty| self.loosened(ty));
                     all_known &= ty.is_some();
@@ -642,6 +650,10 @@ impl Typer<'_> {
         // How many arguments it takes: as it is declared, or as its type says.
         let declared =
             declaration.and_then(|declaration| self.facts.arity.get(&declaration).copied());
+        // A parameter is each function passed for it: one of them may take less
+        // than the parameter is given (a callback need not name all it is passed).
+        let kind = declaration.map(|declaration| self.bindings.declarations[declaration].kind);
+        let callback = kind == Some(DeclKind::Param);
         let by_type = functions
             .first()
             .filter(|_| functions.len() == 1)
@@ -651,10 +663,8 @@ impl Typer<'_> {
                     .iter()
                     .take_while(|param| !param.optional)
                     .count();
-                (
-                    required,
-                    function.rest.is_none().then_some(function.params.len()),
-                )
+                let most = function.rest.is_none().then_some(function.params.len());
+                (required, most.filter(|_| !callback))
             });
         let spread = passed.iter().any(is_spread);
         if let Some((least, most)) = declared.or(by_type).filter(|_| !spread) {

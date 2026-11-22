@@ -279,8 +279,13 @@ fn names_have_the_types_that_are_known_of_them() {
         "?",
         "a `JSON` the file declares is not the global"
     );
-    assert_eq!(typed("(a) => a"), "<T>(a: T): T");
-    assert_eq!(typed("() => 1"), "(): int32");
+    assert_eq!(typed("((a) => a)"), "<T>(a: T): T");
+    assert_eq!(typed("(() => 1)"), "(): int32");
+    assert_eq!(
+        typed("(a) => a"),
+        "?",
+        "a function declared by name is typed from its calls, not as a value"
+    );
 }
 
 #[test]

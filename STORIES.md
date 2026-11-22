@@ -3222,7 +3222,46 @@ to `number | bigint | string` then to call sites; passing to a non-generic funct
 constrains by its parameter type.
 
 #### US-091 Contextual typing of callbacks
-§3.2 "bidirectional" · After: US-090 · Size: M · M1
+§3.2 "bidirectional" · After: US-090 · Size: M · M1 · **Status: complete** (2026-11-20)
+
+> Delivered in `sjs-infer` (`context.rs`, with changes to `generics.rs`,
+> `functions.rs`, `expressions.rs`, `members.rs`): an arrow that is a value takes
+> each parameter's type from what the arrow is expected to be, and where nothing is
+> expected the parameter is typed from the body alone as before. **Decisions:**
+> (1) passed for a parameter that its function calls, an arrow is given what those
+> calls pass (`const run = (f) => f(1)` gives `n` an `int32` in `run((n) => n * 2)`):
+> the arrow's call sites are the calls of the parameter, every one of them, so
+> `twice = (f, x) => f(f(x))` gives a `number`; a type parameter of the function in
+> what is passed is what this call's other arguments make it, and one still unbound
+> says nothing; (2) passed where the callee's type takes a function (a parameter
+> passed on to another function), assigned to a target that holds one (`o.f = …`, a
+> `let` function), or returned beside other returns that are functions, it is given
+> what those functions take; for a union of functions, the union of what each takes
+> at the place; a generic function expects nothing; (3) a finding on a use of such a
+> parameter (E138 on an operator, E137 on a read) carries where the type comes from
+> as related locations: each argument of the calls (`passed a … here`), or the
+> callee, target or sibling return (`expected to take a … here`); E137 on a read from
+> any parameter now carries its call sites too; (4) fewer parameters than are passed
+> is fine: the "too many arguments" E136 is no longer raised on a call of a
+> parameter, since a callback need not name all it is given ("too few" still is);
+> more parameters than are ever passed is E136 at the first such parameter, and the
+> arrow has no type; a spread in the calls or a rest in the expected function leaves
+> the count open; (5) an arrow inside another is typed after the outer one, and one
+> asked for while it is being typed has no type; each arrow is typed once per pass;
+> (6) fixed from US-090: a parameter that takes its type from the function it is
+> passed to no longer counts as a call site of that function, which made the two
+> types chase each other until both were dropped (`const via = (g) => run(g)`);
+> (7) limits: `xs.map(id)` waits for the builtins' signatures (US-095 on), the same
+> machinery is tested with a function declared here (`apply(id, 1)`); a curried
+> arrow called as `add(1)(2)`, an arrow in a conditional or a literal, one assigned
+> to a `let` declared with something other than an arrow, and arrows with default,
+> rest or destructured parameters expect nothing; an exported, uncalled `compose`
+> still has no type; what an arrow returns is not checked against what is expected
+> of an argument (a property write is, by US-086). Fixtures:
+> `04-functions/E138/callback-parameter.js`, `E137/callback-parameter.js`,
+> `E136/callback-too-many.js`, `E136/near-miss-callback-fewer.js`. Verified: fmt,
+> both clippy passes, audit, tests, doc tests, 100% line and region coverage,
+> `cargo mutants --in-diff` 44 caught, 0 missed, 12 unviable, no timeout.
 
 **Done when**
 - Arrows passed as arguments, stored in typed slots, or returned where a function type is

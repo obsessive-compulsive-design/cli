@@ -6,7 +6,6 @@
 //! is not generic there, what that function takes.
 
 use crate::expressions::{nodes, punct, Typer};
-use crate::functions::Flavor;
 use crate::mutation::arguments;
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct};
 use sjs_types::{Function, Param, Property, Type, TypeId, VarId};
@@ -198,7 +197,7 @@ impl Typer<'_> {
 
     /// `id` with each type variable replaced by what `bound` says it is; one nothing
     /// is bound to stays.
-    fn substituted(&mut self, id: TypeId, bound: &BTreeMap<VarId, TypeId>) -> TypeId {
+    pub(crate) fn substituted(&mut self, id: TypeId, bound: &BTreeMap<VarId, TypeId>) -> TypeId {
         let each = |typer: &mut Self, ids: &[TypeId]| -> Vec<TypeId> {
             ids.iter().map(|&id| typer.substituted(id, bound)).collect()
         };
@@ -245,6 +244,23 @@ impl Typer<'_> {
         self.types.intern(ty)
     }
 
+    /// What each type variable of the first of each pair is when a value of the
+    /// second is passed for it: the union of what is passed, without its literals.
+    pub(crate) fn bound(&mut self, pairs: &[(TypeId, TypeId)]) -> BTreeMap<VarId, TypeId> {
+        let mut found: BTreeMap<VarId, Vec<TypeId>> = BTreeMap::new();
+        for &(pattern, given) in pairs {
+            let given = self.loosened(given);
+            self.bind(pattern, given, &mut found);
+        }
+        let mut bound = BTreeMap::new();
+        for (var, types) in found {
+            // A type parameter is no literal: what a tuple holds is widened.
+            let types: Vec<TypeId> = types.into_iter().map(|ty| self.widened(ty)).collect();
+            bound.insert(var, self.types.union(types));
+        }
+        bound
+    }
+
     /// What a call of the generic `function` gives when it is passed values of the
     /// types `passed`: its return, with each type parameter the union of what is
     /// passed for it at this call.
@@ -253,19 +269,11 @@ impl Typer<'_> {
         function: &Function,
         passed: &[Option<TypeId>],
     ) -> Option<TypeId> {
-        let mut found: BTreeMap<VarId, Vec<TypeId>> = BTreeMap::new();
-        for (param, given) in function.params.iter().zip(passed) {
-            if let Some(given) = given {
-                let given = self.loosened(*given);
-                self.bind(param.ty, given, &mut found);
-            }
-        }
-        let mut bound = BTreeMap::new();
-        for (var, types) in found {
-            // A type parameter is no literal: what a tuple holds is widened.
-            let types: Vec<TypeId> = types.into_iter().map(|ty| self.widened(ty)).collect();
-            bound.insert(var, self.types.union(types));
-        }
+        let pairs = function.params.iter().zip(passed);
+        let pairs: Vec<(TypeId, TypeId)> = pairs
+            .filter_map(|(param, given)| given.map(|given| (param.ty, given)))
+            .collect();
+        let bound = self.bound(&pairs);
         // A type parameter nothing is passed for leaves the call without a type.
         let mut needed = Vec::new();
         self.variables(function.returns, &mut needed);
@@ -275,71 +283,43 @@ impl Typer<'_> {
         told.then(|| self.substituted(function.returns, &bound))
     }
 
-    /// The type of an arrow that is a value, from its body alone: a parameter the
-    /// body treats opaquely is what the functions it is passed to take, or a type
-    /// parameter of the arrow; one read by place only an array of one; one ordered
-    /// only a number, bigint or string. `None` for an arrow with any other parameter.
-    pub(crate) fn arrow(&mut self, node: NodeRef<'_>) -> Option<TypeId> {
-        // An arrow begins with its parameters.
-        let list: Vec<NodeRef<'_>> = nodes(node).take(1).flat_map(nodes).collect();
-        let mut params = Vec::new();
-        let mut type_params = Vec::new();
-        for parameter in list {
-            let inside: Vec<Element<'_>> = parameter.children().collect();
-            let name = match inside.as_slice() {
-                [Element::Token(name)] => Some(name.token().span.byte_start),
-                _ => None,
-            };
-            let declarations = &self.bindings.declarations;
-            let declaration =
-                name.and_then(|name| declarations.iter().position(|d| d.span.byte_start == name))?;
-            let uses = uses_in(self, node, declaration);
-            let variable = self.fresh_variable(node, &type_params);
-            let ty = if self.escapes(node, &uses) {
-                return None;
-            } else if uses.opaque() {
-                let pins = self.pinned(declaration, &uses)?;
-                if pins.is_empty() {
-                    type_params.push(variable);
-                    self.types.intern(Type::Var(variable))
-                } else {
-                    self.types.union(pins)
-                }
-            } else if uses.indexed && !uses.is_ordered() && !uses.constrained {
+    /// The type of a parameter of an arrow that is a value, from the arrow's body
+    /// alone: a parameter the body treats opaquely is what the functions it is passed
+    /// to take, or a type parameter of the arrow, which is added to `type_params`;
+    /// one read by place only an array of one; one ordered only a number, bigint or
+    /// string. `None` for any other.
+    pub(crate) fn alone(
+        &mut self,
+        node: NodeRef<'_>,
+        declaration: usize,
+        type_params: &mut Vec<VarId>,
+    ) -> Option<TypeId> {
+        let uses = uses_in(self, node, declaration);
+        let variable = self.fresh_variable(node, type_params);
+        if self.escapes(node, &uses) {
+            None
+        } else if uses.opaque() {
+            let pins = self.pinned(declaration, &uses)?;
+            Some(if pins.is_empty() {
                 type_params.push(variable);
-                let element = self.types.intern(Type::Var(variable));
-                self.types.intern(Type::Array {
-                    element,
-                    mutated: false,
-                })
-            } else if uses.is_ordered() && !uses.indexed && !uses.constrained {
-                let (ty, any) = self.ordered_as(&uses);
-                self.loose.extend(any.then_some(declaration));
-                ty
+                self.types.intern(Type::Var(variable))
             } else {
-                return None;
-            };
-            self.locals.insert(declaration, ty);
-            params.push(Param {
-                ty,
-                optional: false,
-            });
-        }
-        let body = node.children().last();
-        let first = node.tokens().first().map(|token| token.span);
-        let asynchronous = first.and_then(|span| self.source.slice(&span)) == Some("async");
-        let flavor = if asynchronous {
-            Flavor::Async
+                self.types.union(pins)
+            })
+        } else if uses.indexed && !uses.is_ordered() && !uses.constrained {
+            type_params.push(variable);
+            let element = self.types.intern(Type::Var(variable));
+            Some(self.types.intern(Type::Array {
+                element,
+                mutated: false,
+            }))
+        } else if uses.is_ordered() && !uses.indexed && !uses.constrained {
+            let (ty, any) = self.ordered_as(&uses);
+            self.loose.extend(any.then_some(declaration));
+            Some(ty)
         } else {
-            Flavor::Plain
-        };
-        let returns = body.and_then(|body| self.returned_from(body, flavor))?;
-        Some(self.types.intern(Type::Function(Function {
-            type_params,
-            params,
-            rest: None,
-            returns,
-        })))
+            None
+        }
     }
 
     /// A type variable for a parameter of the function `node` that is none of
@@ -415,7 +395,7 @@ impl Typer<'_> {
     }
 
     /// The parameter a declared function has at `place`, when `callee` names one.
-    fn parameter_of(&self, callee: &Element<'_>, place: usize) -> Option<usize> {
+    pub(crate) fn parameter_of(&self, callee: &Element<'_>, place: usize) -> Option<usize> {
         let Element::Token(token) = callee else {
             return None;
         };

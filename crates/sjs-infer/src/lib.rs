@@ -16,9 +16,12 @@
 //! signatures of functions declared by name, from their bodies and from every call
 //! of them, and judges calls (E111, E136, E139). US-090 generalizes: a parameter the body
 //! treats opaquely is a type parameter, each call its own instance (E112 when nothing
-//! says what a parameter is).
+//! says what a parameter is). US-091 types callbacks by what they are expected to be: an
+//! arrow passed, stored in a slot that has a type or returned beside other functions takes
+//! its parameters' types from there.
 
 mod bindings;
+mod context;
 mod expressions;
 mod functions;
 mod generics;

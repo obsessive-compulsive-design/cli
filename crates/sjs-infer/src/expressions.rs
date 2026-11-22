@@ -74,6 +74,14 @@ pub struct Typer<'a> {
     pub(crate) locals: BTreeMap<usize, TypeId>,
     /// Those of them that are a number, a bigint or a string for being ordered.
     pub(crate) loose: BTreeSet<usize>,
+    /// The calls of each declaration by name.
+    pub(crate) called: BTreeMap<usize, Vec<NodeRef<'a>>>,
+    /// The arrows typed as values, by where each begins: `None` for one that has no
+    /// type, or that is being typed.
+    pub(crate) arrows: BTreeMap<usize, Option<TypeId>>,
+    /// Where the parameters that are typed by what their arrow is expected to be
+    /// take their types from, by declaration: each place, with a note.
+    pub(crate) origins: BTreeMap<usize, Vec<(Span, String)>>,
     diagnostics: Diagnostics,
 }
 
@@ -115,6 +123,24 @@ impl<'a> Typer<'a> {
         types: &'a mut Types,
     ) -> Self {
         let references = bindings.references.iter().enumerate();
+        let references: BTreeMap<usize, usize> = references
+            .map(|(at, reference)| (reference.span.byte_start, at))
+            .collect();
+        let mut calls: BTreeMap<usize, Vec<NodeRef<'a>>> = BTreeMap::new();
+        let mut pending = vec![tree.root()];
+        while let Some(node) = pending.pop() {
+            pending.extend(nodes(node));
+            let name = match node.children().next() {
+                Some(Element::Token(name)) if node.kind() == NodeKind::CallExpr => {
+                    references.get(&name.token().span.byte_start)
+                }
+                _ => None,
+            };
+            let named = name.and_then(|&at| bindings.references[at].declaration);
+            if let Some(named) = named {
+                calls.entry(named).or_default().push(node);
+            }
+        }
         let imports = nodes(tree.root()).filter(|node| node.kind() == NodeKind::ImportDecl);
         let defaults = imports
             .flat_map(nodes)
@@ -126,9 +152,7 @@ impl<'a> Typer<'a> {
             bindings,
             facts,
             types,
-            references: references
-                .map(|(at, reference)| (reference.span.byte_start, at))
-                .collect(),
+            references,
             json: declarations
                 .filter(|(_, declaration)| starts.contains(&declaration.span.byte_start))
                 .map(|(at, _)| at)
@@ -136,6 +160,9 @@ impl<'a> Typer<'a> {
             judged: BTreeSet::new(),
             locals: BTreeMap::new(),
             loose: BTreeSet::new(),
+            called: calls,
+            arrows: BTreeMap::new(),
+            origins: BTreeMap::new(),
             diagnostics: Diagnostics::new(),
         }
     }
@@ -330,8 +357,24 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// Pushes a finding with related locations in this file.
+    pub(crate) fn report_related(
+        &mut self,
+        code: Code,
+        span: Span,
+        message: String,
+        related: &[(Span, String)],
+    ) {
+        let mut found = Diagnostic::new(code, self.source.path(), span, message);
+        for (span, note) in related {
+            found = found.with_related(self.source.path(), *span, note.clone());
+        }
+        self.diagnostics.push(found);
+    }
+
     /// Pushes a finding about operands, the first time: when an operand is a
-    /// parameter, each call that gave it a part of its type is a related location.
+    /// parameter, each call that gave it a part of its type is a related location,
+    /// or what its arrow is expected to be.
     pub(crate) fn report_about(
         &mut self,
         first: bool,
@@ -356,6 +399,10 @@ impl<'a> Typer<'a> {
                     Printer::new(self.types, &name).print(site.ty)
                 );
                 found = found.with_related(site.path.clone(), site.span, note);
+            }
+            let origins = declaration.and_then(|declaration| self.origins.get(&declaration));
+            for (span, note) in origins.into_iter().flatten() {
+                found = found.with_related(self.source.path(), *span, note.clone());
             }
         }
         self.diagnostics.push(found);
@@ -642,6 +689,7 @@ pub fn check_expressions(
                 | NodeKind::CondExpr
                 | NodeKind::CallExpr
                 | NodeKind::NewExpr
+                | NodeKind::ArrowFunction
         );
         if operates {
             judge.type_of(Element::Node(node));
