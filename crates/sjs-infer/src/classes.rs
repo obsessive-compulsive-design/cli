@@ -114,17 +114,23 @@ pub(crate) fn is_static(source: &SourceFile, member: NodeRef<'_>) -> bool {
 }
 
 /// How a member is written, when it has a name: not a static block, nor a member
-/// with a computed key.
+/// with a computed key that is no symbol's.
 pub(crate) fn written(source: &SourceFile, member: NodeRef<'_>) -> Option<Written> {
-    let words = leading(member);
-    let (at, before) = words.split_last()?;
-    let text = |span: &Span| source.slice(span).unwrap_or_default().to_owned();
-    let name = text(at);
+    let mut words = leading(member);
+    // `[Symbol.iterator]` is a name too, written as it is without its spaces.
+    let symbol = nodes(member).find(|part| part.kind() == NodeKind::SymbolKey);
+    words.extend(symbol.map(NodeRef::span));
+    let text = |span: &Span| {
+        let text = source.slice(span).unwrap_or_default();
+        text.split_whitespace().collect::<String>()
+    };
+    let at = words.pop().unwrap_or(member.span());
+    let name = text(&at);
     let named = member.kind() != NodeKind::StaticBlock && name != "[" && name != "]";
     named.then(|| Written {
         name,
-        at: *at,
-        before: before.iter().map(text).collect(),
+        at,
+        before: words.iter().map(text).collect(),
     })
 }
 
@@ -263,7 +269,8 @@ impl Names<'_> {
                 parameters,
                 body,
                 flavor: match (has("*"), has("async")) {
-                    (true, _) => Flavor::Generator,
+                    (true, false) => Flavor::Generator,
+                    (true, true) => Flavor::AsyncGenerator,
                     (false, true) => Flavor::Async,
                     (false, false) => Flavor::Plain,
                 },

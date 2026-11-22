@@ -178,11 +178,15 @@ fn fields_are_typed_from_initializers_and_from_what_the_class_assigns() {
     assert_eq!(c.found, NONE);
     assert_eq!(
         c.class("A"),
-        "n: number; self: A | undefined; inc(): A; later(): Promise<number>"
+        "n: number; self: A | undefined; each(): Generator<int32, undefined>; inc(): A; later(): Promise<number>"
     );
     assert_eq!(
         (c.of("a"), c.of("l"), c.of("e")),
-        ("A".into(), "Promise<number>".into(), "?".into())
+        (
+            "A".into(),
+            "Promise<number>".into(),
+            "Generator<int32, undefined>".into()
+        )
     );
     // A method read and not called is no call of it.
     let c = checked(

@@ -189,6 +189,11 @@ impl Typer<'_> {
         }
     }
 
+    /// Whether a value of the type `instance` is known to have nothing at `key`.
+    pub(crate) fn lacks(&mut self, instance: TypeId, key: &str) -> bool {
+        matches!(self.held(instance, key), Held::Missing)
+    }
+
     /// The type of the method `name` of a value of the type `instance`, when it has
     /// that method and its type is known.
     pub(crate) fn method_of(&mut self, instance: TypeId, name: &str) -> Option<TypeId> {

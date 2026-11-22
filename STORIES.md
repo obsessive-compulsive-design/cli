@@ -3334,7 +3334,38 @@ a field assigned only in a method (E114); `this.#m()`; a class used as a value h
 constructor's function type; a class with `toString(): string` in a template.
 
 #### US-093 Iteration protocol typing
-§4.7, §3.1 · After: US-092 · Size: M · M1
+§4.7, §3.1 · After: US-092 · Size: M · M1 · **Status: complete** (2026-11-22)
+
+> Delivered in `sjs-infer` (`iteration.rs`, with changes to `bindings.rs`,
+> `expressions.rs`, `functions.rs`, `classes.rs`, `context.rs`, `members.rs`): what
+> iterating a value gives (an array its elements, a string strings, a `Map` its
+> `[K, V]` pairs, a `Set` its members, an iterator or generator what it yields, a
+> class instance what its `[Symbol.iterator]()` result does) types the binding of a
+> `for…of` (through destructuring), a spread in an array literal, `Array.from(x)` and
+> `Iterator.from(x)`. A generator is `Generator<yields, returns>`: the union of its
+> own `yield`s without their literals, a `yield*` giving what it delegates to, `never`
+> when it yields nothing. **Decisions:** (1) E138 is at the iterable of a `for…of`,
+> for the first member of its type that is not iterable; an async iterator or
+> generator in a plain `for…of` is E138 too; (2) `for await` takes async iterables,
+> and from a sync one awaits each element (`Promise<T>` gives `T`); on a class it
+> prefers `[Symbol.asyncIterator]`; (3) the helpers (`map`, `filter`, `take`, `drop`,
+> `flatMap`, `reduce`, `toArray`, `forEach`, `some`, `every`, `find`) are typed on
+> `Iterator` and `Generator` types, and their callbacks are typed by context: the
+> element and its `int32` place (before them, for `reduce`, what it starts from), so
+> a third parameter is E136 and a misuse of the element is E138 with the helper as a
+> related location; on an async iterator the helpers that end the iteration give a
+> `Promise`; (4) `[Symbol.iterator]` and `[Symbol.asyncIterator]` are member names of
+> a class like any other (they were skipped by US-092); (5) a class whose
+> `[Symbol.iterator]()` gives an instance of itself, or of a class that leads back,
+> has no element type and no finding. **Limits:** a spread or a `yield*` of what is
+> no iterable has no type and no finding (only `for…of` is judged); `Array.from` with
+> a mapping function, `it.next()`, what a `yield` expression evaluates to, and the
+> iterators of built-ins (`xs.values()`, `map.entries()`) wait for the ambient
+> library. **Older tests changed:** `functions.rs` and `classes.rs` expected a
+> generator to have no type. Fixtures: `04-statements/E138/for-of-non-iterable.js`,
+> `for-of-async-generator.js`, `near-miss-iterables.js`. Verified: fmt, both clippy
+> passes, audit, tests, doc tests, 100% line and region coverage,
+> `cargo mutants --in-diff` 73 caught, 0 missed, 17 unviable, no timeout.
 
 **Done when**
 - Arrays yield `T`; strings `string` (code points); `Map` `[K, V]`; `Set` `T`;

@@ -28,6 +28,9 @@ enum Step<'t> {
     RestOfKeys(Vec<String>),
     /// `[ …rest ]`, from this place.
     RestFrom(usize),
+    /// What iterating the value gives: the binding of a `for…of`, of a `for await`
+    /// when the flag is set.
+    Each(bool),
 }
 
 /// Something a binding is given.
@@ -150,6 +153,22 @@ impl<'t> Collector<'_, 't> {
                         self.declare(bound, value, &[]);
                     }
                 }
+                NodeKind::ForOfStmt => {
+                    // The iterable is what comes before the `)` and the body.
+                    let iterable = children.iter().rev().nth(2).copied();
+                    // What is declared comes first.
+                    let declaration = nodes(node).next();
+                    let bound = declaration.and_then(|declaration| declaration.children().nth(1));
+                    let awaited = children.iter().any(|child| match child {
+                        Element::Token(word) => {
+                            self.source.slice(&word.token().span) == Some("await")
+                        }
+                        Element::Node(_) => false,
+                    });
+                    let each = [Step::Each(awaited)];
+                    let declared = bound.zip(iterable).into_iter();
+                    declared.for_each(|(bound, iterable)| self.declare(bound, iterable, &each));
+                }
                 NodeKind::AssignExpr | NodeKind::UpdateExpr | NodeKind::ForUpdate => {
                     let value = children.last().copied();
                     let operator = children.iter().find_map(|child| punct(Some(child)));
@@ -175,6 +194,9 @@ impl<'t> Collector<'_, 't> {
 
 /// What a step takes from a value of type `from`.
 fn taken(typer: &mut Typer<'_>, from: TypeId, step: &Step<'_>) -> Option<TypeId> {
+    if let Step::Each(awaited) = step {
+        return typer.item_of(from, *awaited);
+    }
     let (found, default) = match (typer.types().get(from).clone(), step) {
         (Type::Object(properties), Step::Key(key, default)) => {
             let property = properties.iter().find(|property| &property.key == key);

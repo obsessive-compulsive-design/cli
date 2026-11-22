@@ -140,6 +140,23 @@ impl Typer<'_> {
                 let place = passed.iter().position(me);
                 let place = place.filter(|_| !passed.iter().any(is_spread))?;
                 let callee = children[0];
+                // The callback of an iterator helper is passed what is iterated.
+                if let Some(helped) = self.helped(&callee).filter(|_| place == 0) {
+                    let at = element_span_of(&callee);
+                    let mut places = Vec::new();
+                    for taken in self.helper_takes(&helped, &passed) {
+                        let note =
+                            taken.map(|ty| format!("passed a `{}` here", self.print_type(ty)));
+                        places.push(Place {
+                            types: taken.into_iter().collect(),
+                            origins: note.map(|note| (at, note)).into_iter().collect(),
+                        });
+                    }
+                    return Some(Expected {
+                        places,
+                        open: false,
+                    });
+                }
                 let parameter = self.parameter_of(&callee, place);
                 let calls = parameter.and_then(|parameter| self.called.get(&parameter));
                 if let Some(calls) = calls.cloned() {

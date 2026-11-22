@@ -261,8 +261,8 @@ fn a_function_returns_the_union_of_its_returns() {
     assert_eq!(clean("const f = async () => 1\nasync function g() {\n  return \"s\"\n}\nconst x = [f(), g()]\n", "x"), "[Promise<int32>, Promise<string>]");
     assert_eq!(
         clean("function* f() {\n  yield 1\n}\nconst x = f()\n", "x"),
-        "?",
-        "a generator is a later pass's"
+        "Generator<int32, undefined>",
+        "a generator yields what its body does"
     );
     assert_eq!(clean("const f = () => later()\nconst g = () => {\n  return later()\n}\nconst x = [f(), g()]\n", "x"), "?");
     assert_eq!(

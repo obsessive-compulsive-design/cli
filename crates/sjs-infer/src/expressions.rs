@@ -305,7 +305,16 @@ impl<'a> Typer<'a> {
                     .collect();
                 let mut types = Vec::new();
                 for element in &elements {
-                    types.push(self.type_of(*element)?);
+                    let ty = match element {
+                        // A spread holds what iterating what it spreads gives.
+                        Element::Node(spread) if spread.kind() == NodeKind::SpreadElement => {
+                            let spread = spread.children().last();
+                            let spread = spread.and_then(|spread| self.type_of(spread))?;
+                            self.item_of(spread, false)?
+                        }
+                        _ => self.type_of(*element)?,
+                    };
+                    types.push(ty);
                 }
                 let element = self.types.union(types);
                 // An empty literal takes its type from what is put in it (E110).
@@ -331,7 +340,25 @@ impl<'a> Typer<'a> {
                         let argument = argument.and_then(|argument| self.type_of(argument));
                         argument.and_then(|shape| self.keys_of(shape, text == "Object.entries"))
                     }
-                    _ => self.call(node, &children),
+                    (true, "Iterator.from" | "Array.from") => {
+                        let argument = children.get(2).copied().filter(|_| children.len() == 4);
+                        let argument = argument.and_then(|argument| self.type_of(argument));
+                        let item = argument.and_then(|iterable| self.item_of(iterable, false))?;
+                        // What is taken out of a tuple is no literal any more.
+                        let item = self.widened(item);
+                        Some(if text == "Array.from" {
+                            self.types.intern(Type::Array {
+                                element: item,
+                                mutated: false,
+                            })
+                        } else {
+                            self.iterator(item, false)
+                        })
+                    }
+                    _ => match self.helped(&children[0]) {
+                        Some(helped) => self.helper_call(&helped, &children),
+                        None => self.call(node, &children),
+                    },
                 }
             }
             NodeKind::ArrowFunction => self.arrow(node),
@@ -726,6 +753,7 @@ pub fn check_expressions(
         judge.self_assignment(node, &children);
         judge.mixed_returns(node);
         judge.class_rules(node);
+        judge.loop_rule(node, &children);
         let operates = matches!(
             node.kind(),
             NodeKind::BinaryExpr

@@ -72,8 +72,10 @@ pub(crate) enum Flavor {
     Plain,
     /// `async`: it returns a promise.
     Async,
-    /// `function*`, `async` or not.
+    /// `function*`.
     Generator,
+    /// `async function*`.
+    AsyncGenerator,
 }
 
 /// What a round finds of one parameter.
@@ -212,7 +214,7 @@ pub(crate) fn parameters_of<'t>(
         Some(Element::Token(name)) => declared_at.get(&name.token().span.byte_start).copied(),
         _ => None,
     };
-    let list = nodes(function).next();
+    let list = nodes(function).find(|part| part.kind() == NodeKind::Params);
     let listed = list.into_iter().flat_map(nodes);
     listed
         .map(|parameter| {
@@ -279,7 +281,8 @@ pub(crate) fn declared_in<'t>(
                     parameters: parameters(node),
                     body,
                     flavor: match (generator, word(node, "async")) {
-                        (true, _) => Flavor::Generator,
+                        (true, false) => Flavor::Generator,
+                        (true, true) => Flavor::AsyncGenerator,
                         (false, true) => Flavor::Async,
                         (false, false) => Flavor::Plain,
                     },
@@ -339,7 +342,8 @@ pub(crate) fn is_spread(element: &Element<'_>) -> bool {
 impl Typer<'_> {
     /// What a function's body returns, when it can be told: the union of its `return`
     /// values without their literals, `undefined` for a body that returns none, `never`
-    /// for one that only throws; a promise of that for an `async` function.
+    /// for one that only throws; a promise of that for an `async` function; for a
+    /// generator, a generator of what it yields that returns that.
     pub(crate) fn returned(&mut self, function: &Declared<'_>) -> Option<TypeId> {
         self.returned_from(function.body, function.flavor)
     }
@@ -371,7 +375,15 @@ impl Typer<'_> {
         match flavor {
             Flavor::Plain => Some(ty),
             Flavor::Async => Some(self.types.intern(Type::Promise(ty))),
-            Flavor::Generator => None,
+            Flavor::Generator | Flavor::AsyncGenerator => {
+                let asynchronous = flavor == Flavor::AsyncGenerator;
+                let yields = self.yields(body, asynchronous)?;
+                Some(self.types.intern(Type::Generator {
+                    yields,
+                    returns: ty,
+                    asynchronous,
+                }))
+            }
         }
     }
 

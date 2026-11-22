@@ -20,7 +20,9 @@
 //! arrow passed, stored in a slot that has a type or returned beside other functions takes
 //! its parameters' types from there. US-092 types classes: fields, methods, accessors,
 //! constructors and static members, `extends`, and classes generic in what their
-//! constructor is passed (E114, E129, E137, E138).
+//! constructor is passed (E114, E129, E137, E138). US-093 types iteration: what
+//! `for…of`, a spread and the iterator helpers take from arrays, strings, `Map`s, `Set`s,
+//! generators and iterable classes (E138 for what is no iterable).
 
 mod bindings;
 mod classes;
@@ -28,6 +30,7 @@ mod context;
 mod expressions;
 mod functions;
 mod generics;
+mod iteration;
 mod members;
 mod mutation;
 mod operators;
