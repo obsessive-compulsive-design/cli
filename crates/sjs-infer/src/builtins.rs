@@ -188,6 +188,9 @@ impl Typer<'_> {
             let item = iterable.and_then(|iterable| self.item_of(iterable, false));
             return Some(vec![item.map(|item| self.widened(item)), index]);
         }
+        if let Some(taken) = self.replacer_takes(callee, place, passed) {
+            return Some(taken);
+        }
         if let Some(keyed) = self.keyed(callee).filter(|_| place == 0) {
             return keyed_takes(&keyed);
         }

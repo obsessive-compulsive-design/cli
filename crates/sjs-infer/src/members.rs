@@ -9,7 +9,7 @@
 use crate::builtins::ARRAY_METHODS;
 use crate::classes::statics_of;
 use crate::collections::methods_of;
-use crate::expressions::{element_span_of, punct, Typer};
+use crate::expressions::{element_span_of, punct, ClassFacts, Typer};
 use crate::primitives::{
     is_numeric, is_string, NUMBER_METHODS, REMOVED_STRING_METHODS, STRING_METHODS,
 };
@@ -235,6 +235,21 @@ impl Typer<'_> {
         }
     }
 
+    /// What is known of the class a type is an instance of.
+    fn shape_of(&self, instance: TypeId) -> Option<&ClassFacts> {
+        match self.types.get(instance) {
+            Type::Class(class, _) => self.facts.classes.get(class),
+            _ => None,
+        }
+    }
+
+    /// Whether the language removes the member `key` from values of the type
+    /// `instance`.
+    fn removes(&self, instance: TypeId, key: &str) -> bool {
+        let shape = self.shape_of(instance);
+        shape.is_some_and(|shape| shape.removed.contains(key))
+    }
+
     /// Whether a value of the type `instance` has a method `name`.
     pub(crate) fn has_method(&mut self, instance: TypeId, name: &str) -> bool {
         matches!(self.held(instance, name), Held::Method(_))
@@ -411,6 +426,14 @@ impl Typer<'_> {
                 match self.held(member, &key) {
                     Held::Value(ty) => values.push(ty),
                     Held::Unknown => known = false,
+                    Held::Missing if self.removes(member, &key) => {
+                        let message = format!(
+                            "`{key}` is removed from `{}` (SPEC.md §6.1)",
+                            self.print(member)
+                        );
+                        self.report(first, Code::E133, span, message);
+                        return None;
+                    }
                     Held::Missing => {
                         let message = format!(
                             "`{key}` is not a key of `{}`: every value this may be must have it (SPEC.md §3.2)",
@@ -531,6 +554,15 @@ impl Typer<'_> {
         let mut takes = Vec::new();
         for member in self.members(receiver) {
             for key in &keys {
+                let shape = self.shape_of(member);
+                if shape.is_some_and(|shape| shape.unwritten.contains(key)) {
+                    let message = format!(
+                        "assigning `{key}` of a `{}` is removed (SPEC.md §6.1)",
+                        self.print(member)
+                    );
+                    self.report(first, Code::E133, span, message);
+                    return;
+                }
                 match self.taking(member, key) {
                     Some(Held::Value(ty)) => takes.push(ty),
                     None => {

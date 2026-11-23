@@ -1,0 +1,66 @@
+# The kept members of `Intl` (SPEC.md §6.1, ECMA-402, 12th edition), from which the
+# checker types them. A table is a constructor of `Intl`, `[Intl]` the functions of
+# `Intl` itself. Each key is a member, and its value says what it is and gives:
+#
+#   "T"         a method that gives a T
+#   "bound T"   a function held by the instance, which gives a T: it is read and
+#               passed on without being called (`names.toSorted(collator.compare)`)
+#   "field T"   a value of type T
+#
+# T is one of: number, string, unknown, string[], unknown[], string | undefined.
+
+[Intl]
+getCanonicalLocales = "string[]"
+supportedValuesOf = "string[]"
+
+[Collator]
+compare = "bound number"
+resolvedOptions = "unknown"
+
+[DateTimeFormat]
+format = "bound string"
+formatToParts = "unknown[]"
+formatRange = "string"
+formatRangeToParts = "unknown[]"
+resolvedOptions = "unknown"
+
+[NumberFormat]
+format = "bound string"
+formatToParts = "unknown[]"
+formatRange = "string"
+formatRangeToParts = "unknown[]"
+resolvedOptions = "unknown"
+
+[PluralRules]
+select = "string"
+selectRange = "string"
+resolvedOptions = "unknown"
+
+[RelativeTimeFormat]
+format = "string"
+formatToParts = "unknown[]"
+resolvedOptions = "unknown"
+
+[ListFormat]
+format = "string"
+formatToParts = "unknown[]"
+resolvedOptions = "unknown"
+
+[DisplayNames]
+of = "string | undefined"
+resolvedOptions = "unknown"
+
+[Segmenter]
+segment = "unknown"
+resolvedOptions = "unknown"
+
+[Locale]
+baseName = "field string"
+language = "field string"
+script = "field string | undefined"
+region = "field string | undefined"
+calendar = "field string | undefined"
+numberingSystem = "field string | undefined"
+maximize = "unknown"
+minimize = "unknown"
+toString = "string"

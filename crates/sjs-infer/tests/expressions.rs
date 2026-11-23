@@ -222,7 +222,6 @@ fn the_other_literals_and_what_is_plain_from_the_text() {
         "JSON.parse(1)(2)",
         "-(() => 1)",
         "await x",
-        "/re/v",
         "void 0",
     ] {
         assert_eq!(typed(later), "?", "{later} is a later pass's");

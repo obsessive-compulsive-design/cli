@@ -126,6 +126,7 @@ pub(crate) fn is_primitive_static(text: &str) -> bool {
         "BigInt",
         "Number",
         "JSON",
+        "Date",
         "structuredClone",
     ];
     typed.contains(&global)
@@ -140,6 +141,12 @@ impl Typer<'_> {
         // How many bytes an element of a typed array takes.
         let (global, member) = text.split_once('.').unwrap_or((text, ""));
         let class = ambient_class(global).filter(|_| ambient);
+        // A constructor of `Intl` is a class of the ambient library.
+        let of_intl = ambient_class(text).filter(|_| ambient && global == "Intl");
+        let shape = of_intl.and_then(|class| self.facts.classes.get(&class));
+        if let Some(made) = shape.and_then(|shape| shape.constructor) {
+            return Some(made);
+        }
         if class.and_then(element_of).is_some() && member == "BYTES_PER_ELEMENT" {
             return Some(TypeId::INT32);
         }
@@ -245,7 +252,7 @@ impl Typer<'_> {
             ("Number", "isFinite" | "isInteger" | "isNaN" | "isSafeInteger") => {
                 Some(TypeId::BOOLEAN)
             }
-            ("Math", _) | ("Number", "parseFloat") => Some(TypeId::NUMBER),
+            ("Math", _) | ("Number", "parseFloat") | ("Date", "now") => Some(TypeId::NUMBER),
             ("Number", "parseInt") => {
                 if passed.len() < 2 {
                     let message = "`Number.parseInt` without a radix guesses one from the text: pass it, `Number.parseInt(text, 10)` (SPEC.md §6.1)";

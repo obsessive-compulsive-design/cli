@@ -3595,7 +3595,49 @@ element type (E138); `arr.at(-1)` is `T | undefined`; `Array.isArray` narrows (U
 `WeakMap` is E137.
 
 #### US-098 Built-ins: `RegExp`, `Error`, `Date`, `Intl`, `Temporal`, `Symbol`
-§6.1, §2 · After: US-016, US-093 · Size: M · M1
+§6.1, §2 · After: US-016, US-093 · Size: M · M1 · **Status: complete** (2026-11-22)
+
+> Delivered in `sjs-infer` (`ambient.rs`, `regex.rs`, with changes to
+> `typed_arrays.rs`, `classes.rs`, `members.rs`, `expressions.rs`, `primitives.rs`,
+> `builtins.rs`) and the new data file `ambient/intl.toml`. `RegExp`, `Date`, `Error`
+> and its seven kinds, and the constructors of `Intl` are classes of the ambient
+> library, told to `Facts` like the typed arrays (US-097). **Decisions:** (1) a regex
+> literal is a `RegExp<groups, flags>`: its capture groups as a shape, each by its
+> number and the named ones by their names too (a name in two alternatives once),
+> every one `string | undefined`, and its flags as a literal; (2) `exec` gives a
+> match or `null`: a shape with `0`, each group by number, `index`, `input`,
+> `groups` (the named groups, or `undefined` when there are none) and, under the `d`
+> flag, `indices`; `test` gives a `boolean`; (3) the function given to `replace` or
+> `replaceAll` is typed by context: the match, each group of a regex pattern, the
+> place, the text, and the named groups when there are any, so a parameter past
+> them is E136; (4) `new RegExp(…)` and `RegExp(…)` are E133 at the call, an
+> assignment to `lastIndex` and a read of `compile` E133 at the key; the legacy
+> statics were E133 already, from the ambient table; (5) an error has `message`,
+> `name`, `stack` (`string | undefined`) and `cause` (`unknown`), `AggregateError`
+> `errors` too; every kind extends `Error`, and a class of a program that extends
+> one by its global name is typed through it (it was a class of an unknown base);
+> their constructors take anything, `{ cause }` included; (6) a `Date` keeps
+> `getTime`, `valueOf`, `toISOString` and the UTC getters, and `Date.now()` is a
+> `number`; its setters and local getters are E133 at the key, `new Date()` with no
+> argument E133 at the call, and a string literal argument that is not ISO 8601
+> (`YYYY`, `YYYY-MM` or `YYYY-MM-DD`, then perhaps `THH:mm`, `:ss`, `.sss`, with `Z`
+> or `±HH:mm`) E133 at the literal; text that is no literal is the one parse left
+> unchecked; (7) `Intl` is typed from `ambient/intl.toml`: a table for each
+> constructor and one for the functions of `Intl`; a member is a method, a value, or
+> a function the instance holds (`compare`, `format`), which is read without being
+> called (`names.toSorted(collator.compare)`); (8) `Temporal` is E204 and `Symbol`
+> its four protocol keys from the ambient table already; nothing was needed here.
+> **Limits:** the options and arguments of the ambient constructors are not
+> checked; `match` and `matchAll` still give arrays of strings (US-096); a `Date`'s
+> other members (`toString`, `toJSON`, the locale ones) are E137, not kept by §6.1;
+> `Intl.Segmenter` and what `resolvedOptions` gives are `unknown`. **Older fixtures
+> and tests changed:** `02-grammar/pass/primary-expr.js` filled a template with a
+> tuple that now has a type; `classes.rs` and `expressions.rs` expected a class that
+> extends `Error` and a regex literal to have no type. Fixtures: `06-ambient/E133/`
+> `new-regexp.js`, `regexp-last-index.js`, `date-no-argument.js`, `date-not-iso.js`,
+> `date-local-getter.js`, `near-miss-dates-and-patterns.js`. Verified: fmt, both
+> clippy passes, audit, tests, doc tests, 100% line and region coverage,
+> `cargo mutants --in-diff` 124 caught, 0 missed, 21 unviable, no timeout.
 
 **Done when**
 - A regex literal's type carries flags and named groups; `exec` returns a match type

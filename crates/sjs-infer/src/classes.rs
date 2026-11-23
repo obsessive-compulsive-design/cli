@@ -16,6 +16,7 @@ use crate::expressions::{nodes, punct, ClassFacts, Facts, Typer};
 use crate::functions::{parameters_of, places, Call, Declared, Flavor};
 use crate::members::Owner;
 use crate::mutation::arguments;
+use crate::typed_arrays::ambient_class;
 use sjs_bind::{Bindings, DeclKind};
 use sjs_diag::{Code, SourceFile, Span};
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
@@ -62,6 +63,8 @@ pub(crate) struct Class<'t> {
     pub extends: bool,
     /// The declaration of what it extends, when that is a name of the file.
     pub base: Option<usize>,
+    /// The class of the ambient library it extends, when it extends one by name.
+    pub ambient: Option<ClassId>,
     /// Whether it has a constructor of its own.
     pub constructs: bool,
     /// What its constructor passes to `super(…)`.
@@ -354,13 +357,24 @@ pub(crate) fn classes_in<'t>(
             continue;
         };
         let heritage = nodes(node).find(|part| part.kind() == NodeKind::ClassHeritage);
-        let base = heritage.and_then(|heritage| names.named(heritage.children().last().as_ref()));
+        let extended = heritage.and_then(|heritage| heritage.children().last());
+        let base = names.named(extended.as_ref());
+        // A name the file does not declare may be a class of the ambient library.
+        let global = extended.filter(|name| {
+            let start = crate::expressions::element_span_of(name).byte_start;
+            let reference = names.referenced_at.get(&start);
+            reference.is_some_and(|&at| bindings.references[at].declaration.is_none())
+        });
+        let global =
+            global.and_then(|name| source.slice(&crate::expressions::element_span_of(&name)));
+        let ambient = global.and_then(ambient_class);
         let mut class = Class {
             declaration,
             id,
             name: bindings.declarations[declaration].name.clone(),
             extends: heritage.is_some(),
             base,
+            ambient,
             constructs: false,
             passed_up: Vec::new(),
             members: Vec::new(),
@@ -530,7 +544,7 @@ impl Typer<'_> {
             }
             let base = class.extends.then(|| {
                 let base = class.base.and_then(|base| known.class_of.get(&base));
-                base.copied().unwrap_or(UNKNOWN_BASE)
+                base.copied().or(class.ambient).unwrap_or(UNKNOWN_BASE)
             });
             if let Some(base) = base {
                 next.superclass.insert(class.id, base);

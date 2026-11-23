@@ -4,6 +4,8 @@
 //! is read, called, iterated and compared as any class instance is. A typed array is
 //! indexed as an array is: an element, or `undefined`.
 
+use crate::ambient::{add_named_classes, intl, NAMED};
+use crate::classes::UNKNOWN_BASE;
 use crate::expressions::{ClassFacts, Facts};
 use sjs_types::{ClassId, Function, Param, Type, TypeId, Types};
 use std::collections::{BTreeMap, BTreeSet};
@@ -85,15 +87,21 @@ const METHODS: [(&str, Gives, bool); 32] = [
 /// The class of the ambient library a global names, when it names one with a type.
 pub(crate) fn ambient_class(name: &str) -> Option<ClassId> {
     let typed = TYPED_ARRAYS.iter().map(|(typed, _)| *typed);
-    let mut names = typed.chain(BUFFERS);
-    let place = names.position(|known| known == name)?;
+    let mut names = typed.chain(BUFFERS).chain(NAMED);
+    // The constructors of `Intl` come last, in the order of their file.
+    let of_intl = name.strip_prefix("Intl.").and_then(|name| {
+        let mut tables = intl().iter().filter(|(table, _)| table != "Intl");
+        tables.position(|(table, _)| table == name)
+    });
+    let place = names.position(|known| known == name);
+    let place = place.or(of_intl.map(|place| place + 14 + NAMED.len()))?;
     let place = u32::try_from(place).unwrap_or_default();
     Some(ClassId(AMBIENT_CLASSES + 2 * place))
 }
 
 /// Whether a class is one of the ambient library.
 pub(crate) fn is_ambient(class: ClassId) -> bool {
-    (AMBIENT_CLASSES..AMBIENT_CLASSES + 28).contains(&class.0)
+    (AMBIENT_CLASSES..UNKNOWN_BASE.0).contains(&class.0)
 }
 
 /// What a typed array of this class holds; `None` for any other class.
@@ -105,7 +113,7 @@ pub(crate) fn element_of(class: ClassId) -> Option<TypeId> {
 }
 
 /// A function that takes anything and gives a `returns`.
-fn taking_any(types: &mut Types, returns: TypeId) -> TypeId {
+pub(crate) fn taking_any(types: &mut Types, returns: TypeId) -> TypeId {
     types.intern(Type::Function(Function {
         type_params: Vec::new(),
         params: Vec::new(),
@@ -146,6 +154,7 @@ impl Shape<'_> {
 /// Tells `facts` the classes of the ambient library that have a type: the typed
 /// arrays, `ArrayBuffer` and `DataView`.
 pub(crate) fn add_ambient_classes(facts: &mut Facts, types: &mut Types) {
+    add_named_classes(facts, types);
     let arrays = TYPED_ARRAYS.iter().map(|(array, _)| *array);
     let buffer = types.intern(Type::Class(ClassId(AMBIENT_CLASSES + 24), Vec::new()));
     for name in arrays.chain(BUFFERS) {

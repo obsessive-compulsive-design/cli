@@ -17,7 +17,7 @@ const c = { k: 1 }
 
 const d = (x) => x
 
-const e = `${b}`
+const e = `${b.length}`
 
 const g = new A()
 

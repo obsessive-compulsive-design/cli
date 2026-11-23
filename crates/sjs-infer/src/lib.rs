@@ -29,8 +29,11 @@
 //! US-096 types the built-ins of strings, numbers and bigints, `Math`, `JSON` and
 //! `structuredClone` (E133 for their removed members, E138 for a clone of a class
 //! instance). US-097 types `Map`, `Set` and `WeakMap` and their methods, and the typed
-//! arrays, `ArrayBuffer` and `DataView` as classes of the ambient library.
+//! arrays, `ArrayBuffer` and `DataView` as classes of the ambient library. US-098 adds
+//! `RegExp`, `Date`, the `Error` family and the constructors of `Intl` to those classes,
+//! with what a regex literal captures (E133 for their removed members and makings).
 
+mod ambient;
 mod bindings;
 mod builtins;
 mod classes;
@@ -46,6 +49,7 @@ mod operators;
 mod primitives;
 mod program;
 mod promises;
+mod regex;
 mod typed_arrays;
 
 pub use bindings::infer_bindings;

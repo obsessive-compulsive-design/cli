@@ -252,7 +252,7 @@ fn a_key_a_class_does_not_declare_is_not_read_or_written() {
         ["E129 @4:10 q", "E137 @5:17 r", "E129 @9:3 w", "E138 @10:7 \"s\"", "E138 @13:13 m"]
     );
     // What a class extends that is no class of the program is not known.
-    let c = checked("class C extends Error {\n  m() {\n    this.code = 1\n    return this.message\n  }\n}\nclass D extends ns.E {}\nconst m = new C().m()\nconst d = new D().x\nconst u = new Unknown()\n");
+    let c = checked("class C extends EventTarget {\n  m() {\n    this.code = 1\n    return this.message\n  }\n}\nclass D extends ns.E {}\nconst m = new C().m()\nconst d = new D().x\nconst u = new Unknown()\n");
     assert_eq!(
         (c.found.clone(), c.of("m"), c.of("d"), c.of("u")),
         (Vec::new(), "?".into(), "?".into(), "?".into())

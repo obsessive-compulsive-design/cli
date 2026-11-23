@@ -31,6 +31,10 @@ pub struct ClassFacts {
     /// What its `then` method passes on, when it has one: what an `await` of an
     /// instance gives.
     pub resolves: Option<TypeId>,
+    /// The members the language removes from it: a read of one is E133.
+    pub removed: BTreeSet<String>,
+    /// The fields that are read and never assigned: an assignment to one is E133.
+    pub unwritten: BTreeSet<String>,
 }
 
 /// What is known of a file's names before its expressions are typed. Later passes
@@ -291,6 +295,7 @@ impl<'a> Typer<'a> {
                     ),
                     TokenKind::Bool(value) => Some(self.types.literal(Literal::Boolean(*value))),
                     TokenKind::Null => Some(TypeId::NULL),
+                    TokenKind::Regex(regex) => Some(self.regex_type(regex)),
                     TokenKind::Keyword(Keyword::This) => {
                         let side = self.side_of(token.parent());
                         side.map(|side| self.instance(side))
@@ -391,6 +396,7 @@ impl<'a> Typer<'a> {
                 self.object_call(&name["Object.".len()..], children)
             }
             (true, "Map.groupBy") => self.grouped(children),
+            (true, name) if name.starts_with("Intl.") => self.intl_static(&name["Intl.".len()..]),
             (true, name) if self.typed_static(name).is_some() => self.typed_static(name),
             (true, name) if name.starts_with("Promise.") => {
                 self.promise_call(&name["Promise.".len()..], node, children)
@@ -418,6 +424,9 @@ impl<'a> Typer<'a> {
                 }
                 if let Some(keyed) = self.keyed(&children[0]) {
                     return self.keyed_call(&keyed, node, children);
+                }
+                if let Some(found) = self.exec_call(&children[0]) {
+                    return Some(found);
                 }
                 match self.listed(&children[0]) {
                     Some(listed) => self.array_call(&listed, node, children),
@@ -802,6 +811,7 @@ pub fn check_expressions(
         judge.class_rules(node);
         judge.loop_rule(node, &children);
         judge.promise_rules(node, &children);
+        judge.made_rules(node, &children);
         let operates = matches!(
             node.kind(),
             NodeKind::BinaryExpr
