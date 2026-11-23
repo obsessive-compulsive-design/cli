@@ -3487,7 +3487,45 @@ element type (E138); `arr.at(-1)` is `T | undefined`; `Array.isArray` narrows (U
 `Object.assign` with an excess key (E101, US-120).
 
 #### US-096 Built-ins: `String`, `Number`, `Math`, `BigInt`, `JSON`, `structuredClone`
-§6.1 · After: US-095 · Size: M · M1
+§6.1 · After: US-095 · Size: M · M1 · **Status: complete** (2026-11-22)
+
+> Delivered in `sjs-infer` (`primitives.rs`, with changes to `expressions.rs`,
+> `members.rs`, `builtins.rs`) and the ambient table (`BigInt` is used through its
+> members only). The kept statics of `String`, `Number`, `BigInt`, `Math` and `JSON`,
+> the constants of `Math` and `Number`, the kept methods of strings, numbers and
+> bigints, and `structuredClone` are typed. **Decisions:** (1) every function of
+> `Math` gives `number`, but `imul` and `clz32`, which give `int32`; `Math.trunc` is
+> `number` until it can be proved an `int32` (US-116), and `Number.isInteger` gives a
+> `boolean` and narrows nothing; (2) `JSON.parse` and `JSON.rawJSON` give `unknown`,
+> `JSON.stringify` a `string`; a second argument to `stringify` that is not the name
+> `undefined` is a replacer, E133 at it (`JSON.stringify(v, undefined, 2)` passes an
+> indent); (3) `Number.parseInt` with fewer than two arguments is E133 at the call;
+> (4) the removed methods of a string (`substr`, `charCodeAt`, `localeCompare`, the
+> thirteen HTML wrappers) are E133 at the method, by the type of what they are
+> called on, each with what to write in its stead; `localeCompare` is removed
+> outright, for a string has no collator to give it; (5) a number keeps `toFixed`,
+> `toPrecision` and `toString`, as §6.1 lists; any other key of a string, a number
+> or a bigint is E137 on a read (E129 on a write), and a kept method read without
+> being called is E138; a value that is a string or a number has the methods both
+> have; (6) `structuredClone` gives the type it is given, and is E138 at its argument
+> when a member of that type is a class instance or a function; a `Map`, a `Set`, a
+> shape and an array pass; (7) `BigInt(x)` is E133 from the ambient table, like
+> `Symbol()`; the global `parseInt`, `parseFloat`, `isNaN`, `isFinite` and
+> `String.fromCharCode` were E133 already (US-068); (8) a method called after a `?.`
+> that may have found nothing gives its result or `undefined`, for these and for the
+> methods of arrays (US-095 dropped the `undefined`). **Limits:** `match` and
+> `matchAll` give arrays of strings without their groups (the `RegExp` story types
+> those); a function passed to `replace` is not typed by context; `String.raw` as a
+> tag is a template, typed as before; `Date` has no type yet, so its clone is not
+> judged. **Older fixtures and tests changed:** `02-lexical/E001/`
+> `near-miss-line-starts.js` read `.x` of a number; tests in `collections.rs`,
+> `context.rs`, `expressions.rs`, `members.rs` and `builtins.rs` called methods a
+> number or a string has not, or expected the kept ones to have no type; the
+> generated `06-ambient/table` snapshots of `BigInt`. Fixtures: `06-ambient/E133/`
+> `string-substr.js`, `parse-int-radix.js`, `json-replacer.js`, `bigint-call.js`,
+> `near-miss-primitives.js`; `06-ambient/E138/structured-clone-class.js`. Verified:
+> fmt, both clippy passes, audit, tests, doc tests, 100% line and region coverage,
+> `cargo mutants --in-diff` 60 caught, 0 missed, 10 unviable, no timeout.
 
 **Done when**
 - All kept members typed; `Number.parseInt` without a radix, global

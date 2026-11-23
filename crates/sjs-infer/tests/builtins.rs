@@ -279,7 +279,7 @@ fn every_method_of_an_array_is_typed() {
     assert_eq!(c.of("n"), "int32", "a function pushed is no callback");
     assert_eq!(
         (c.found.clone(), c.of("k")),
-        (Vec::new(), "int32".to_owned())
+        (vec!["E137 @12:18 map".to_owned()], "int32".to_owned())
     );
 }
 

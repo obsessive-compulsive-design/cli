@@ -95,8 +95,8 @@ fn an_array_literal_is_a_tuple_for_a_const_nothing_mutates() {
 #[test]
 fn a_mutated_array_is_an_array_of_its_elements() {
     assert_eq!(
-        typed("let y = \"s\"\ny = [1]\nconst x = y\nx.push(2)\n"),
-        "string | int32[]",
+        typed("let y = true\ny = [1]\nconst x = y\nx.push(2)\n"),
+        "boolean | int32[]",
         "each array a value may be"
     );
     for mutation in [
@@ -138,8 +138,8 @@ fn a_mutated_array_is_an_array_of_its_elements() {
     }
     assert_eq!(typed("let x = [1]\nx.push(2)\n"), "int32[]");
     assert_eq!(
-        typed("let x = \"s\"\nx = [1]\nx.push(2)\n"),
-        "string | int32[]",
+        typed("let x = true\nx = [1]\nx.push(2)\n"),
+        "boolean | int32[]",
         "each array it may be"
     );
     assert_eq!(
@@ -172,7 +172,7 @@ fn passing_to_a_parameter_that_is_mutated_mutates() {
         "int32[]"
     );
     assert_eq!(
-        typed(&format!("{callee}const x = [1, 2]\nfill(0, x)\n")),
+        typed(&format!("{callee}const x = [1, 2]\nfill([9], x)\n")),
         "[1, 2]",
         "the other parameter is not mutated"
     );

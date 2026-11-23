@@ -26,6 +26,9 @@
 //! and the statics of `Promise`, and judges promises (E113, E118, E119, E127, E128).
 //! US-095 types the statics of `Object` and `Array` and the methods of arrays (E133 for
 //! a `sort` without a comparator, E138 for a search for what an array cannot hold).
+//! US-096 types the built-ins of strings, numbers and bigints, `Math`, `JSON` and
+//! `structuredClone` (E133 for their removed members, E138 for a clone of a class
+//! instance).
 
 mod bindings;
 mod builtins;
@@ -38,6 +41,7 @@ mod iteration;
 mod members;
 mod mutation;
 mod operators;
+mod primitives;
 mod program;
 mod promises;
 

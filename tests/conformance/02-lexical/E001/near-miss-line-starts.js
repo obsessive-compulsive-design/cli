@@ -1,5 +1,5 @@
 // Every line start that is no hazard: no diagnostic. The first line is never one.
-(f() + 1).x
+(f() + 1).toFixed()
 
 const o = {
   a: 1,
@@ -12,15 +12,15 @@ const s = f
 
 class A {}
 
-(f() + 2).x
+(f() + 2).toFixed()
 
 {
-  (f() + 3).x
+  (f() + 3).toFixed()
 }
 
 const t = () => {}
 
-(f() + 4).x
+(f() + 4).toFixed()
 
 if (s) {
   f()

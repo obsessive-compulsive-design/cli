@@ -215,7 +215,6 @@ fn the_other_literals_and_what_is_plain_from_the_text() {
         "-x",
         "-\"a\"",
         "this",
-        "JSON.stringify(1)",
         "o.JSON.parse(1)",
         "JSON.parse",
         "parse(1)",

@@ -82,9 +82,21 @@ pub(crate) struct Listed {
     element: TypeId,
     /// The array.
     receiver: TypeId,
+    /// Whether a `?.` before it may have found nothing.
+    short: bool,
 }
 
 impl Typer<'_> {
+    /// What a call at the end of a chain gives: with `undefined`, when a `?.` before
+    /// it may have found nothing.
+    pub(crate) fn after_chain(&mut self, given: TypeId, short: bool) -> TypeId {
+        if short {
+            self.types.union([given, TypeId::UNDEFINED])
+        } else {
+            given
+        }
+    }
+
     /// An array of `element`s that nothing else holds yet.
     fn list(&mut self, element: TypeId) -> TypeId {
         self.types.intern(Type::Array {
@@ -133,13 +145,14 @@ impl Typer<'_> {
             return None;
         }
         let (name, at) = self.key_of(target);
-        let (receiver, _) = self.receiver(target, false)?;
+        let (receiver, short) = self.receiver(target, false)?;
         let element = self.held_by(receiver)?;
         ARRAY_METHODS.contains(&name.as_str()).then_some(Listed {
             name,
             at,
             element,
             receiver,
+            short,
         })
     }
 
@@ -217,7 +230,7 @@ impl Typer<'_> {
                 self.report(first, Code::E138, element_span_of(&sought), message);
             }
         }
-        Some(match name {
+        let given = match name {
             "at" | "find" | "findLast" | "pop" | "shift" => {
                 self.types.union([item, TypeId::UNDEFINED])
             }
@@ -279,7 +292,8 @@ impl Typer<'_> {
                 let returned = self.returned_by(&passed)?;
                 self.types.union([start, returned])
             }
-        })
+        };
+        Some(self.after_chain(given, listed.short))
     }
 
     /// The type of `Object.name(…)`, the `Object` of the ambient library.

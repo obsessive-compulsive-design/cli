@@ -172,15 +172,7 @@ fn a_read_gives_what_every_member_holds() {
     assert_eq!(typed("text.length"), "int32");
     assert_eq!(typed("\"abc\".length"), "int32");
     assert_eq!(typed("dict.anything"), "number | undefined");
-    for later in [
-        "text.trim",
-        "num.toFixed",
-        "stranger.field",
-        "unknownName.k",
-        "one.k.toFixed",
-        "f().k",
-        "console.log",
-    ] {
+    for later in ["stranger.field", "unknownName.k", "f().k", "console.log"] {
         assert_eq!(typed(later), "?", "{later} is a later pass's");
     }
 }
@@ -214,7 +206,7 @@ fn a_key_some_member_lacks_is_e137() {
     );
     assert_eq!(checked("const x = one.missing\n").0, "?");
     assert_eq!(
-        found("stranger.w\nnum.w\n"),
+        found("stranger.w\n"),
         NONE,
         "what a later pass gives members is not judged"
     );
@@ -235,7 +227,7 @@ fn an_optional_read_is_for_a_receiver_that_may_be_nullish() {
     assert_eq!(typed("nullable?.k"), "number | undefined");
     assert_eq!(typed("deep?.b"), "{ c: int32 } | undefined");
     assert_eq!(typed("deep?.b?.c"), "int32 | undefined");
-    assert_eq!(typed("maybe?.k.toFixed"), "?");
+    assert_eq!(typed("maybe?.k.toFixed()"), "string | undefined");
     assert_eq!(typed("maybe?.[\"k\"]"), "number | undefined");
     assert_eq!(
         typed("maybe?.only.length"),
@@ -411,7 +403,7 @@ fn a_write_needs_the_key_and_a_value_it_takes() {
         found("one?.k\n;[one.k, one.missing] = [1, 2]\n"),
         ["E121 @1:4 ?.", "E137 @2:14 missing"]
     );
-    assert_eq!(found("stranger.k = 1\nlist[0] = 1\none.k = later()\none[later()] = 1\npoint.norm = 1\none.k.deep = 1\nunknownName.k = 1\none[anykey] = 1\n"), NONE, "what is not known yet is not judged");
+    assert_eq!(found("stranger.k = 1\nlist[0] = 1\none.k = later()\none[later()] = 1\npoint.norm = 1\nunknownName.k = 1\none[anykey] = 1\n"), NONE, "what is not known yet is not judged");
     assert_eq!(
         found("point.#p = 1\nconst s = point.#secret\n"),
         ["E129 @1:7 #p", "E137 @2:17 #secret"],

@@ -132,6 +132,7 @@ spec = "§6.1"
 source = "ES2025 (ECMA-262, 16th edition) §21.2"
 present = ["browser", "node", "deno", "bun", "workerd"]
 members = ["asIntN", "asUintN"]
+members_only = "a bigint literal, `1n`"
 
 [[global]]
 name = "Math"

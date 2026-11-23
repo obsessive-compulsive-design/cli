@@ -276,8 +276,14 @@ fn a_callback_passed_on_is_what_the_function_it_reaches_takes() {
     let wrong = format!(
         "{via}export const b = via((n) => n.missing)\nexport const c = via((s) => s - \"a\")\n"
     );
-    assert_eq!(found(&wrong), ["E138 @7:31 -"]);
-    assert_eq!(related(&wrong), [["7:18 expected to take a `int32` here"]]);
+    assert_eq!(found(&wrong), ["E137 @6:31 missing", "E138 @7:31 -"]);
+    assert_eq!(
+        related(&wrong),
+        [
+            ["6:18 expected to take a `int32` here"],
+            ["7:18 expected to take a `int32` here"]
+        ]
+    );
     let more = format!("{via}export const c = via((x, y) => x)\n");
     assert_eq!(found(&more), ["E136 @6:26 y"]);
     assert_eq!(related(&more), [["6:18 expected to take a `int32` here"]]);

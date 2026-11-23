@@ -9,6 +9,9 @@
 use crate::builtins::ARRAY_METHODS;
 use crate::classes::statics_of;
 use crate::expressions::{element_span_of, punct, Typer};
+use crate::primitives::{
+    is_numeric, is_string, NUMBER_METHODS, REMOVED_STRING_METHODS, STRING_METHODS,
+};
 use sjs_diag::{Code, Span};
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct};
 use sjs_types::{Assignability, ClassId, Literal, Printer, Property, Type, TypeId, VarId};
@@ -113,6 +116,25 @@ impl Typer<'_> {
                 if key == "length" =>
             {
                 Held::Value(TypeId::INT32)
+            }
+            // The methods of a string and of a number are called, by the built-ins;
+            // they have no other key.
+            ty if is_string(&ty) => {
+                let removed = REMOVED_STRING_METHODS
+                    .iter()
+                    .any(|(removed, _)| *removed == key);
+                if removed || STRING_METHODS.contains(&key) {
+                    Held::Method(None)
+                } else {
+                    Held::Missing
+                }
+            }
+            ty if is_numeric(&ty) => {
+                if NUMBER_METHODS.contains(&key) {
+                    Held::Method(None)
+                } else {
+                    Held::Missing
+                }
             }
             // The methods of an array are called, by the built-ins; it has no other key.
             Type::Array { .. } | Type::Tuple(_) if ARRAY_METHODS.contains(&key) => {

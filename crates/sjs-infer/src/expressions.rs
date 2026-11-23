@@ -1,6 +1,7 @@
 //! The types of literal and primitive expressions (SPEC.md §3.1, §4.1).
 
 use crate::functions::{Passed, Site};
+use crate::primitives::is_primitive_static;
 use crate::promises::consumes;
 use sjs_bind::Bindings;
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
@@ -341,48 +342,13 @@ impl<'a> Typer<'a> {
                     mutated: false,
                 }))
             }
-            NodeKind::CallExpr => {
-                // `JSON.parse(…)`, of the global `JSON`: anything at all.
-                let callee = children.first().map(element_span);
-                let text = callee
-                    .and_then(|span| self.source.slice(&span))
-                    .unwrap_or_default();
-                let reference = callee.and_then(|span| self.references.get(&span.byte_start));
-                let global =
-                    reference.is_some_and(|&at| self.bindings.references[at].declaration.is_none());
-                match (global, text) {
-                    (true, "JSON.parse") => Some(TypeId::UNKNOWN),
-                    (true, name) if name.starts_with("Object.") => {
-                        self.object_call(&name["Object.".len()..], &children)
-                    }
-                    (true, name) if name.starts_with("Promise.") => {
-                        self.promise_call(&name["Promise.".len()..], node, &children)
-                    }
-                    (true, name) if name.starts_with("Array.") => {
-                        self.array_static(&name["Array.".len()..], &children)
-                    }
-                    (true, "Iterator.from") => {
-                        let argument = children.get(2).copied().filter(|_| children.len() == 4);
-                        let argument = argument.and_then(|argument| self.type_of(argument));
-                        let item = argument.and_then(|iterable| self.item_of(iterable, false))?;
-                        // What is taken out of a tuple is no literal any more.
-                        let item = self.widened(item);
-                        Some(self.iterator(item, false))
-                    }
-                    _ => {
-                        if let Some(helped) = self.helped(&children[0]) {
-                            return self.helper_call(&helped, &children);
-                        }
-                        match self.listed(&children[0]) {
-                            Some(listed) => self.array_call(&listed, node, &children),
-                            None => self.call(node, &children),
-                        }
-                    }
-                }
-            }
+            NodeKind::CallExpr => self.called(node, &children),
             NodeKind::ArrowFunction => self.arrow(node),
             NodeKind::NewExpr => self.call(node, &children),
             NodeKind::MemberExpr | NodeKind::IndexExpr => {
+                if let Some(constant) = self.constant(node, &children) {
+                    return Some(constant);
+                }
                 let (ty, short) = self.chain(node)?;
                 // Past a `?.` that found nothing, the whole chain is `undefined`.
                 Some(if short {
@@ -397,6 +363,53 @@ impl<'a> Typer<'a> {
             }
             NodeKind::AwaitExpr => self.await_of(node, &children),
             _ => None,
+        }
+    }
+
+    /// The type of a call: of a built-in by its name, of a method of a built-in
+    /// value, or of what a name or an expression gives.
+    fn called(&mut self, node: NodeRef<'_>, children: &[Element<'_>]) -> Option<TypeId> {
+        // `JSON.parse(…)`, of the global `JSON`: anything at all.
+        let callee = children.first().map(element_span);
+        let text = callee
+            .and_then(|span| self.source.slice(&span))
+            .unwrap_or_default();
+        let reference = callee.and_then(|span| self.references.get(&span.byte_start));
+        let global =
+            reference.is_some_and(|&at| self.bindings.references[at].declaration.is_none());
+        match (global, text) {
+            (true, name) if name.starts_with("Object.") => {
+                self.object_call(&name["Object.".len()..], children)
+            }
+            (true, name) if name.starts_with("Promise.") => {
+                self.promise_call(&name["Promise.".len()..], node, children)
+            }
+            (true, name) if name.starts_with("Array.") => {
+                self.array_static(&name["Array.".len()..], children)
+            }
+            (true, "Iterator.from") => {
+                let argument = children.get(2).copied().filter(|_| children.len() == 4);
+                let argument = argument.and_then(|argument| self.type_of(argument));
+                let item = argument.and_then(|iterable| self.item_of(iterable, false))?;
+                // What is taken out of a tuple is no literal any more.
+                let item = self.widened(item);
+                Some(self.iterator(item, false))
+            }
+            (true, name) if is_primitive_static(name) => {
+                self.primitive_static(name, node, children)
+            }
+            _ => {
+                if let Some(helped) = self.helped(&children[0]) {
+                    return self.helper_call(&helped, children);
+                }
+                if let Some(spoken) = self.spoken(&children[0]) {
+                    return self.spoken_call(&spoken, node);
+                }
+                match self.listed(&children[0]) {
+                    Some(listed) => self.array_call(&listed, node, children),
+                    None => self.call(node, children),
+                }
+            }
         }
     }
 
