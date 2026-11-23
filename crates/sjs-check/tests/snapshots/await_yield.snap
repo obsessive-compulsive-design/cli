@@ -1,0 +1,36 @@
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n0 -> n1
+}
+
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="await"]
+  n4 [label="const a = await p"]
+  n5 [label="await"]
+  n6 [label="return await a"]
+  n0 -> n3
+  n3 -> n4
+  n4 -> n5
+  n5 -> n6
+  n6 -> n1 [label="return"]
+}
+
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="yield"]
+  n4 [label="const a = yield 1"]
+  n5 [label="yield"]
+  n6 [label="yield* xs"]
+  n0 -> n3
+  n3 -> n4
+  n4 -> n5
+  n5 -> n6
+  n6 -> n1
+}

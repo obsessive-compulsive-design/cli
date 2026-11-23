@@ -1,11 +1,21 @@
-// Every field has an initializer or is assigned straight down the constructor; one
-// that starts as `undefined` and is given a string later is either: no diagnostic.
+// Every field has an initializer or is assigned on every path through the
+// constructor, a path that throws aside; one that starts as `undefined` and is given a
+// string later is either: no diagnostic.
 export class Session {
   static opened = 0
   id
+  kind
   #token = undefined
   constructor(id) {
+    if (id < 0) {
+      throw new Error("no such session")
+    }
     this.id = id
+    if (id === 0) {
+      this.kind = "root"
+    } else {
+      this.kind = "user"
+    }
   }
   open(token) {
     this.#token = token

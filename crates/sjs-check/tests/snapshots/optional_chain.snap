@@ -1,0 +1,32 @@
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="b"]
+  n4 [label="b?.c"]
+  n5 [label="b?.c.d"]
+  n6 [label="const a = b?.c.d"]
+  n7 [label="e.f"]
+  n8 [label="e.f?.(g)"]
+  n9 [label="e.f?.(g)?.h"]
+  n10 [label="e.f?.(g)?.h"]
+  n11 [label="i"]
+  n12 [label="i?.[j]"]
+  n13 [label="i?.[j]"]
+  n0 -> n3
+  n3 -> n4 [label="present"]
+  n4 -> n5
+  n5 -> n6
+  n3 -> n6 [label="absent"]
+  n6 -> n7
+  n7 -> n8 [label="present"]
+  n8 -> n9 [label="present"]
+  n9 -> n10
+  n7 -> n10 [label="absent"]
+  n8 -> n10 [label="absent"]
+  n10 -> n11
+  n11 -> n12 [label="present"]
+  n12 -> n13
+  n11 -> n13 [label="absent"]
+  n13 -> n1
+}

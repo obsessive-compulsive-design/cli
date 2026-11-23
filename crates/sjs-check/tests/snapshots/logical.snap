@@ -1,0 +1,50 @@
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="b"]
+  n4 [label="c"]
+  n5 [label="const a = b && c"]
+  n6 [label="e"]
+  n7 [label="f"]
+  n8 [label="const d = e || f"]
+  n9 [label="h"]
+  n10 [label="i"]
+  n11 [label="const g = h ?? i"]
+  n12 [label="a"]
+  n13 [label="d"]
+  n14 [label="g"]
+  n15 [label="j()"]
+  n16 [label="a"]
+  n17 [label="d"]
+  n18 [label="g"]
+  n19 [label="k((a && d) || g)"]
+  n20 [label="k((a && d) || g)"]
+  n0 -> n3
+  n3 -> n4 [label="true"]
+  n3 -> n5 [label="false"]
+  n4 -> n5
+  n5 -> n6
+  n6 -> n7 [label="false"]
+  n6 -> n8 [label="true"]
+  n7 -> n8
+  n8 -> n9
+  n9 -> n10 [label="nullish"]
+  n10 -> n11
+  n9 -> n11 [label="present"]
+  n11 -> n12
+  n12 -> n13 [label="true"]
+  n13 -> n14 [label="false"]
+  n14 -> n15 [label="false"]
+  n15 -> n16
+  n12 -> n16 [label="false"]
+  n13 -> n16 [label="true"]
+  n14 -> n16 [label="true"]
+  n16 -> n17 [label="true"]
+  n16 -> n18 [label="false"]
+  n17 -> n18 [label="false"]
+  n17 -> n19 [label="true"]
+  n18 -> n19
+  n19 -> n20
+  n20 -> n1
+}

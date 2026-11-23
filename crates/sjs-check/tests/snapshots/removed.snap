@@ -1,0 +1,12 @@
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="do { a() } while (b)"]
+  n4 [label="with (a) { b() }"]
+  n5 [label="debugger"]
+  n0 -> n3
+  n3 -> n4
+  n4 -> n5
+  n5 -> n1
+}

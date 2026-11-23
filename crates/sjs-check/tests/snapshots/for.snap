@@ -1,0 +1,24 @@
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="let i = 0"]
+  n4 [label="loop"]
+  n5 [label="i < n"]
+  n6 [label="a"]
+  n7 [label="continue"]
+  n8 [label="b()"]
+  n9 [label="i += 1"]
+  n10 [label="c()"]
+  n0 -> n3
+  n3 -> n4
+  n4 -> n5
+  n5 -> n6 [label="true"]
+  n6 -> n7 [label="true"]
+  n6 -> n8 [label="false"]
+  n8 -> n9
+  n7 -> n9 [label="continue"]
+  n9 -> n4
+  n5 -> n10 [label="false"]
+  n10 -> n1
+}

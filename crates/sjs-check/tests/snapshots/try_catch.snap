@@ -1,0 +1,17 @@
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="a()"]
+  n4 [label="b()"]
+  n5 [label="c(e)"]
+  n6 [label="d()"]
+  n0 -> n3
+  n3 -> n4
+  n3 -> n5 [label="throws"]
+  n4 -> n5 [label="throws"]
+  n5 -> n2 [label="throws"]
+  n4 -> n6
+  n5 -> n6
+  n6 -> n1
+}

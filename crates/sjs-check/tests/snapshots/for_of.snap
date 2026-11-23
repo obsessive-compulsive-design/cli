@@ -1,0 +1,37 @@
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="xs"]
+  n4 [label="next"]
+  n5 [label="x"]
+  n6 [label="break"]
+  n7 [label="a(x)"]
+  n8 [label="o"]
+  n9 [label="next"]
+  n10 [label="b(k)"]
+  n11 [label="p"]
+  n12 [label="q"]
+  n13 [label="next"]
+  n14 [label="continue"]
+  n15 [label="c()"]
+  n0 -> n3
+  n3 -> n4
+  n4 -> n5
+  n5 -> n6 [label="true"]
+  n5 -> n7 [label="false"]
+  n7 -> n4
+  n4 -> n8 [label="done"]
+  n6 -> n8 [label="break"]
+  n8 -> n9
+  n9 -> n10
+  n10 -> n9
+  n9 -> n11 [label="done"]
+  n11 -> n12 [label="nullish"]
+  n12 -> n13
+  n11 -> n13 [label="present"]
+  n13 -> n14
+  n14 -> n13 [label="continue"]
+  n13 -> n15 [label="done"]
+  n15 -> n1
+}

@@ -1,0 +1,22 @@
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n0 -> n1
+}
+
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="return a()"]
+  n4 [label="b()"]
+  n5 [label="b()"]
+  n6 [label="c()"]
+  n0 -> n3
+  n3 -> n4 [label="return"]
+  n4 -> n1
+  n3 -> n5 [label="throws"]
+  n5 -> n2
+  n6 -> n1
+}

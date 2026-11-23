@@ -1,0 +1,32 @@
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="x"]
+  n4 [label="1"]
+  n5 [label="2"]
+  n6 [label="3"]
+  n7 [label="4"]
+  n8 [label="a()"]
+  n9 [label="break"]
+  n10 [label="b()"]
+  n11 [label="c()"]
+  n12 [label="d()"]
+  n13 [label="e()"]
+  n0 -> n3
+  n3 -> n4
+  n4 -> n5
+  n5 -> n6
+  n6 -> n7
+  n4 -> n8 [label="case"]
+  n5 -> n8 [label="case"]
+  n8 -> n9
+  n6 -> n10 [label="case"]
+  n7 -> n11
+  n10 -> n11
+  n7 -> n12 [label="case"]
+  n11 -> n12
+  n12 -> n13
+  n9 -> n13 [label="break"]
+  n13 -> n1
+}

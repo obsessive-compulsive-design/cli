@@ -1,0 +1,114 @@
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="const f = (a) => a && b"]
+  n4 [label="const g = () => { return 1 }"]
+  n5 [label="const h = () => 2"]
+  n6 [label="const i = function () { return 3 }"]
+  n7 [label="class C { static { C.x = 1 } constructor…"]
+  n8 [label="a"]
+  n9 [label="5"]
+  n10 [label="p: a ?? 5"]
+  n11 [label="{ p: a ?? 5, q() { return b ?? 6 }, }"]
+  n12 [label="const o = { p: a ?? 5, q() { return b ??…"]
+  n0 -> n3
+  n3 -> n4
+  n4 -> n5
+  n5 -> n6
+  n6 -> n7
+  n7 -> n8
+  n8 -> n9 [label="nullish"]
+  n9 -> n10
+  n8 -> n10 [label="present"]
+  n10 -> n11
+  n11 -> n12
+  n12 -> n1
+}
+
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="a"]
+  n4 [label="b"]
+  n0 -> n3
+  n3 -> n4 [label="true"]
+  n3 -> n1 [label="return"]
+  n4 -> n1 [label="return"]
+}
+
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="return 1"]
+  n0 -> n3
+  n3 -> n1 [label="return"]
+}
+
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="2"]
+  n0 -> n3
+  n3 -> n1 [label="return"]
+}
+
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="return 3"]
+  n0 -> n3
+  n3 -> n1 [label="return"]
+}
+
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="C.x = 1"]
+  n0 -> n3
+  n3 -> n1
+}
+
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="this.y = 2"]
+  n0 -> n3
+  n3 -> n1
+}
+
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="return 4"]
+  n0 -> n3
+  n3 -> n1 [label="return"]
+}
+
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n0 -> n1
+}
+
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="b"]
+  n4 [label="6"]
+  n5 [label="return b ?? 6"]
+  n0 -> n3
+  n3 -> n4 [label="nullish"]
+  n4 -> n5
+  n3 -> n5 [label="present"]
+  n5 -> n1 [label="return"]
+}

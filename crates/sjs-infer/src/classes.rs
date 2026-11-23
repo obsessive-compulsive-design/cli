@@ -7,10 +7,9 @@
 //! the class (`Box<T>`). The static members are the members of a second class, the
 //! static side, which `C.name` and a static `this` read.
 //!
-//! Judged here: a field without an initializer that the constructor does not assign,
-//! straight down its body (E114); what is extended and is no class, a method that
-//! does not go where the one it overrides does, a setter that does not take what its
-//! getter gives (E138).
+//! Judged here: what is extended and is no class, a method that does not go where
+//! the one it overrides does, a setter that does not take what its getter gives
+//! (E138). A field the constructor leaves unassigned (E114) is `sjs-check`'s.
 
 use crate::expressions::{nodes, punct, ClassFacts, Facts, Typer};
 use crate::functions::{parameters_of, places, Call, Declared, Flavor};
@@ -758,7 +757,7 @@ impl Typer<'_> {
         shape.constructor = Some(made);
     }
 
-    /// Judges a class declaration: what it extends (E138), its fields (E114), its
+    /// Judges a class declaration: what it extends (E138), its
     /// methods against those they override and its setters against their getters
     /// (E138).
     pub(crate) fn class_rules(&mut self, node: NodeRef<'_>) {
@@ -800,25 +799,7 @@ impl Typer<'_> {
     /// Judges the members of the class `id`, whose body is `body`.
     fn member_rules(&mut self, first: bool, id: ClassId, body: NodeRef<'_>) {
         let members: Vec<NodeRef<'_>> = nodes(body).collect();
-        // What the constructor assigns, straight down its body.
         let source = self.source;
-        let constructor = members
-            .iter()
-            .find(|member| is_constructor(source, **member));
-        let block = constructor.and_then(|constructor| nodes(*constructor).last());
-        let statements = block.into_iter().flat_map(nodes);
-        let mut assigned: Vec<&str> = Vec::new();
-        for statement in statements.flat_map(nodes) {
-            let parts: Vec<Element<'_>> = statement.children().collect();
-            let stated = statement
-                .parent()
-                .is_some_and(|parent| parent.kind() == NodeKind::ExprStmt);
-            let assigns = stated
-                && statement.kind() == NodeKind::AssignExpr
-                && punct(parts.get(1)) == Some(Punct::Eq);
-            let key = parts.first().filter(|_| assigns).and_then(this_key);
-            assigned.extend(key.and_then(|key| source.slice(&key)));
-        }
         for member in members {
             let Some(written) = written(source, member) else {
                 continue;
@@ -829,15 +810,8 @@ impl Typer<'_> {
             } else {
                 id
             };
-            let valued = nodes(member).any(|inner| inner.kind() == NodeKind::Initializer);
             let shape = self.facts.classes.get(&side).cloned().unwrap_or_default();
             match member.kind() {
-                NodeKind::ClassField if side == id && !valued && !assigned.contains(&name) => {
-                    let message = format!(
-                        "the field `{name}` has no initializer, and the constructor does not assign it straight down its body: give it a value, `undefined` if it has none yet (SPEC.md §4.5)"
-                    );
-                    self.report(first, Code::E114, written.at, message);
-                }
                 NodeKind::ClassMethod => self.override_rule(first, side, &written, &shape),
                 NodeKind::ClassAccessor => {
                     let taken = shape.setters.get(name).copied().flatten();

@@ -3767,7 +3767,37 @@ as generic; an empty program produces a valid document.
 ### Epic 6 · Checker
 
 #### US-110 Control-flow graph and reachability
-§11.1, E117, E108, E109, E114 · After: US-092 · Size: L · M2
+§11.1, E117, E108, E109, E114 · After: US-092 · Size: L · M2 · **Status: complete** (2026-11-23)
+
+> Delivered in `sjs-check` (`cfg.rs`: `Cfg` with `of_body`, `reachable`,
+> `reachable_avoiding`, `dominates`, `nodes_holding`, `to_dot`; `lib.rs`: `graphs`,
+> `check_flow`), which replaces the placeholder and is called from the CLI pipeline
+> after the binder. Tests: `crates/sjs-check/tests/cfg.rs` (29 DOT snapshots under
+> `tests/snapshots/`, reachability, dominance) and `tests/flow.rs`; fixtures under
+> `04-statements/E108`, `04-statements/E109`, `08-structure/E117` and
+> `04-classes/E114`.
+> **Decisions:** (1) a node is a statement, or a part of an expression when the
+> expression branches or waits (`&&`, `||`, `??`, `?:`, `?.`, `await`, `yield`); edges
+> are labelled `true`/`false`, `nullish`/`present`, `absent`, `case`, `done`, `break`,
+> `continue`, `return`, `throw`, `throws`; (2) a `finally` block is built once for
+> each way its `try` is left, so `try { return } finally {}` has nothing after it;
+> (3) every node of a `try` block has a `throws` edge to its handler: an empty `try`
+> leaves its `catch` unreachable; (4) a condition written `true` or `false` (through
+> `!`, `&&`, `||` and parentheses) has one edge, so the `else` of `if (true)` is E117
+> too; (5) E117 is reported at the first statement of a stretch, at the block when a
+> whole block is dead, and never at a function declaration; (6) E108 is reported at
+> the first label of the clause, and an empty block that is not last falls through
+> (the US-034 near-miss fixture had one; it now ends in `break`); (7) E109 is
+> lexical: any `return` inside a `finally`, not in a function written there; (8) E114
+> moved here from `sjs-infer`: a field is unassigned when the constructor's normal
+> exit is reachable without passing a `this.key = …` (a path that throws is no exit;
+> an assignment in a `try` may not have happened when its `catch` runs); (9) `this`
+> before `super()`: the binder keeps the textual rule, and `sjs-check` adds E000 for
+> a `this` after the first `super()` in the text that a path reaches with none
+> called; a `this` in an arrow is not judged; (10) labels are removed productions,
+> but a labelled loop still binds its `break`/`continue` in the graph.
+> Verified: fmt, both clippy passes, audit, all tests, 100% line and region
+> coverage, `cargo mutants` on the diff with 0 missed and 0 timeouts.
 
 **Scope.** Per-function CFG for every statement form, short-circuit operands, `?:`,
 `?.` groups, `switch`, `try/catch/finally` (finally-on-every-exit edges), loops with

@@ -1,0 +1,13 @@
+digraph cfg {
+  n0 [label="entry"]
+  n1 [label="exit"]
+  n2 [label="raise"]
+  n3 [label="a"]
+  n4 [label="b()"]
+  n5 [label="c()"]
+  n0 -> n3
+  n3 -> n4 [label="true"]
+  n4 -> n5
+  n3 -> n5 [label="false"]
+  n5 -> n1
+}

@@ -14,12 +14,18 @@ dependencies = [
 [[package]]
 name = "sjs-check"
 version = "0.1.0"
+dependencies = [
+ "sjs-diag",
+ "sjs-syntax",
+ "sjs-testkit",
+]
 
 [[package]]
 name = "sjs-cli"
 version = "0.1.0"
 dependencies = [
  "sjs-bind",
+ "sjs-check",
  "sjs-diag",
  "sjs-format",
  "sjs-infer",

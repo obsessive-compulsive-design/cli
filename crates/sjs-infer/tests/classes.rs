@@ -229,19 +229,11 @@ fn fields_are_typed_from_initializers_and_from_what_the_class_assigns() {
 }
 
 #[test]
-fn a_field_without_an_initializer_is_assigned_by_the_constructor() {
+fn an_assignment_to_a_name_in_a_class_writes_no_field() {
     assert_eq!(
-        found("class A {\n  a\n  b\n  c\n  d\n  #e\n  static s\n  f = 1\n  constructor(v) {\n    this.a = v\n    if (v) {\n      this.b = 1\n    }\n    this.c += 1\n    other.d = 1\n    this.#e = 2\n    v = this.d\n  }\n  m() {\n    this.d = 1\n  }\n}\nnew A(1)\n"),
-        ["E114 @3:3 b", "E114 @4:3 c", "E114 @5:3 d"],
-        "in a branch, by `+=`, in a method: not assigned straight down the constructor"
-    );
-    assert_eq!(
-        found("class A {\n  a\n  m() {\n    this.a = 1\n  }\n}\n"),
-        ["E114 @2:3 a"],
-        "no constructor"
-    );
-    assert_eq!(
-        found("class A {\n  a\n  b = undefined\n  constructor() {\n    this.a = 1\n  }\n}\nclass B extends A {\n  c\n  constructor() {\n    super()\n    this.c = 2\n  }\n}\n"),
+        found(
+            "class A {\n  d = 1\n  m(v) {\n    let w = v\n    w = this.d\n    return w\n  }\n}\n"
+        ),
         NONE
     );
 }

@@ -48,6 +48,11 @@ pub fn check_files(files: &[InputFile]) -> Diagnostics {
                 if !rejected {
                     let (bindings, bound) = sjs_bind::bind(&source, &tree);
                     diagnostics.extend(bound.iter().cloned());
+                    // What the flow of control shows (US-110): E117 for code that is
+                    // never reached, E108 for a `case` that runs on into the next,
+                    // E109 for a `return` in a `finally`, E114 for a field a path
+                    // through the constructor leaves unassigned.
+                    diagnostics.extend(sjs_check::check_flow(&source, &tree));
                     // What the expressions say of themselves (US-083): E100 for a
                     // `null` the program writes, E125 for a template filled with what
                     // is no text.

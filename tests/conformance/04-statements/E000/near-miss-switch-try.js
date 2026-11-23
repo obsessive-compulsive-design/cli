@@ -8,7 +8,10 @@ switch (x) {
   case -1: {
     break
   }
-  case "a": {}
+  case "a": {
+    g()
+    break
+  }
   default:
   case true: {
     f()
