@@ -3775,7 +3775,7 @@ as generic; an empty program produces a valid document.
 > after the binder. Tests: `crates/sjs-check/tests/cfg.rs` (29 DOT snapshots under
 > `tests/snapshots/`, reachability, dominance) and `tests/flow.rs`; fixtures under
 > `04-statements/E108`, `04-statements/E109`, `08-structure/E117` and
-> `04-classes/E114`.
+> `04-classes/E114`. (US-111 moved `cfg.rs`, its tests and snapshots to `sjs-bind`.)
 > **Decisions:** (1) a node is a statement, or a part of an expression when the
 > expression branches or waits (`&&`, `||`, `??`, `?:`, `?.`, `await`, `yield`); edges
 > are labelled `true`/`false`, `nullish`/`present`, `absent`, `case`, `done`, `break`,
@@ -3819,7 +3819,41 @@ where both return; a field assigned inside a loop (not all paths); E117 once per
 unreachable region.
 
 #### US-111 Narrowing core
-§3.5 · After: US-110 · Size: L · M2
+§3.5 · After: US-110 · Size: L · M2 · **Status: complete** (2026-11-23)
+
+> Delivered in `sjs-infer` (`narrowing.rs`: the tests of a file, and a flow of the
+> type of one path over the graph of its function; applied where a name and a member
+> access are typed). The control-flow graph of US-110 moved from `sjs-check` to
+> `sjs-bind` (`cfg.rs`, with its tests and snapshots), because the inference needs
+> it and §0.5 puts `sjs-check` after `sjs-infer`; `sjs-check` re-exports it. Tests:
+> `crates/sjs-infer/tests/narrowing.rs`; `crates/sjs-cli/tests/narrowing.rs`
+> generates `tests/conformance/03-narrowing/{pass,fail}` (8 forms × 8 positions ×
+> plain and negated; `SJS_UPDATE_SNAPSHOTS=1` writes them); hand-written fixtures
+> under `tests/conformance/03-flow`.
+> **Decisions:** (1) a path is a name or keys read from one by `.`; `this`, `?.` and
+> computed keys are no path (array elements are US-115); (2) where edges meet, the
+> types are united; an assignment sets the path back to its whole type, as the
+> story says, not to the type assigned; (3) what undoes a narrowing: an assignment
+> to the name or to anything reached from it, a declaration running again (a
+> loop's), and a call, `await` or `yield` for a `let` that a closure assigns and for
+> a path of keys from an object the program mutates; `Array.isArray`,
+> `Number.isNaN` and `Object.hasOwn` used as tests are no such call; (4) an arrow
+> starts from what a name that is never assigned was narrowed to where the arrow
+> is written; a declared function, a method and a field's value start from
+> nothing; (5) `typeof` through a `const` narrows only a name never assigned;
+> (6) of `unknown`, `typeof` gives the primitive, `instanceof` the class,
+> `Array.isArray` `unknown[]`, `Number.isNaN` `number`, and `Object.hasOwn(x, "k")`
+> the shape `{ k: unknown }` (a second key is added to it), which is what makes the
+> §6.3 idiom work; (7) a discriminant needs every member to be a shape with a
+> literal at the key; an argument's shape loses its literals (US-089), so a
+> parameter is not discriminated: a `const` or a function's result is;
+> (8) `x === y` narrows each to what both may be, by the other's type before this
+> test; `!==` removes only a single value; (9) `Number.isNaN` removes nothing when
+> false; (10) a `case` value with a sign (`case -1:`) is one test, in the graph too;
+> (11) code that is not reached is not narrowed. **Limits:** predicate functions
+> (§3.5) and truthiness (US-112) are not here.
+> Verified: fmt, both clippy passes, audit, all tests, 100% line and region
+> coverage, `cargo mutants` on the diff with 0 missed and 0 timeouts.
 
 **Done when**
 - `typeof x === "<kind>"` (also `!==` and `switch (typeof x)`), `x === undefined`, `x ===

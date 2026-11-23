@@ -512,7 +512,8 @@ impl Typer<'_> {
                 return None;
             }
         }
-        known.then(|| (self.types.union(values), short))
+        let read = known.then(|| self.types.union(values))?;
+        Some((self.narrowed(&Element::Node(node), read), short))
     }
 
     /// `Object.keys(shape)` of a shape of these properties: an array of its keys,

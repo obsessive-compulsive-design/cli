@@ -15,6 +15,7 @@ dependencies = [
 name = "sjs-check"
 version = "0.1.0"
 dependencies = [
+ "sjs-bind",
  "sjs-diag",
  "sjs-syntax",
  "sjs-testkit",

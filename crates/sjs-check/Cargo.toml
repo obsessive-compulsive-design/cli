@@ -7,6 +7,7 @@ publish.workspace = true
 description = "Control flow, narrowing, exhaustiveness and checks."
 
 [dependencies]
+sjs-bind = { path = "../sjs-bind" }
 sjs-diag = { path = "../sjs-diag" }
 sjs-syntax = { path = "../sjs-syntax" }
 

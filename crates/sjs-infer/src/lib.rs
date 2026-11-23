@@ -50,6 +50,7 @@ mod generics;
 mod iteration;
 mod members;
 mod mutation;
+mod narrowing;
 mod operators;
 pub mod platform;
 mod primitives;

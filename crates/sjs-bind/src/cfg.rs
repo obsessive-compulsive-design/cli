@@ -7,7 +7,7 @@
 //! is left, so that what follows each way is told apart.
 
 use sjs_diag::{SourceFile, Span};
-use sjs_syntax::{Element, NodeKind, NodeRef, Punct, TokenKind};
+use sjs_syntax::{Element, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
@@ -47,7 +47,7 @@ pub struct Cfg {
     pub(crate) statements: BTreeMap<(usize, usize), Vec<usize>>,
     /// Each `case` block that is not the last of its `switch`: where its label is,
     /// and the nodes control runs off its end from.
-    pub(crate) falls: Vec<(Span, Vec<usize>)>,
+    pub falls: Vec<(Span, Vec<usize>)>,
 }
 
 /// The entry of every graph.
@@ -129,7 +129,8 @@ fn span_of(element: &Element<'_>) -> Span {
 
 /// Whether a node is a function or a class: what is inside is no part of the flow
 /// around it.
-pub(crate) fn is_scope(node: NodeRef<'_>) -> bool {
+#[must_use]
+pub fn is_scope(node: NodeRef<'_>) -> bool {
     let is_method = || nodes_of(node).any(|part| part.kind() == NodeKind::Params);
     match node.kind() {
         NodeKind::FunctionDecl
@@ -544,18 +545,24 @@ impl<'t> Builder<'_, 't> {
                     let mut entered = Vec::new();
                     for label in nodes_of(*clause).filter(|part| part.kind() == NodeKind::CaseLabel)
                     {
-                        let value = label
-                            .children()
-                            .nth(1)
-                            .filter(|value| punct_of(Some(value)) != Some(Punct::Colon));
-                        match value {
-                            Some(value) => {
-                                let left = self.value(value, tested);
-                                let test = self.branch(left, label.span());
+                        // `case`, the value, `:`: a `default` has no value. A
+                        // value is a literal, with its sign.
+                        let written = label.tokens();
+                        let value = written.get(1..written.len().saturating_sub(1));
+                        let value = value.unwrap_or_default();
+                        match (value.first(), value.last()) {
+                            (Some(first), Some(last)) => {
+                                let span = Span::new(
+                                    first.span.start,
+                                    last.span.end,
+                                    first.span.byte_start,
+                                    last.span.byte_end,
+                                );
+                                let test = self.node(self.text(&span), span, tested);
                                 entered.push((test, "case"));
                                 tested = vec![(test, "")];
                             }
-                            None => default = Some(at),
+                            _ => default = Some(at),
                         }
                     }
                     entries.push(entered);
@@ -733,7 +740,8 @@ impl Cfg {
 
     /// Whether the statement or block at `range` is entered from a node of
     /// `reached`; `None` when nothing was built there.
-    pub(crate) fn entered(&self, range: (usize, usize), reached: &[bool]) -> Option<bool> {
+    #[must_use]
+    pub fn entered(&self, range: (usize, usize), reached: &[bool]) -> Option<bool> {
         let from = self.statements.get(&range)?;
         Some(from.iter().any(|from| reached[*from]))
     }
@@ -789,4 +797,59 @@ impl Cfg {
         out.push_str("}\n");
         out
     }
+}
+
+/// A node and every node inside it that runs when it does: not the functions and
+/// classes written in it.
+#[must_use]
+pub fn running(node: NodeRef<'_>) -> Vec<NodeRef<'_>> {
+    let mut found = Vec::new();
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        pending.extend(nodes_of(node).filter(|inner| !is_scope(*inner)));
+        found.push(node);
+    }
+    found
+}
+
+/// The body of a function, when a node is one: the block of a function, a method,
+/// an accessor or a `static` block, what an arrow gives, the statements of a module.
+#[must_use]
+pub fn body_of(node: NodeRef<'_>) -> Option<Element<'_>> {
+    let block = || {
+        nodes_of(node)
+            .filter(|part| part.kind() == NodeKind::Block)
+            .last()
+    };
+    match node.kind() {
+        NodeKind::Module => Some(Element::Node(node)),
+        NodeKind::ArrowFunction => node.children().last(),
+        NodeKind::FunctionDecl
+        | NodeKind::FunctionExpr
+        | NodeKind::ClassMethod
+        | NodeKind::ClassAccessor
+        | NodeKind::StaticBlock
+        | NodeKind::Property => block().map(Element::Node),
+        _ => None,
+    }
+}
+
+/// A node and every node inside it, as the text has them.
+fn every(node: NodeRef<'_>) -> Vec<NodeRef<'_>> {
+    let mut found = Vec::new();
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        let inner: Vec<NodeRef<'_>> = nodes_of(node).collect();
+        pending.extend(inner.into_iter().rev());
+        found.push(node);
+    }
+    found
+}
+
+/// The graph of every function of a file as the text has them, the module's own
+/// statements first.
+#[must_use]
+pub fn graphs(source: &SourceFile, tree: &SyntaxTree) -> Vec<Cfg> {
+    let bodies = every(tree.root()).into_iter().filter_map(body_of);
+    bodies.map(|body| Cfg::of_body(source, body)).collect()
 }

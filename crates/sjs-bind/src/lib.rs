@@ -14,9 +14,11 @@
 //! [`bind`] judges every name a file does not declare (E204, E133, E138). US-069 has
 //! [`bind`] judge every `this`: E126 where there is none, E000 before `super()`. US-070
 //! adds [`Module::impure`], where a module first does something when evaluated, and
-//! [`ModuleGraph::evaluation_order`].
+//! [`ModuleGraph::evaluation_order`]. US-110 adds [`Cfg`], the control-flow graph of a
+//! function, which the inference narrows along (US-111) and `sjs-check` judges by.
 
 pub mod ambient;
+mod cfg;
 mod cycles;
 mod graph;
 mod host;
@@ -27,6 +29,7 @@ mod receiver;
 mod scopes;
 mod unreachable;
 
+pub use cfg::{body_of, graphs, is_scope, running, Cfg, Edge, Node, ENTRY, EXIT, RAISE};
 pub use graph::{Content, Import, LoadError, Module, ModuleGraph};
 pub use host::{Disk, Host};
 pub use json::is_json;

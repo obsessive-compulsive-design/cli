@@ -8,11 +8,9 @@
 //! - E000: a `this` a derived constructor reaches on some path that calls no
 //!   `super()`, where the text has one before it (the binder judges the text).
 
-mod cfg;
+pub use sjs_bind::{graphs, Cfg, Edge, Node, ENTRY, EXIT, RAISE};
 
-pub use cfg::{Cfg, Edge, Node, ENTRY, EXIT, RAISE};
-
-use cfg::is_scope;
+use sjs_bind::{body_of, running};
 use sjs_diag::{Code, Diagnostic, SourceFile, Span};
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
 
@@ -50,47 +48,6 @@ fn within(node: NodeRef<'_>) -> Vec<NodeRef<'_>> {
         found.push(node);
     }
     found
-}
-
-/// A node and every node inside it that runs when it does: not the functions and
-/// classes written in it.
-fn running(node: NodeRef<'_>) -> Vec<NodeRef<'_>> {
-    let mut found = Vec::new();
-    let mut pending = vec![node];
-    while let Some(node) = pending.pop() {
-        pending.extend(nodes(node).filter(|inner| !is_scope(*inner)));
-        found.push(node);
-    }
-    found
-}
-
-/// The body of a function, when a node is one: the block of a function, a method,
-/// an accessor or a `static` block, what an arrow gives, the statements of a module.
-fn body_of(node: NodeRef<'_>) -> Option<Element<'_>> {
-    let block = || {
-        nodes(node)
-            .filter(|part| part.kind() == NodeKind::Block)
-            .last()
-    };
-    match node.kind() {
-        NodeKind::Module => Some(Element::Node(node)),
-        NodeKind::ArrowFunction => node.children().last(),
-        NodeKind::FunctionDecl
-        | NodeKind::FunctionExpr
-        | NodeKind::ClassMethod
-        | NodeKind::ClassAccessor
-        | NodeKind::StaticBlock
-        | NodeKind::Property => block().map(Element::Node),
-        _ => None,
-    }
-}
-
-/// The graph of every function of a file as the text has them, the module's own
-/// statements first.
-#[must_use]
-pub fn graphs(source: &SourceFile, tree: &SyntaxTree) -> Vec<Cfg> {
-    let bodies = within(tree.root()).into_iter().filter_map(body_of);
-    bodies.map(|body| Cfg::of_body(source, body)).collect()
 }
 
 /// The first word of a class member, when it begins with one.

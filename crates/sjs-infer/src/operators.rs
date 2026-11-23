@@ -49,6 +49,39 @@ fn is_place(element: &Element<'_>) -> bool {
 }
 
 impl Typer<'_> {
+    /// What `typeof` may give of a member of a union.
+    pub(crate) fn typeof_names(&self, member: TypeId) -> &'static [&'static str] {
+        match self.types.get(member) {
+            Type::Number | Type::Int32 | Type::Literal(Literal::Number(_)) => &["number"],
+            Type::BigInt | Type::Literal(Literal::BigInt(_)) => &["bigint"],
+            Type::String | Type::Literal(Literal::String(_)) => &["string"],
+            Type::Boolean | Type::Literal(Literal::Boolean(_)) => &["boolean"],
+            Type::Undefined => &["undefined"],
+            Type::Function(_) => &["function"],
+            Type::Unknown | Type::Var(_) | Type::Never => &TYPEOF,
+            _ => &["object"],
+        }
+    }
+
+    /// The literal of the negated value, of a number or bigint literal.
+    pub(crate) fn opposite(&mut self, ty: TypeId) -> Option<TypeId> {
+        match self.types.get(ty).clone() {
+            Type::Literal(Literal::Number(number)) => Some(
+                self.types
+                    .literal(Literal::Number(Number::new(-number.value()))),
+            ),
+            Type::Literal(Literal::BigInt(integer)) => {
+                let decimal = integer.decimal();
+                let opposite = decimal
+                    .strip_prefix('-')
+                    .map_or(format!("-{decimal}"), str::to_owned);
+                Integer::parse(&opposite)
+                    .map(|integer| self.types.literal(Literal::BigInt(integer)))
+            }
+            _ => None,
+        }
+    }
+
     fn kind(&mut self, id: TypeId) -> Kind {
         match self.widened(id) {
             TypeId::INT32 => Kind::Int32,
@@ -69,7 +102,7 @@ impl Typer<'_> {
     }
 
     /// Whether two members of unions share a value.
-    fn members_overlap(&self, a: TypeId, b: TypeId) -> bool {
+    pub(crate) fn members_overlap(&self, a: TypeId, b: TypeId) -> bool {
         // What a member is as a primitive: a literal its primitive, `int32` itself.
         let primitive = |id: TypeId| match self.types.get(id) {
             Type::Literal(literal) => Some(literal.primitive()),
@@ -140,19 +173,7 @@ impl Typer<'_> {
                 let members = ty.map_or(vec![TypeId::UNKNOWN], |ty| self.members_of(ty));
                 let mut names: Vec<&str> = Vec::new();
                 for member in members {
-                    let given: &[&str] = match self.types.get(member) {
-                        Type::Number | Type::Int32 | Type::Literal(Literal::Number(_)) => {
-                            &["number"]
-                        }
-                        Type::BigInt | Type::Literal(Literal::BigInt(_)) => &["bigint"],
-                        Type::String | Type::Literal(Literal::String(_)) => &["string"],
-                        Type::Boolean | Type::Literal(Literal::Boolean(_)) => &["boolean"],
-                        Type::Undefined => &["undefined"],
-                        Type::Function(_) => &["function"],
-                        Type::Unknown | Type::Var(_) | Type::Never => &TYPEOF,
-                        _ => &["object"],
-                    };
-                    names.extend(given);
+                    names.extend(self.typeof_names(member));
                 }
                 let literals: Vec<TypeId> = names
                     .into_iter()
@@ -189,19 +210,8 @@ impl Typer<'_> {
             TokenKind::Punct(sign @ (Punct::Minus | Punct::Plus)) => {
                 let ty = ty?;
                 let negates = sign == Punct::Minus;
-                match self.types.get(ty).clone() {
-                    Type::Literal(Literal::Number(number)) if negates => Some(
-                        self.types
-                            .literal(Literal::Number(Number::new(-number.value()))),
-                    ),
-                    Type::Literal(Literal::BigInt(integer)) if negates => {
-                        let decimal = integer.decimal();
-                        let opposite = decimal
-                            .strip_prefix('-')
-                            .map_or(format!("-{decimal}"), str::to_owned);
-                        Integer::parse(&opposite)
-                            .map(|integer| self.types.literal(Literal::BigInt(integer)))
-                    }
+                match self.opposite(ty).filter(|_| negates) {
+                    Some(opposite) => Some(opposite),
                     _ => match self.kind(ty) {
                         // The negation of the least `int32` is no `int32`.
                         Kind::Number | Kind::Int32 => Some(TypeId::NUMBER),

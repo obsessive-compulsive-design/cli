@@ -607,6 +607,8 @@ fn rounds(
     // Enough rounds for a chain of declarations each known from the next.
     let last = bindings.declarations.len().max(ROUNDS);
     let mut known = inputs.facts.clone();
+    // What is mutated says which narrowings a call undoes.
+    known.mutated.clone_from(inputs.mutated);
     // A function that calls itself returns, to begin with, nothing at all.
     let names = inputs
         .functions
@@ -618,6 +620,7 @@ fn rounds(
     let mut dropped = BTreeSet::new();
     for round in 0..=last {
         let mut next = inputs.facts.clone();
+        next.mutated.clone_from(inputs.mutated);
         // The tables of the classes go on from the round before: the classes of the
         // file are worked out anew below, and no other changes, so that a table is
         // copied only when a class does change.

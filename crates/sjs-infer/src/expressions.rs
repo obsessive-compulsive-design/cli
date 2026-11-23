@@ -1,6 +1,7 @@
 //! The types of literal and primitive expressions (SPEC.md §3.1, §4.1).
 
 use crate::functions::{Passed, Site};
+use crate::narrowing::Narrowing;
 use crate::primitives::is_primitive_static;
 use crate::promises::consumes;
 use crate::typed_arrays::ambient_class;
@@ -164,6 +165,8 @@ pub struct Typer<'a> {
     /// Where the parameters that are typed by what their arrow is expected to be
     /// take their types from, by declaration: each place, with a note.
     pub(crate) origins: BTreeMap<usize, Vec<(Span, String)>>,
+    /// What the conditions of the file tell of its names, and where.
+    pub(crate) narrowing: Narrowing<'a>,
     diagnostics: Diagnostics,
 }
 
@@ -238,6 +241,7 @@ impl<'a> Typer<'a> {
             .filter(|clause| clause.kind() == NodeKind::DefaultImport);
         let starts: BTreeSet<usize> = defaults.map(|clause| clause.span().byte_start).collect();
         let declarations = bindings.declarations.iter().enumerate();
+        let narrowing = Narrowing::new(source, tree, bindings, &references);
         Self {
             source,
             bindings,
@@ -255,6 +259,7 @@ impl<'a> Typer<'a> {
             consumed,
             arrows: BTreeMap::new(),
             origins: BTreeMap::new(),
+            narrowing,
             diagnostics: Diagnostics::new(),
         }
     }
@@ -350,7 +355,8 @@ impl<'a> Typer<'a> {
                     TokenKind::Keyword(Keyword::Super) => self.base_of(token.parent()),
                     TokenKind::Ident => {
                         let text = self.source.slice(&span).unwrap_or_default();
-                        self.name(span.byte_start, text)
+                        let declared = self.name(span.byte_start, text)?;
+                        Some(self.narrowed(&expression, declared))
                     }
                     _ => None,
                 }
