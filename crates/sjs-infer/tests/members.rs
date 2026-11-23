@@ -97,17 +97,17 @@ fn checked(body: &str) -> (String, Vec<String>, Vec<String>) {
     };
     facts.fields.insert(
         ClassId(0),
-        fields(&[("x", TypeId::NUMBER), ("y", TypeId::NUMBER)]),
+        fields(&[("x", TypeId::NUMBER), ("y", TypeId::NUMBER)]).into(),
     );
     facts
         .fields
-        .insert(ClassId(1), fields(&[("z", TypeId::NUMBER)]));
+        .insert(ClassId(1), fields(&[("z", TypeId::NUMBER)]).into());
     facts
         .methods
-        .insert(ClassId(0), BTreeSet::from(["norm".to_owned()]));
+        .insert(ClassId(0), BTreeSet::from(["norm".to_owned()]).into());
     facts
         .methods
-        .insert(ClassId(1), BTreeSet::from(["flat".to_owned()]));
+        .insert(ClassId(1), BTreeSet::from(["flat".to_owned()]).into());
     facts.superclass.insert(ClassId(1), ClassId(0));
     facts.class_names.insert(ClassId(0), "Point".to_owned());
     let facts = infer_bindings(&source, &tree, &bindings, &facts, &mut types);

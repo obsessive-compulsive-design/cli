@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://strict-js.example/schema/types.schema.json",
+  "title": "types.json",
+  "description": "The inferred type of every exported binding of a program (SPEC.md §7). Modules are in the order of their paths and exports in the order of their names, so the document depends on the program alone. It is written before anything is checked, and holds a module the grammar rejects too: its exports are then unknown.",
+  "type": "object",
+  "required": ["version", "modules"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "description": "The version of this form.",
+      "const": 1
+    },
+    "modules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/module" }
+    }
+  },
+  "$defs": {
+    "module": {
+      "type": "object",
+      "required": ["path", "syntaxError", "exports"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "The module, as diagnostics name it: relative to the project, with `/`.",
+          "type": "string"
+        },
+        "syntaxError": {
+          "description": "Whether the grammar rejects the module (E000, E001, E002): every export is then unknown and not inferred.",
+          "type": "boolean"
+        },
+        "exports": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/export" }
+        }
+      }
+    },
+    "export": {
+      "type": "object",
+      "required": ["name", "inferred", "type", "structure"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "The name the binding is exported by.",
+          "type": "string"
+        },
+        "inferred": {
+          "description": "Whether inference gave the binding a type. When it did not, `type` says `unknown` and `structure` is of kind `unknown`.",
+          "type": "boolean"
+        },
+        "type": {
+          "description": "The type in the notation of SPEC.md §13.7: `greet(name: string): string` for a function, `name: type` for anything else.",
+          "type": "string"
+        },
+        "structure": { "$ref": "#/$defs/type" }
+      }
+    },
+    "type": {
+      "description": "A type as a tree. `kind` says which members it has.",
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "number",
+            "int32",
+            "bigint",
+            "string",
+            "boolean",
+            "undefined",
+            "null",
+            "unknown",
+            "never",
+            "literal",
+            "object",
+            "dictionary",
+            "array",
+            "tuple",
+            "function",
+            "class",
+            "variable",
+            "promise",
+            "iterator",
+            "generator",
+            "collection",
+            "union"
+          ]
+        },
+        "of": {
+          "description": "literal: the primitive it is a value of.",
+          "enum": ["string", "number", "bigint", "boolean"]
+        },
+        "value": {
+          "description": "literal: the value, as text. dictionary, promise: the type held.",
+          "anyOf": [{ "type": "string" }, { "$ref": "#/$defs/type" }]
+        },
+        "properties": {
+          "description": "object: its keys, those that retain a literal first, each group by key.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "literal", "type"],
+            "additionalProperties": false,
+            "properties": {
+              "key": { "type": "string" },
+              "literal": {
+                "description": "Whether the key retains the literal type of its value.",
+                "type": "boolean"
+              },
+              "type": { "$ref": "#/$defs/type" }
+            }
+          }
+        },
+        "readonly": {
+          "description": "array: whether the program never mutates it.",
+          "type": "boolean"
+        },
+        "element": { "$ref": "#/$defs/type" },
+        "elements": {
+          "description": "tuple: the type at each place.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/type" }
+        },
+        "typeParameters": {
+          "description": "function: the names of the type variables it is generic in.",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "parameters": {
+          "description": "function: its parameters, in order.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["optional", "type"],
+            "additionalProperties": false,
+            "properties": {
+              "optional": { "type": "boolean" },
+              "type": { "$ref": "#/$defs/type" }
+            }
+          }
+        },
+        "rest": {
+          "description": "function: the type of each rest argument, or null.",
+          "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/type" }]
+        },
+        "returns": { "$ref": "#/$defs/type" },
+        "name": {
+          "description": "class, variable, collection (`Map`, `Set`, `WeakMap`): its name.",
+          "type": "string"
+        },
+        "arguments": {
+          "description": "class, collection: its type arguments.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/type" }
+        },
+        "async": {
+          "description": "iterator, generator: whether it is an async one.",
+          "type": "boolean"
+        },
+        "item": { "$ref": "#/$defs/type" },
+        "yields": { "$ref": "#/$defs/type" },
+        "members": {
+          "description": "union: its members, in the canonical order of types.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/type" }
+        }
+      }
+    }
+  }
+}

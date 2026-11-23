@@ -12,7 +12,7 @@ use sjs_diag::Code;
 use sjs_syntax::{Element, NodeKind};
 use sjs_types::{Function, Param, Type, TypeId, Types};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// What a table of the data files is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -405,18 +405,18 @@ pub(crate) fn add_platform(facts: &mut Facts, types: &mut Types) {
             facts.globals.insert(table.name.clone(), instance);
         }
         facts.class_names.insert(class, table.name.clone());
-        facts.fields.insert(class, fields);
-        facts.methods.insert(class, methods);
-        facts.classes.insert(class, own);
+        facts.fields.insert(class, Arc::new(fields));
+        facts.methods.insert(class, Arc::new(methods));
+        facts.classes.insert(class, Arc::new(own));
         if !namespace {
             // Its static members are those listed, like those of its instances.
             of_class.others = Others::Removed;
             of_class.base_arguments = Some(Vec::new());
             let name = format!("typeof {}", table.name);
             facts.class_names.insert(statics, name);
-            facts.fields.insert(statics, static_fields);
-            facts.methods.insert(statics, static_methods);
-            facts.classes.insert(statics, of_class);
+            facts.fields.insert(statics, Arc::new(static_fields));
+            facts.methods.insert(statics, Arc::new(static_methods));
+            facts.classes.insert(statics, Arc::new(of_class));
         }
     }
 }

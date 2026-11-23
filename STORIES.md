@@ -3715,7 +3715,40 @@ string; `performance.now()` is `number`; `navigator.hardwareConcurrency` is `int
 `event.data` is `unknown`.
 
 #### US-100 Determinism and `types.json`
-§3.2, §7, §11 · After: US-099 · Size: S · M1
+§3.2, §7, §11 · After: US-099 · Size: S · M1 · **Status: complete** (2026-11-23)
+
+> Delivered in `sjs-diag` (`json.rs`: `Json`, written and read in-house;
+> `types_json.rs`: `TypesDocument` with `to_json` and `from_json`), `sjs-infer`
+> (`document.rs`: `types_document`, `types_json`, `KINDS`) and
+> `schema/types.schema.json`. **Decisions:** (1) the document is `{ "version": 1,
+> "modules": [{ "path", "syntaxError", "exports": [{ "name", "inferred", "type",
+> "structure" }] }] }`: `type` is the §13.7 notation (`greet(name: string): string`,
+> a function with the names of its parameters) and `structure` the same type as a
+> tree whose `kind` is one of 22 (`KINDS`, which the schema lists in the same order);
+> (2) modules are in the order of their paths and exports in the order of their
+> names, and nothing else of the document depends on the order modules are found
+> in: 100 shuffles of the roots of a 50-module program give the same bytes; (3) an
+> export inference gave no type is `unknown` with `"inferred": false`, told apart
+> from one that is `unknown`; (4) a module the grammar rejects is listed with
+> `"syntaxError": true`, its exports named from its declarations (a guess, for a
+> tree that was recovered) and every one `unknown` and not inferred; a JSON module
+> is no module of exports; (5) `Json` holds whole numbers only and is written one
+> way (two spaces, a member a line, keys in the order given), so writing what was
+> read gives the same text; the reader refuses anything else with the byte it
+> stopped at; (6) there is no validator: tests hold the schema and the writer
+> together (the schema is read by `Json`, its `required` lists are the members
+> written, its kinds are `KINDS`, and every member a tree is written with is one it
+> describes). **Also changed, for speed:** the tables of the classes in `Facts` are
+> shared until written (`Shared`, and each class's entry an `Arc`), the ambient
+> classes are told once per program, and the class pass writes back only what
+> changed; inferring a 50-module program went from about 0.9 s to about 0.09 s in a
+> debug build, which the shuffle test needs. **Limits:** `sjs lint` and `sjs build`
+> do not exist yet (US-137 on), so nothing writes `dist/types.json`: `types_json`
+> is the function they are to call, before the checker; literal numbers are
+> written as text in a tree. **Older tests changed:** those that build class tables
+> by hand wrap them (`.into()`). Verified: fmt, both clippy passes, audit, tests,
+> doc tests, 100% line and region coverage, `cargo mutants --in-diff` 129 caught,
+> 0 missed, 16 unviable, no timeout.
 
 **Done when**
 - Shuffling module discovery order 100 times on a 50-module program yields byte-identical

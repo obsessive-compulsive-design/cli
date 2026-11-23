@@ -7,7 +7,7 @@ use crate::expressions::{ClassFacts, Facts};
 use crate::typed_arrays::{ambient_class, taking_any};
 use sjs_types::{ClassId, Type, TypeId, Types};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// The classes this module tells of, after the typed arrays and the buffers, in
 /// the order of their ids; the constructors of `Intl` come after them.
@@ -224,8 +224,8 @@ pub(crate) fn add_named_classes(facts: &mut Facts, types: &mut Types) {
             }
         }
         facts.class_names.insert(class, name);
-        facts.fields.insert(class, told.fields);
-        facts.methods.insert(class, told.methods);
-        facts.classes.insert(class, told.known);
+        facts.fields.insert(class, Arc::new(told.fields));
+        facts.methods.insert(class, Arc::new(told.methods));
+        facts.classes.insert(class, Arc::new(told.known));
     }
 }

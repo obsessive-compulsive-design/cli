@@ -163,6 +163,7 @@ fn share_classes(from: &Facts, to: &mut Facts) {
     to.superclass.clone_from(&from.superclass);
     to.class_names.clone_from(&from.class_names);
     to.classes.clone_from(&from.classes);
+    to.globals.clone_from(&from.globals);
 }
 
 /// Infers every module of the program, each after the modules it imports

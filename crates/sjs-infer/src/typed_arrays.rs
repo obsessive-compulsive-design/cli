@@ -9,7 +9,7 @@ use crate::classes::UNKNOWN_BASE;
 use crate::expressions::{ClassFacts, Facts};
 use crate::platform::{add_platform, platform_classes};
 use sjs_types::{ClassId, Function, Param, Type, TypeId, Types};
-use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 /// The first class id of the ambient library: the ids from here on are its own.
 pub(crate) const AMBIENT_CLASSES: u32 = 0xFFFF_FE00;
@@ -140,14 +140,14 @@ impl Shape<'_> {
     fn field(&mut self, name: &str, ty: TypeId) {
         self.known.declared.insert(name.to_owned());
         let fields = self.facts.fields.entry(self.class).or_default();
-        fields.insert(name.to_owned(), ty);
+        Arc::make_mut(fields).insert(name.to_owned(), ty);
     }
 
     fn method(&mut self, name: &str, signature: TypeId) {
         self.known.declared.insert(name.to_owned());
         self.known.signatures.insert(name.to_owned(), signature);
         let methods = self.facts.methods.entry(self.class).or_default();
-        methods.insert(name.to_owned());
+        Arc::make_mut(methods).insert(name.to_owned());
     }
 
     fn plain(&mut self, name: &str, returns: TypeId) {
@@ -167,8 +167,8 @@ pub(crate) fn add_ambient_classes(facts: &mut Facts, types: &mut Types) {
         let class = ambient_class(name).unwrap_or(ClassId(AMBIENT_CLASSES));
         let instance = types.intern(Type::Class(class, Vec::new()));
         facts.class_names.insert(class, name.to_owned());
-        facts.fields.insert(class, BTreeMap::new());
-        facts.methods.insert(class, BTreeSet::new());
+        facts.fields.insert(class, Arc::default());
+        facts.methods.insert(class, Arc::default());
         let made = taking_any(types, instance);
         let known = ClassFacts {
             constructor: Some(made),
@@ -216,7 +216,7 @@ pub(crate) fn add_ambient_classes(facts: &mut Facts, types: &mut Types) {
             }
         }
         let Shape { known, .. } = shape;
-        facts.classes.insert(class, known);
+        facts.classes.insert(class, Arc::new(known));
     }
 }
 

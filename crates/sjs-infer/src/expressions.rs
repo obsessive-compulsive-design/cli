@@ -9,6 +9,33 @@ use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
 use sjs_types::{ClassId, Integer, Literal, Number, Printer, Property, Type, TypeId, Types, VarId};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+/// A table that is shared until it is written: a copy of it costs nothing, and the
+/// first change to a copy makes that copy its own. The tables of the classes are
+/// copied for every round of inference and changed by few.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Shared<T>(Arc<T>);
+
+impl<T> Clone for Shared<T> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<T> std::ops::Deref for Shared<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T: Clone> std::ops::DerefMut for Shared<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        Arc::make_mut(&mut self.0)
+    }
+}
 
 /// What a class is taken to have beyond the members it is known to declare.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -58,14 +85,14 @@ pub struct Facts {
     /// The type of a declaration, by its index in [`Bindings::declarations`].
     pub declarations: BTreeMap<usize, TypeId>,
     /// What the `toString()` of a class returns, for the classes that have one.
-    pub to_string: BTreeMap<ClassId, TypeId>,
+    pub to_string: Shared<BTreeMap<ClassId, TypeId>>,
     /// The types of the public fields of a class, by name.
-    pub fields: BTreeMap<ClassId, BTreeMap<String, TypeId>>,
+    pub fields: Shared<BTreeMap<ClassId, Arc<BTreeMap<String, TypeId>>>>,
     /// The names of the methods and accessors' functions of a class: members that are
     /// called, not read.
-    pub methods: BTreeMap<ClassId, BTreeSet<String>>,
+    pub methods: Shared<BTreeMap<ClassId, Arc<BTreeSet<String>>>>,
     /// The class a class extends.
-    pub superclass: BTreeMap<ClassId, ClassId>,
+    pub superclass: Shared<BTreeMap<ClassId, ClassId>>,
     /// The declarations whose value the program mutates. Given to
     /// [`crate::infer_bindings`], the ones mutated from other files; returned by it,
     /// all of them.
@@ -99,15 +126,15 @@ pub struct Facts {
     /// The parameters that are what the functions they are passed to take.
     pub pinned: BTreeSet<usize>,
     /// The names of the classes, for findings.
-    pub class_names: BTreeMap<ClassId, String>,
+    pub class_names: Shared<BTreeMap<ClassId, String>>,
     /// The class each declaration names: a class, or an import of one. The class
     /// after it is its static side, which holds its static members.
     pub class_of: BTreeMap<usize, ClassId>,
     /// What is known of each class beyond its fields and the names of its methods.
-    pub classes: BTreeMap<ClassId, ClassFacts>,
+    pub classes: Shared<BTreeMap<ClassId, Arc<ClassFacts>>>,
     /// The types of the globals of the ambient library that are no class: its
     /// functions and its namespaces, by name.
-    pub globals: BTreeMap<String, TypeId>,
+    pub globals: Shared<BTreeMap<String, TypeId>>,
 }
 
 /// Types the expressions of one file.
@@ -656,7 +683,7 @@ impl<'a> Typer<'a> {
                 Type::Object(properties) => properties.clone(),
                 Type::Class(class, arguments) => {
                     let (class, arguments) = (*class, arguments.clone());
-                    let fields = self.facts.fields.get(&class)?.clone();
+                    let fields = self.facts.fields.get(&class)?.as_ref().clone();
                     let params = self.facts.classes.get(&class);
                     let params = params.map(|shape| shape.params.clone());
                     let params = params.unwrap_or_default().into_iter();

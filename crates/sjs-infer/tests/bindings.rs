@@ -31,7 +31,7 @@ fn inferred_with(text: &str, names: &[&str], known: Known<'_>) -> Vec<String> {
         .into_iter()
         .map(|(k, ty)| (k.to_owned(), ty))
         .collect();
-    facts.fields.insert(ClassId(0), fields);
+    facts.fields.insert(ClassId(0), fields.into());
     let before = facts.declarations.clone();
     let facts = infer_bindings(&source, &tree, &bindings, &facts, &mut types);
     for (declaration, ty) in before {

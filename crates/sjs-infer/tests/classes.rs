@@ -71,7 +71,7 @@ fn shown(
         }
     }
     let mut members = Vec::new();
-    for (class, fields) in &facts.fields {
+    for (class, fields) in facts.fields.iter() {
         let mut parts: Vec<String> = fields
             .iter()
             .map(|(key, ty)| format!("{key}: {}", printer.print(*ty)))
@@ -107,8 +107,9 @@ fn checked_knowing(text: &str, point: bool) -> Checked {
     let mut types = Types::new();
     let mut facts = Facts::default();
     if point {
-        let fields = [("x".to_owned(), TypeId::NUMBER)].into_iter().collect();
-        facts.fields.insert(ClassId(0), fields);
+        let fields: std::collections::BTreeMap<String, TypeId> =
+            [("x".to_owned(), TypeId::NUMBER)].into_iter().collect();
+        facts.fields.insert(ClassId(0), fields.into());
         facts.class_names.insert(ClassId(0), "Point".to_owned());
         let p = bindings.declarations.iter().position(|d| d.name == "p");
         let instance = types.intern(Type::Class(ClassId(0), Vec::new()));

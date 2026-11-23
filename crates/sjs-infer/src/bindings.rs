@@ -618,6 +618,14 @@ fn rounds(
     let mut dropped = BTreeSet::new();
     for round in 0..=last {
         let mut next = inputs.facts.clone();
+        // The tables of the classes go on from the round before: the classes of the
+        // file are worked out anew below, and no other changes, so that a table is
+        // copied only when a class does change.
+        next.fields.clone_from(&known.fields);
+        next.methods.clone_from(&known.methods);
+        next.classes.clone_from(&known.classes);
+        next.class_names.clone_from(&known.class_names);
+        next.superclass.clone_from(&known.superclass);
         let mut partial = BTreeSet::new();
         let mut judge = Typer::new(inputs.source, inputs.tree, bindings, &known, types);
         for &at in inputs.followed.iter().filter(|at| !unknown.contains(at)) {
@@ -755,7 +763,10 @@ pub fn infer_bindings(
     // The classes of the file: each a class of its own, with its static side after
     // it, past every class `facts` knows already.
     let mut facts = facts.clone();
-    add_ambient_classes(&mut facts, types);
+    // The classes of the ambient library, unless a module inferred before told them.
+    if !facts.classes.contains_key(&ClassId(AMBIENT_CLASSES)) {
+        add_ambient_classes(&mut facts, types);
+    }
     let known = facts.fields.keys();
     let known = known.chain(facts.methods.keys());
     let known = known.chain(facts.to_string.keys());

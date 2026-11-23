@@ -18,6 +18,7 @@ use sjs_diag::{Code, Span};
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct};
 use sjs_types::{Assignability, Builtin, ClassId, Literal, Printer, Property, Type, TypeId, VarId};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// What a member of a receiver's type holds at a key.
 enum Held {
@@ -240,7 +241,7 @@ impl Typer<'_> {
     /// What is known of the class a type is an instance of.
     fn shape_of(&self, instance: TypeId) -> Option<&ClassFacts> {
         match self.types.get(instance) {
-            Type::Class(class, _) => self.facts.classes.get(class),
+            Type::Class(class, _) => self.facts.classes.get(class).map(Arc::as_ref),
             _ => None,
         }
     }

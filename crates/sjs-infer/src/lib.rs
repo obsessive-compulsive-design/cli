@@ -33,7 +33,9 @@
 //! `RegExp`, `Date`, the `Error` family and the constructors of `Intl` to those classes,
 //! with what a regex literal captures (E133 for their removed members and makings).
 //! US-099 types the portable platform globals of §6.2 from `ambient/platform/*.toml`
-//! ([`platform`]): what is passed to one is to be what it takes (E138).
+//! ([`platform`]): what is passed to one is to be what it takes (E138). US-100 writes
+//! `types.json` ([`types_document`]): the type of every export, the same whatever order
+//! the modules were found in.
 
 mod ambient;
 mod bindings;
@@ -41,6 +43,7 @@ mod builtins;
 mod classes;
 mod collections;
 mod context;
+mod document;
 mod expressions;
 mod functions;
 mod generics;
@@ -56,6 +59,7 @@ mod regex;
 mod typed_arrays;
 
 pub use bindings::infer_bindings;
-pub use expressions::{check_expressions, ClassFacts, Facts, Others, Typer};
+pub use document::{types_document, types_json, KINDS};
+pub use expressions::{check_expressions, ClassFacts, Facts, Others, Shared, Typer};
 pub use functions::{Passed, Site};
 pub use program::{infer_program, ModuleTypes};

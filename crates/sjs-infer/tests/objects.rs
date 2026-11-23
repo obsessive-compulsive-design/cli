@@ -37,7 +37,7 @@ fn checked(text: &str, known: Known<'_>) -> (String, Vec<String>) {
         .into_iter()
         .map(|(k, ty)| (k.to_owned(), ty))
         .collect();
-    facts.fields.insert(ClassId(0), fields);
+    facts.fields.insert(ClassId(0), fields.into());
     facts.class_names.insert(ClassId(0), "Point".to_owned());
     let facts = infer_bindings(&source, &tree, &bindings, &facts, &mut types);
     let found = check_expressions(&source, &tree, &bindings, &facts, &mut types)

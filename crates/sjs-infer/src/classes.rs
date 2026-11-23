@@ -22,6 +22,7 @@ use sjs_diag::{Code, SourceFile, Span};
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
 use sjs_types::{ClassId, Function, Type, TypeId, VarId};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 /// What a class extends when that is no class of the program: nothing is known of it.
 pub(crate) const UNKNOWN_BASE: ClassId = ClassId(u32::MAX - 1);
@@ -526,6 +527,10 @@ impl Typer<'_> {
         (known, unknown): (&Facts, &BTreeSet<usize>),
         (next, partial): (&mut Facts, &mut BTreeSet<usize>),
     ) {
+        // What is found of the classes is set beside what was known, and only what
+        // differs is written: the tables are shared until they are changed.
+        let mut tables = Facts::default();
+        let tables = &mut tables;
         for class in classes {
             let statics = statics_of(class.id);
             let sides = [
@@ -533,27 +538,52 @@ impl Typer<'_> {
                 (statics, format!("typeof {}", class.name)),
             ];
             for (side, name) in sides {
-                next.fields.insert(side, BTreeMap::new());
-                next.methods.insert(side, BTreeSet::new());
-                next.class_names.insert(side, name);
+                tables.fields.insert(side, Arc::default());
+                tables.methods.insert(side, Arc::default());
+                tables.class_names.insert(side, name);
                 let shape = ClassFacts {
                     base_arguments: Some(Vec::new()),
                     ..ClassFacts::default()
                 };
-                next.classes.insert(side, shape);
+                tables.classes.insert(side, Arc::new(shape));
             }
             let base = class.extends.then(|| {
                 let base = class.base.and_then(|base| known.class_of.get(&base));
                 base.copied().or(class.ambient).unwrap_or(UNKNOWN_BASE)
             });
             if let Some(base) = base {
-                next.superclass.insert(class.id, base);
-                next.superclass.insert(statics, statics_of(base));
+                tables.superclass.insert(class.id, base);
+                tables.superclass.insert(statics, statics_of(base));
             }
             for member in &class.members {
-                self.member(class, member, unknown, next, partial);
+                self.member(class, member, unknown, (next, tables), partial);
             }
-            self.constructor(class, base, known, next);
+            self.constructor(class, base, known, (next, tables));
+        }
+        for (class, fields) in tables.fields.iter() {
+            if next.fields.get(class) != Some(fields) {
+                next.fields.insert(*class, Arc::clone(fields));
+            }
+        }
+        for (class, methods) in tables.methods.iter() {
+            if next.methods.get(class) != Some(methods) {
+                next.methods.insert(*class, Arc::clone(methods));
+            }
+        }
+        for (class, shape) in tables.classes.iter() {
+            if next.classes.get(class) != Some(shape) {
+                next.classes.insert(*class, Arc::clone(shape));
+            }
+        }
+        for (class, name) in tables.class_names.iter() {
+            if next.class_names.get(class) != Some(name) {
+                next.class_names.insert(*class, name.clone());
+            }
+        }
+        for (class, base) in tables.superclass.iter() {
+            if next.superclass.get(class) != Some(base) {
+                next.superclass.insert(*class, *base);
+            }
         }
     }
 
@@ -563,11 +593,11 @@ impl Typer<'_> {
         class: &Class<'_>,
         member: &Member<'_>,
         unknown: &BTreeSet<usize>,
-        next: &mut Facts,
+        (next, tables): (&mut Facts, &mut Facts),
         partial: &mut BTreeSet<usize>,
     ) {
         let name = member.name.clone();
-        let shape = next.classes.entry(member.side).or_default();
+        let shape = Arc::make_mut(tables.classes.entry(member.side).or_default());
         shape.declared.insert(name.clone());
         match &member.what {
             What::Field(value) => {
@@ -592,8 +622,8 @@ impl Typer<'_> {
                 if !parts.is_empty() && !unknown.contains(&member.key) {
                     let ty = self.types.union(parts);
                     next.declarations.insert(member.key, ty);
-                    let fields = next.fields.entry(member.side).or_default();
-                    fields.insert(name, ty);
+                    let fields = tables.fields.entry(member.side).or_default();
+                    Arc::make_mut(fields).insert(name, ty);
                 }
             }
             What::Method(taken) => {
@@ -610,13 +640,14 @@ impl Typer<'_> {
                     };
                     given.extend(ty);
                 }
-                let shape = next.classes.entry(member.side).or_default();
+                let shape = Arc::make_mut(tables.classes.entry(member.side).or_default());
                 shape.resolves = (!given.is_empty()).then(|| self.types.union(given));
                 let signature = next.declarations.get(&member.key).copied();
                 shape
                     .signatures
                     .extend(signature.map(|signature| (name.clone(), signature)));
-                next.methods.entry(member.side).or_default().insert(name);
+                let methods = tables.methods.entry(member.side).or_default();
+                Arc::make_mut(methods).insert(name);
             }
             What::Getter => {
                 shape
@@ -670,7 +701,7 @@ impl Typer<'_> {
         class: &Class<'_>,
         base: Option<ClassId>,
         known: &Facts,
-        next: &mut Facts,
+        (next, tables): (&mut Facts, &mut Facts),
     ) {
         let nothing = Type::Function(Function {
             type_params: Vec::new(),
@@ -692,15 +723,15 @@ impl Typer<'_> {
             Some(base) => self.base_arguments(class, base, known),
             None => Some(Vec::new()),
         };
-        let shape = next.classes.entry(class.id).or_default();
+        let shape = Arc::make_mut(tables.classes.entry(class.id).or_default());
         shape.base_arguments.clone_from(&base_arguments);
         let Some(function) = function else {
             return;
         };
-        let fields = next.fields.get(&class.id);
+        let fields = tables.fields.get(&class.id);
         let mut held: Vec<TypeId> = fields
             .into_iter()
-            .flat_map(BTreeMap::values)
+            .flat_map(|fields| fields.values())
             .copied()
             .collect();
         held.extend(shape.getters.values().copied().flatten());

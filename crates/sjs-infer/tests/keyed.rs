@@ -70,7 +70,7 @@ fn shown(
         }
     }
     let mut members = Vec::new();
-    for (class, fields) in &facts.fields {
+    for (class, fields) in facts.fields.iter() {
         let mut parts: Vec<String> = fields
             .iter()
             .map(|(key, ty)| format!("{key}: {}", printer.print(*ty)))
