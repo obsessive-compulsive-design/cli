@@ -8,6 +8,7 @@
 
 use crate::expressions::{element_span_of, Typer};
 use crate::mutation::arguments;
+use crate::typed_arrays::{ambient_class, element_of, is_ambient};
 use sjs_diag::{Code, Span};
 use sjs_syntax::{Element, NodeKind, NodeRef};
 use sjs_types::{Literal, Type, TypeId};
@@ -136,7 +137,26 @@ impl Typer<'_> {
     pub(crate) fn constant(&self, node: NodeRef<'_>, children: &[Element<'_>]) -> Option<TypeId> {
         let text = self.source.slice(&node.span()).unwrap_or_default();
         let ambient = children.first().is_some_and(|name| self.is_global(name));
+        // How many bytes an element of a typed array takes.
+        let (global, member) = text.split_once('.').unwrap_or((text, ""));
+        let class = ambient_class(global).filter(|_| ambient);
+        if class.and_then(element_of).is_some() && member == "BYTES_PER_ELEMENT" {
+            return Some(TypeId::INT32);
+        }
         (ambient && CONSTANTS.contains(&text)).then_some(TypeId::NUMBER)
+    }
+
+    /// The type of a call of a static of a typed array or of `ArrayBuffer`, by the
+    /// text of what is called: `Uint8Array.from(…)` and the like give an instance.
+    pub(crate) fn typed_static(&mut self, text: &str) -> Option<TypeId> {
+        let (global, member) = text.split_once('.')?;
+        let class = ambient_class(global)?;
+        let makes = ["from", "of", "fromBase64", "fromHex"].contains(&member);
+        if element_of(class).is_some() && makes {
+            Some(self.types.intern(Type::Class(class, Vec::new())))
+        } else {
+            (text == "ArrayBuffer.isView").then_some(TypeId::BOOLEAN)
+        }
     }
 
     /// The call of a method of a string, a number or a bigint `callee` is the callee
@@ -250,7 +270,12 @@ impl Typer<'_> {
                 let value = passed.first().copied()?;
                 let ty = self.type_of(value)?;
                 let lost = self.members_of(ty).into_iter().find(|member| {
-                    matches!(self.types.get(*member), Type::Class(..) | Type::Function(_))
+                    match self.types.get(*member) {
+                        // A typed array and a buffer are cloned whole.
+                        Type::Class(class, _) => !is_ambient(*class),
+                        Type::Function(_) => true,
+                        _ => false,
+                    }
                 });
                 if let Some(lost) = lost {
                     let message = format!(

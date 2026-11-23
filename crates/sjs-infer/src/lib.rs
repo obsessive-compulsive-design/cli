@@ -28,11 +28,13 @@
 //! a `sort` without a comparator, E138 for a search for what an array cannot hold).
 //! US-096 types the built-ins of strings, numbers and bigints, `Math`, `JSON` and
 //! `structuredClone` (E133 for their removed members, E138 for a clone of a class
-//! instance).
+//! instance). US-097 types `Map`, `Set` and `WeakMap` and their methods, and the typed
+//! arrays, `ArrayBuffer` and `DataView` as classes of the ambient library.
 
 mod bindings;
 mod builtins;
 mod classes;
+mod collections;
 mod context;
 mod expressions;
 mod functions;
@@ -44,6 +46,7 @@ mod operators;
 mod primitives;
 mod program;
 mod promises;
+mod typed_arrays;
 
 pub use bindings::infer_bindings;
 pub use expressions::{check_expressions, ClassFacts, Facts, Typer};

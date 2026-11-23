@@ -3541,7 +3541,47 @@ element type (E138); `arr.at(-1)` is `T | undefined`; `Array.isArray` narrows (U
 `Number.isInteger(x)` does not narrow to `int32`.
 
 #### US-097 Built-ins: `Map`, `Set`, `WeakMap`, typed arrays
-§6.1 · After: US-087, US-093 · Size: M · M1
+§6.1 · After: US-087, US-093 · Size: M · M1 · **Status: complete** (2026-11-22)
+
+> Delivered in `sjs-infer` (`collections.rs`, `typed_arrays.rs`, with changes to
+> `bindings.rs`, `expressions.rs`, `members.rs`, `builtins.rs`, `primitives.rs`,
+> `iteration.rs`, `mutation.rs`). **Decisions:** (1) `new Map(entries)`,
+> `new Set(members)` and `new WeakMap(entries)` are typed by their one argument:
+> pairs written out (`[["a", 1]]`) key by key and value by value, any other
+> iterable by the pairs it gives; held by a binding, the collection also holds what
+> `set` and `add` put into it there; an empty `new WeakMap()` is typed by what is
+> put into it like the other two (E110 when nothing is); (2) keys and values are
+> held without their literals (`Map<string, int32>`), so a key of a literal union is
+> a key like any string; (3) `get` gives `V | undefined`, `size` an `int32`, `keys`,
+> `values` and `entries` iterators, `set` and `add` the collection, and the ES2025
+> set methods a `Set` (`union` and `symmetricDifference` of both element types);
+> `Map.groupBy` gives a `Map` from what its callback gives to arrays of the items;
+> `forEach` passes its callback the value, the key and the collection; (4) `get`,
+> `has` and `delete` of a key the collection cannot hold is E138 at the key, and a
+> `WeakMap` key that is no object (a shape, an instance, an array, a function, a
+> collection) is E138; (5) a `WeakMap` has `get`, `set`, `has` and `delete` alone:
+> `size`, `keys` and the like are E137, and a `for…of` over one is E137 at the
+> iterable, where any other non-iterable stays E138; (6) the typed arrays,
+> `ArrayBuffer` and `DataView` are classes of the ambient library, with class ids of
+> their own (from `0xFFFF_FF80`) told to `Facts` with their fields and methods, so
+> they are read, called, iterated, compared and printed as classes are; `new`, the
+> statics `from`, `of`, `fromBase64` and `fromHex`, `BYTES_PER_ELEMENT` and
+> `ArrayBuffer.isView` are typed; (7) a typed array is indexed as an array is,
+> `number | undefined` (`bigint` for the two 64-bit ones), and a place takes an
+> element; its callbacks are passed the element and its place; (8)
+> `structuredClone` of a typed array or a buffer is a clone, not E138; (9)
+> `WeakSet`, `WeakRef` and `FinalizationRegistry` were E133 already, and the
+> `fromBase64`/`fromHex` statics E204, from the ambient table (US-068). **Limits:**
+> the instance methods `toBase64`, `toHex` and their setters are not in the table
+> for every runtime and are E137; what `set` and `add` are given is not checked
+> against a collection made elsewhere; a collection held by a field is typed by its
+> initializer alone; the constructors of the ambient classes take anything.
+> **Older tests changed:** `collections.rs` expected a `Map` made with entries to
+> have no type, and `iteration.rs` an empty `new WeakMap()` to pass. Fixtures:
+> `06-ambient/E137/weakmap-iterated.js`, `06-ambient/E138/weakmap-primitive-key.js`,
+> `map-get-other-key.js`, `near-miss-collections.js`. Verified: fmt, both clippy
+> passes, audit, tests, doc tests, 100% line and region coverage,
+> `cargo mutants --in-diff` 117 caught, 0 missed, 22 unviable, no timeout.
 
 **Done when**
 - `Map<K, V>` and `Set<T>` inferred from constructor arguments and from `set`/`add`

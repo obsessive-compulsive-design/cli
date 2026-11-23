@@ -8,13 +8,15 @@
 
 use crate::builtins::ARRAY_METHODS;
 use crate::classes::statics_of;
+use crate::collections::methods_of;
 use crate::expressions::{element_span_of, punct, Typer};
 use crate::primitives::{
     is_numeric, is_string, NUMBER_METHODS, REMOVED_STRING_METHODS, STRING_METHODS,
 };
+use crate::typed_arrays::element_of;
 use sjs_diag::{Code, Span};
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct};
-use sjs_types::{Assignability, ClassId, Literal, Printer, Property, Type, TypeId, VarId};
+use sjs_types::{Assignability, Builtin, ClassId, Literal, Printer, Property, Type, TypeId, VarId};
 use std::collections::BTreeMap;
 
 /// What a member of a receiver's type holds at a key.
@@ -87,6 +89,10 @@ impl Typer<'_> {
                 let property = properties.iter().find(|property| property.key == key);
                 property.map_or(Held::Missing, |property| Held::Value(property.ty))
             }
+            // A place of a typed array holds an element.
+            Type::Class(class, _) if element_of(class).is_some() && key.parse::<f64>().is_ok() => {
+                Held::Value(element_of(class).unwrap_or(TypeId::NUMBER))
+            }
             Type::Class(class, arguments) => match self.owner(class, &arguments, key) {
                 Owner::Missing => Held::Missing,
                 Owner::Unknown => Held::Unknown,
@@ -116,6 +122,17 @@ impl Typer<'_> {
                 if key == "length" =>
             {
                 Held::Value(TypeId::INT32)
+            }
+            // A keyed collection has its methods, and but for a `WeakMap` its size.
+            Type::Builtin(kind, _) if key == "size" && kind != Builtin::WeakMap => {
+                Held::Value(TypeId::INT32)
+            }
+            Type::Builtin(kind, _) => {
+                if methods_of(kind).contains(&key) {
+                    Held::Method(None)
+                } else {
+                    Held::Missing
+                }
             }
             // The methods of a string and of a number are called, by the built-ins;
             // they have no other key.
@@ -288,6 +305,9 @@ impl Typer<'_> {
             Indexed::Value(typer.types.union([ty, TypeId::UNDEFINED]))
         };
         match self.types.get(member).clone() {
+            Type::Class(class, _) if element_of(class).is_some() && is_number => {
+                or_absent(self, element_of(class).unwrap_or(TypeId::NUMBER))
+            }
             Type::Object(_) | Type::Class(..) => {
                 let Some(keys) = self.keys(key) else {
                     return Indexed::Unreadable;

@@ -155,7 +155,7 @@ fn a_mutated_array_is_an_array_of_its_elements() {
     );
     assert_eq!(
         typed("const x = new Map([[1, 2]])\nx.set(1, 3)\nx.delete(1)\nx.clear()\n"),
-        "?"
+        "Map<int32, int32>"
     );
     assert_eq!(
         checked("const x = { k: 1 }\nx.add(2)\n").0,

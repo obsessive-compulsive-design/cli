@@ -3,6 +3,7 @@
 use crate::functions::{Passed, Site};
 use crate::primitives::is_primitive_static;
 use crate::promises::consumes;
+use crate::typed_arrays::ambient_class;
 use sjs_bind::Bindings;
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
@@ -254,7 +255,12 @@ impl<'a> Typer<'a> {
             (Some(declaration), _) => self.facts.declarations.get(&declaration).copied(),
             (None, "undefined") => Some(TypeId::UNDEFINED),
             (None, "NaN" | "Infinity") => Some(TypeId::NUMBER),
-            (None, _) => None,
+            // A class of the ambient library is its constructor, as any class is.
+            (None, _) => {
+                let class = reference.and_then(|_| ambient_class(text));
+                let shape = class.and_then(|class| self.facts.classes.get(&class));
+                shape.and_then(|shape| shape.constructor)
+            }
         }
     }
 
@@ -344,7 +350,10 @@ impl<'a> Typer<'a> {
             }
             NodeKind::CallExpr => self.called(node, &children),
             NodeKind::ArrowFunction => self.arrow(node),
-            NodeKind::NewExpr => self.call(node, &children),
+            NodeKind::NewExpr => match self.collection_made(&children) {
+                Some(made) => Some(made),
+                None => self.call(node, &children),
+            },
             NodeKind::MemberExpr | NodeKind::IndexExpr => {
                 if let Some(constant) = self.constant(node, &children) {
                     return Some(constant);
@@ -381,6 +390,8 @@ impl<'a> Typer<'a> {
             (true, name) if name.starts_with("Object.") => {
                 self.object_call(&name["Object.".len()..], children)
             }
+            (true, "Map.groupBy") => self.grouped(children),
+            (true, name) if self.typed_static(name).is_some() => self.typed_static(name),
             (true, name) if name.starts_with("Promise.") => {
                 self.promise_call(&name["Promise.".len()..], node, children)
             }
@@ -404,6 +415,9 @@ impl<'a> Typer<'a> {
                 }
                 if let Some(spoken) = self.spoken(&children[0]) {
                     return self.spoken_call(&spoken, node);
+                }
+                if let Some(keyed) = self.keyed(&children[0]) {
+                    return self.keyed_call(&keyed, node, children);
                 }
                 match self.listed(&children[0]) {
                     Some(listed) => self.array_call(&listed, node, children),

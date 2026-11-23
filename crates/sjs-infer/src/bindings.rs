@@ -7,6 +7,7 @@ use crate::expressions::{element_span_of, nodes, punct, Facts, Typer};
 use crate::functions::{declared_in, Call, Declared, Passed, Site};
 use crate::generics::Says;
 use crate::mutation::{arguments, settled, uses_of, Fill};
+use crate::typed_arrays::{add_ambient_classes, AMBIENT_CLASSES};
 use sjs_bind::{Bindings, DeclKind};
 use sjs_diag::SourceFile;
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
@@ -262,6 +263,7 @@ enum Empty {
     Array,
     Map,
     Set,
+    WeakMap,
 }
 
 /// Which empty collection `value` is, if it is one: `[]`, `new Map()`, `new Set()`.
@@ -283,6 +285,7 @@ pub(crate) fn empty_collection(typer: &Typer<'_>, value: &Element<'_>) -> Option
             match name {
                 "Map" if empty => Some("new Map()"),
                 "Set" if empty => Some("new Set()"),
+                "WeakMap" if empty => Some("new WeakMap()"),
                 _ => None,
             }
         }
@@ -298,6 +301,7 @@ fn held(typer: &mut Typer<'_>, value: Element<'_>, holder: &Holder<'_, '_>) -> O
     let empty = empty_collection(typer, &value).map(|empty| match empty {
         "[]" => Empty::Array,
         "new Map()" => Empty::Map,
+        "new WeakMap()" => Empty::WeakMap,
         _ => Empty::Set,
     });
     let all = |typer: &mut Typer<'_>, elements: Vec<Element<'_>>| -> Option<TypeId> {
@@ -328,6 +332,10 @@ fn held(typer: &mut Typer<'_>, value: Element<'_>, holder: &Holder<'_, '_>) -> O
                 mutated: true,
             },
             Empty::Map => Type::Builtin(Builtin::Map, vec![all(typer, keys)?, all(typer, values)?]),
+            Empty::WeakMap => Type::Builtin(
+                Builtin::WeakMap,
+                vec![all(typer, keys)?, all(typer, values)?],
+            ),
             Empty::Set => Type::Builtin(Builtin::Set, vec![all(typer, members)?]),
         };
         return Some(typer.types_mut().intern(ty));
@@ -349,6 +357,30 @@ fn held(typer: &mut Typer<'_>, value: Element<'_>, holder: &Holder<'_, '_>) -> O
     let spreads = |element: &Element<'_>| matches!(element, Element::Node(node) if node.kind() == NodeKind::SpreadElement);
     let Some(elements) = elements.filter(|elements| !elements.iter().any(spreads)) else {
         let ty = typer.type_of(value)?;
+        // A collection made with something in it holds what is put into it too.
+        if let Type::Builtin(kind, held) = typer.types().get(ty).clone() {
+            let mut wider = vec![held.clone(); 1];
+            for fill in holder.fills {
+                let put: Vec<Element<'_>> = match fill {
+                    Fill::Entry(key, value) => vec![*key, *value],
+                    Fill::Member(member) => vec![*member],
+                    Fill::Elements(_) => Vec::new(),
+                };
+                let mut given = Vec::new();
+                for put in put.iter().take(held.len()) {
+                    let ty = typer.type_of(*put)?;
+                    given.push(typer.loosened(ty));
+                }
+                wider.push(given);
+            }
+            let places = 0..held.len();
+            let held = places.map(|place| {
+                let at = wider.iter().filter_map(|given| given.get(place).copied());
+                typer.types_mut().union(at)
+            });
+            let held = held.collect();
+            return Some(typer.types_mut().intern(Type::Builtin(kind, held)));
+        }
         return Some(if holder.mutated {
             as_mutated(typer, ty)
         } else {
@@ -723,17 +755,17 @@ pub fn infer_bindings(
     // The classes of the file: each a class of its own, with its static side after
     // it, past every class `facts` knows already.
     let mut facts = facts.clone();
-    let known = [
-        facts.fields.keys().max(),
-        facts.methods.keys().max(),
-        facts.to_string.keys().max(),
-        facts.class_names.keys().max(),
-        facts.classes.keys().max(),
-        facts.superclass.keys().max(),
-        facts.superclass.values().max(),
-        facts.class_of.values().max(),
-    ];
-    let last = known.into_iter().flatten().max();
+    add_ambient_classes(&mut facts, types);
+    let known = facts.fields.keys();
+    let known = known.chain(facts.methods.keys());
+    let known = known.chain(facts.to_string.keys());
+    let known = known.chain(facts.class_names.keys());
+    let known = known.chain(facts.classes.keys());
+    let known = known.chain(facts.superclass.keys());
+    let known = known.chain(facts.superclass.values());
+    let known = known.chain(facts.class_of.values());
+    // The classes of the ambient library have ids of their own, past all these.
+    let last = known.filter(|class| class.0 < AMBIENT_CLASSES).max();
     let mut free = last.map_or(0, |last| last.0 + 2);
     for (at, declaration) in bindings.declarations.iter().enumerate() {
         if declaration.kind == DeclKind::Class && !facts.class_of.contains_key(&at) {

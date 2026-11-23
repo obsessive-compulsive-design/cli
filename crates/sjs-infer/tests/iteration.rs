@@ -147,6 +147,7 @@ fn a_loop_binds_what_iterating_its_iterable_gives() {
         [
             "E138 @1:17 5",
             "E138 @2:17 { a: 1 }",
+            "E110 @3:11 new WeakMap()",
             "E138 @7:17 either",
             "E138 @8:17 (a) => a"
         ],

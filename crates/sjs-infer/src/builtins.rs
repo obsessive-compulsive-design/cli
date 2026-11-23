@@ -6,6 +6,7 @@
 //! on what is no array of strings is E133; `indexOf`, `lastIndexOf` and `includes`
 //! of what the array cannot hold is E138.
 
+use crate::collections::keyed_takes;
 use crate::expressions::{element_span_of, Typer};
 use crate::functions::is_spread;
 use crate::mutation::arguments;
@@ -175,12 +176,20 @@ impl Typer<'_> {
     ) -> Option<Vec<Option<TypeId>>> {
         let index = Some(TypeId::INT32);
         let text = self.source.slice(&element_span_of(callee));
-        let statics = ["Object.groupBy", "Array.from", "Array.fromAsync"];
+        let statics = [
+            "Object.groupBy",
+            "Map.groupBy",
+            "Array.from",
+            "Array.fromAsync",
+        ];
         let over = text.is_some_and(|text| statics.contains(&text)) && self.is_global(callee);
         if over && place == 1 {
             let iterable = self.type_of(passed[0]);
             let item = iterable.and_then(|iterable| self.item_of(iterable, false));
             return Some(vec![item.map(|item| self.widened(item)), index]);
+        }
+        if let Some(keyed) = self.keyed(callee).filter(|_| place == 0) {
+            return keyed_takes(&keyed);
         }
         let listed = self.listed(callee).filter(|_| place == 0)?;
         let (element, receiver) = (Some(listed.element), Some(listed.receiver));

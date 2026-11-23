@@ -176,7 +176,10 @@ impl Typer<'_> {
                 "a `{}` is not iterable: `for…of` takes an array, a string, a `Map`, a `Set`, an iterator, or an object with `[Symbol.iterator]` (SPEC.md §4.7)",
                 self.print_type(member)
             );
-            self.report(first, Code::E138, element_span_of(&iterable), message);
+            // A `WeakMap` has nothing to iterate it by: the key is missing.
+            let weak = matches!(self.types.get(member), Type::Builtin(Builtin::WeakMap, _));
+            let code = if weak { Code::E137 } else { Code::E138 };
+            self.report(first, code, element_span_of(&iterable), message);
         }
     }
 

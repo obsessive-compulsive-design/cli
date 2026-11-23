@@ -268,7 +268,7 @@ impl Typer<'_> {
     fn field_is_filled(&self, body: NodeRef<'_>, name: &str, empty: &str) -> bool {
         let methods: &[&str] = match empty {
             "[]" => &["push", "unshift"],
-            "new Map()" => &["set"],
+            "new Map()" | "new WeakMap()" => &["set"],
             _ => &["add"],
         };
         let text = |node: NodeRef<'_>| self.source.slice(&node.span()).unwrap_or_default();
@@ -357,7 +357,7 @@ impl Typer<'_> {
         if !typed && !filled {
             let how = match empty {
                 "[]" => "`push`, `unshift`, `name[i] = …`",
-                "new Map()" => "`set`",
+                "new Map()" | "new WeakMap()" => "`set`",
                 _ => "`add`",
             };
             let message = format!(
