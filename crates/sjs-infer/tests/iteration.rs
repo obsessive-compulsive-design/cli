@@ -132,7 +132,7 @@ fn a_loop_binds_what_iterating_its_iterable_gives() {
     );
     assert_eq!(
         clean("const sp = [...\"ab\"]\nconst xs = [1, 2]\nconst sp2 = [...xs, \"z\"]\nconst s = new Set()\ns.add(true)\nconst af = Array.from(s)\nconst itf = Iterator.from(xs)\nconst no = [...5]\nconst two = Array.from([1], (x) => x)\nconst un = Array.from(unknownThing)\n", &["sp", "sp2", "af", "itf", "no", "two", "un"]),
-        ["readonly string[]", "readonly (int32 | string)[]", "readonly boolean[]", "Iterator<int32>", "?", "?", "?"],
+        ["readonly string[]", "readonly (int32 | string)[]", "readonly boolean[]", "Iterator<int32>", "?", "readonly int32[]", "?"],
         "a spread, `Array.from` and `Iterator.from` hold what is iterated"
     );
     let c = checked("for (const n of 5) {}\nfor (const o of { a: 1 }) {}\nconst w = new WeakMap()\nfor (const e of w) {}\nlet either = [1]\neither = 2\nfor (const x of either) {}\nfor (const f of (a) => a) {}\nfor (const i of Iterator.from(\"ab\")) {\n  const each = i\n}\nconst pending = async () => 1\nfor (const p of [pending()]) {\n  const promised = p\n}\n");
@@ -273,7 +273,12 @@ fn the_helpers_are_typed_on_every_iterator() {
         ("int32 | undefined".into(), "readonly number[]".into())
     );
     assert_eq!(c.of("both"), "Iterator<int32 | string>");
-    for later in ["other", "rd", "rn", "nf", "bad", "no", "either"] {
+    assert_eq!(
+        c.of("no"),
+        "readonly int32[]",
+        "the `map` of an array is its own"
+    );
+    for later in ["other", "rd", "rn", "nf", "bad", "either"] {
         assert_eq!(c.of(later), "?", "{later}");
     }
     // On an async iterator: what ends the iteration gives its result in time.

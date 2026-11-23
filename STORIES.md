@@ -3434,7 +3434,44 @@ later is not E113; a promise returned from an arrow body is used; a user class w
 `then` method is not E128 and `await` unwraps it.
 
 #### US-095 Built-ins: `Object` and `Array`
-§6.1 · After: US-093 · Size: M · M1
+§6.1 · After: US-093 · Size: M · M1 · **Status: complete** (2026-11-22)
+
+> Delivered in `sjs-infer` (`builtins.rs`, with changes to `expressions.rs`,
+> `context.rs`, `members.rs`): the kept statics of `Object` and of `Array` and the 38
+> ES2025 methods of an array are typed, on arrays and on tuples. **Decisions:** (1)
+> `Object.keys`/`values`/`entries` of a shape give its literal keys and its values
+> (`readonly ("a" | "b")[]`), and of a dictionary `string` keys; `fromEntries` and
+> `groupBy` give dictionaries; `freeze` and `assign` give the type of their first
+> argument (the frozen type is US-119, an excess key US-120); `hasOwn`, `isFrozen`
+> and `Array.isArray` give `boolean` (narrowing is US-111 and US-121); (2) a method
+> that gives a new array gives a `readonly` one, and one that changes the array in
+> place (`sort`, `reverse`, `fill`, `copyWithin`) gives the array itself; `at`,
+> `find`, `findLast`, `pop` and `shift` give `T | undefined`; `flat` goes as deep as a
+> literal depth says, eight at most, and has no type for a depth that is no literal;
+> `flatMap` and `concat` take one array off what they are given; (3) callbacks are
+> typed by context as for the iterator helpers: the element, its `int32` place and
+> the array (before them, for `reduce` and `reduceRight`, what it starts from; two
+> elements for a comparator), so an extra parameter is E136 and a misuse of the
+> element is E138 with the method as a related location; `Object.groupBy`,
+> `Array.from` and `Array.fromAsync` pass their callback the element and its place;
+> (4) `sort()` and `toSorted()` with no comparator on what is no array of strings is
+> E133 at the method; (5) `indexOf`, `lastIndexOf` and `includes` of a value the
+> array cannot hold is E138 at the value, an `int32` array taking any number; (6) a
+> key of an array that is no method and not `length` is now E137 on a read and E129
+> on a write, and a method read without being called is E138, as for classes; (7)
+> the removed statics of `Object` were E133 already (US-068, from the ambient
+> table); the test of the statics is driven by the table, and fails for a kept member
+> with no sample. **Limits:** `Object.fromEntries` of an array literal of array
+> literals (`[["a", 1]]`) mixes keys into the value type, since an inner literal is
+> an array and no pair; `Object.keys` and the like of a class instance, what `push`,
+> `fill` and `with` are given, and `flat(Infinity)` are not typed or judged; string
+> methods are US-096. **Older tests changed:** `collections.rs`, `members.rs` and
+> `iteration.rs` expected array methods and `Array.from` with a callback to have no
+> type, or an unknown key of an array to pass. Fixtures:
+> `04-arrays/E133/sort-without-comparator.js`, `near-miss-sort.js`,
+> `04-arrays/E138/index-of-other-type.js`, `near-miss-array-methods.js`. Verified: fmt,
+> both clippy passes, audit, tests, doc tests, 100% line and region coverage,
+> `cargo mutants --in-diff` 77 caught, 0 missed, 14 unviable, no timeout.
 
 **Done when**
 - `Object.keys/values/entries/fromEntries/hasOwn/groupBy/freeze/isFrozen/assign` typed

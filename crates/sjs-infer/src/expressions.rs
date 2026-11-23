@@ -352,33 +352,32 @@ impl<'a> Typer<'a> {
                     reference.is_some_and(|&at| self.bindings.references[at].declaration.is_none());
                 match (global, text) {
                     (true, "JSON.parse") => Some(TypeId::UNKNOWN),
-                    (true, "Object.keys" | "Object.entries") => {
-                        let argument = children.get(2).copied().filter(|_| children.len() == 4);
-                        let argument = argument.and_then(|argument| self.type_of(argument));
-                        argument.and_then(|shape| self.keys_of(shape, text == "Object.entries"))
+                    (true, name) if name.starts_with("Object.") => {
+                        self.object_call(&name["Object.".len()..], &children)
                     }
                     (true, name) if name.starts_with("Promise.") => {
                         self.promise_call(&name["Promise.".len()..], node, &children)
                     }
-                    (true, "Iterator.from" | "Array.from") => {
+                    (true, name) if name.starts_with("Array.") => {
+                        self.array_static(&name["Array.".len()..], &children)
+                    }
+                    (true, "Iterator.from") => {
                         let argument = children.get(2).copied().filter(|_| children.len() == 4);
                         let argument = argument.and_then(|argument| self.type_of(argument));
                         let item = argument.and_then(|iterable| self.item_of(iterable, false))?;
                         // What is taken out of a tuple is no literal any more.
                         let item = self.widened(item);
-                        Some(if text == "Array.from" {
-                            self.types.intern(Type::Array {
-                                element: item,
-                                mutated: false,
-                            })
-                        } else {
-                            self.iterator(item, false)
-                        })
+                        Some(self.iterator(item, false))
                     }
-                    _ => match self.helped(&children[0]) {
-                        Some(helped) => self.helper_call(&helped, &children),
-                        None => self.call(node, &children),
-                    },
+                    _ => {
+                        if let Some(helped) = self.helped(&children[0]) {
+                            return self.helper_call(&helped, &children);
+                        }
+                        match self.listed(&children[0]) {
+                            Some(listed) => self.array_call(&listed, node, &children),
+                            None => self.call(node, &children),
+                        }
+                    }
                 }
             }
             NodeKind::ArrowFunction => self.arrow(node),

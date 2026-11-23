@@ -6,6 +6,7 @@
 //! its class and then in the classes that one extends; a key with a getter and no
 //! setter is not written (E138).
 
+use crate::builtins::ARRAY_METHODS;
 use crate::classes::statics_of;
 use crate::expressions::{element_span_of, punct, Typer};
 use sjs_diag::{Code, Span};
@@ -113,6 +114,12 @@ impl Typer<'_> {
             {
                 Held::Value(TypeId::INT32)
             }
+            // The methods of an array are called, by the built-ins; it has no other key.
+            Type::Array { .. } | Type::Tuple(_) if ARRAY_METHODS.contains(&key) => {
+                Held::Method(None)
+            }
+            // A place is read by an index, not here.
+            Type::Array { .. } | Type::Tuple(_) if key.parse::<f64>().is_err() => Held::Missing,
             Type::Dictionary(value) => Held::Value(self.types.union([value, TypeId::UNDEFINED])),
             Type::Unknown | Type::Undefined | Type::Null => Held::Missing,
             _ => Held::Unknown,
@@ -425,12 +432,9 @@ impl Typer<'_> {
         known.then(|| (self.types.union(values), short))
     }
 
-    /// `Object.keys(shape)`: an array of its keys, each a literal;
-    /// `Object.entries(shape)`: an array of `[key, value]` tuples.
-    pub(crate) fn keys_of(&mut self, shape: TypeId, entries: bool) -> Option<TypeId> {
-        let Type::Object(properties) = self.types.get(shape).clone() else {
-            return None;
-        };
+    /// `Object.keys(shape)` of a shape of these properties: an array of its keys,
+    /// each a literal; `Object.entries(shape)`: an array of `[key, value]` tuples.
+    pub(crate) fn keys_of(&mut self, properties: Vec<Property>, entries: bool) -> TypeId {
         let mut elements = Vec::new();
         for Property { key, ty, .. } in properties {
             let key = self.types.literal(Literal::String(key));
@@ -442,10 +446,10 @@ impl Typer<'_> {
             elements.push(entry);
         }
         let element = self.types.union(elements);
-        Some(self.types.intern(Type::Array {
+        self.types.intern(Type::Array {
             element,
             mutated: false,
-        }))
+        })
     }
 
     /// Judges `target = value` and the like, where `target` is `o.k` or `o[k]`: the

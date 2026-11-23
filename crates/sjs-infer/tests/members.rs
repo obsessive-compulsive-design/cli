@@ -173,7 +173,6 @@ fn a_read_gives_what_every_member_holds() {
     assert_eq!(typed("\"abc\".length"), "int32");
     assert_eq!(typed("dict.anything"), "number | undefined");
     for later in [
-        "list.map",
         "text.trim",
         "num.toFixed",
         "stranger.field",
@@ -215,7 +214,7 @@ fn a_key_some_member_lacks_is_e137() {
     );
     assert_eq!(checked("const x = one.missing\n").0, "?");
     assert_eq!(
-        found("stranger.w\nlist.w\nnum.w\n"),
+        found("stranger.w\nnum.w\n"),
         NONE,
         "what a later pass gives members is not judged"
     );
@@ -358,8 +357,6 @@ fn the_keys_and_entries_of_a_shape_are_its_literal_keys() {
         "Object.keys(either)",
         "Object.keys(list)",
         "Object.keys()",
-        "Object.keys(one, one)",
-        "Object.values(one)",
         "Object.keys(later())",
     ] {
         assert_eq!(typed(later), "?", "{later}");

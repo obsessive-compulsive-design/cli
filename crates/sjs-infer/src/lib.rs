@@ -24,8 +24,11 @@
 //! `for…of`, a spread and the iterator helpers take from arrays, strings, `Map`s, `Set`s,
 //! generators and iterable classes (E138 for what is no iterable). US-094 types `await`
 //! and the statics of `Promise`, and judges promises (E113, E118, E119, E127, E128).
+//! US-095 types the statics of `Object` and `Array` and the methods of arrays (E133 for
+//! a `sort` without a comparator, E138 for a search for what an array cannot hold).
 
 mod bindings;
+mod builtins;
 mod classes;
 mod context;
 mod expressions;

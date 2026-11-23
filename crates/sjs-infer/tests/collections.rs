@@ -196,7 +196,9 @@ fn passing_to_a_parameter_that_is_mutated_mutates() {
         "functions that only pass it round mutate nothing"
     );
     assert_eq!(
-        typed("const read = (xs) => xs.length\nconst x = [1, 2]\nread(x)\nunknown(x)\nx.read(x)\n"),
+        typed(
+            "const read = (xs) => xs.length\nconst x = [1, 2]\nread(x)\nunknown(x)\nx.concat(x)\n"
+        ),
         "[1, 2]"
     );
     assert_eq!(typed("const f = ({ xs }, ...rest) => {\n  xs.push(1)\n  rest.push(2)\n}\nconst x = [1, 2]\nf(x, x)\n"), "[1, 2]", "a pattern and a rest are no plain parameter");
