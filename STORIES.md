@@ -3656,7 +3656,49 @@ element type (E138); `arr.at(-1)` is `T | undefined`; `Array.isArray` narrows (U
 `str.replace(re, (m, g1) => …)` callback typing.
 
 #### US-099 Platform globals from IDL
-§6.2 · After: US-068, US-094 · Size: L · M1
+§6.2 · After: US-068, US-094 · Size: L · M1 · **Status: complete** (2026-11-23)
+
+> Delivered as `ambient/platform/*.toml` (nine files by standard, with a `README.md`
+> for the notation), `sjs-infer` (`platform.rs`, public for the generator; changes to
+> `typed_arrays.rs`, `expressions.rs`, `members.rs`, `functions.rs`) and the generator
+> test `sjs-cli/tests/platform.rs`. Every §6.2 global is transcribed by hand from its
+> Web IDL, each table citing the standard and the definition (`idl = "…"`): an
+> interface is a class of the ambient library, a namespace (`console`, `crypto`,
+> `performance`, `navigator`) an object of functions, a function a function.
+> **Decisions:** (1) the data notation is the checker's own type notation (`string |
+> null`, `Promise<T>`, `(name: T, other?: U, ...rest: V) => R`); IDL `any` is
+> `unknown`; a nullable IDL type is `| null` and its line ends `# nullable`, which a
+> test holds together and lists; (2) `setTimeout` and `setInterval` give the opaque
+> `Timeout` and `Interval`, which only `clearTimeout` and `clearInterval` take: the
+> other's handle, or a number, is E138; (3) what a function or method of the ambient
+> library is passed is to be what it takes, E138 at the argument (`fetch(1)`); a
+> function passed is typed by context and not judged, an array is taken whether or
+> not it is mutated, and an `int32` parameter takes any number; (4) a member an
+> interface does not list is E133, on an instance and on the interface by name
+> (`headers.notKept`, `Headers.notKept`); the unlisted members of namespaces and
+> functions were E133 already, from the ambient table; (5) the functions of a
+> namespace are values, so `xs.forEach(console.log)` passes one on; (6) the static
+> members transcribed are `Response.error`/`redirect`/`json`, `URL.parse`/`canParse`
+> and `AbortSignal.abort`/`timeout`/`any`; (7) interfaces the globals give but §6.2
+> does not name are transcribed where a member needs them: `SubtleCrypto`,
+> `CryptoKey`, `PerformanceEntry`, the stream reader and writer, and `MessageEvent`;
+> (8) the listeners of `WebSocket`, `BroadcastChannel` and `MessagePort` are handed a
+> `MessageEvent`, whose `data` is `unknown`; any other listener an `Event`; (9) a
+> class of a program may extend an interface by its global name (`class Bus extends
+> EventTarget`); (10) the class ids of the ambient library now start at
+> `0xFFFF_FE00`, room for 255 classes. **Fixtures** are generated from the data
+> (`SJS_UPDATE_SNAPSHOTS=1 cargo test -p sjs-cli --test platform`):
+> `06-ambient/platform/pass/<Name>.js` uses every listed member once, with an argument
+> for each required parameter, and `E133/<Name>.js` an unlisted member of an instance
+> and of the interface; 46 and 34 files. `MessageEvent` has none, for a program is
+> only handed one: `sjs-infer` tests it. **Limits:** dictionaries (`RequestInit` and
+> the like) are `unknown`, so their keys are not checked; event handler attributes
+> (`onmessage`) and the constants of `WebSocket` are not transcribed; a listener's
+> event is not told by the name of the event; overloads are written as unions.
+> **Older tests changed:** `members.rs` listed `console.log` as untyped, and a
+> `classes.rs` case extended `EventTarget` as a base nothing is known of. Verified:
+> fmt, both clippy passes, audit, tests, doc tests, 100% line and region coverage,
+> `cargo mutants --in-diff` 85 caught, 0 missed, 20 unviable, no timeout.
 
 **Scope.** `ambient/platform/*.toml` hand-transcribed signatures for every §6.2 global
 with the IDL source cited; `null` kept where IDL is nullable; callbacks typed; `any` as

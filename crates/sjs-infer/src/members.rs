@@ -9,11 +9,11 @@
 use crate::builtins::ARRAY_METHODS;
 use crate::classes::statics_of;
 use crate::collections::methods_of;
-use crate::expressions::{element_span_of, punct, ClassFacts, Typer};
+use crate::expressions::{element_span_of, punct, ClassFacts, Others, Typer};
 use crate::primitives::{
     is_numeric, is_string, NUMBER_METHODS, REMOVED_STRING_METHODS, STRING_METHODS,
 };
-use crate::typed_arrays::element_of;
+use crate::typed_arrays::{ambient_class, element_of};
 use sjs_diag::{Code, Span};
 use sjs_syntax::{Element, NodeKind, NodeRef, Punct};
 use sjs_types::{Assignability, Builtin, ClassId, Literal, Printer, Property, Type, TypeId, VarId};
@@ -94,6 +94,8 @@ impl Typer<'_> {
                 Held::Value(element_of(class).unwrap_or(TypeId::NUMBER))
             }
             Type::Class(class, arguments) => match self.owner(class, &arguments, key) {
+                // What the class has beyond what it lists is not known here.
+                Owner::Missing if self.others_of(member) == Others::Unseen => Held::Unknown,
                 Owner::Missing => Held::Missing,
                 Owner::Unknown => Held::Unknown,
                 Owner::At(owner, bound) => {
@@ -243,11 +245,19 @@ impl Typer<'_> {
         }
     }
 
+    /// What a value of the type `instance` is taken to have beyond what its class
+    /// declares.
+    fn others_of(&self, instance: TypeId) -> Others {
+        let shape = self.shape_of(instance);
+        shape.map_or(Others::Missing, |shape| shape.others)
+    }
+
     /// Whether the language removes the member `key` from values of the type
     /// `instance`.
     fn removes(&self, instance: TypeId, key: &str) -> bool {
         let shape = self.shape_of(instance);
-        shape.is_some_and(|shape| shape.removed.contains(key))
+        let removed = shape.is_some_and(|shape| shape.removed.contains(key));
+        removed || self.others_of(instance) == Others::Removed
     }
 
     /// Whether a value of the type `instance` has a method `name`.
@@ -297,7 +307,14 @@ impl Typer<'_> {
         };
         let reference = self.references.get(&name.token().span.byte_start);
         let declared = reference.and_then(|&at| self.bindings.references[at].declaration);
-        declared.and_then(|declared| self.facts.class_of.get(&declared).copied())
+        // A class of the ambient library that has static members is named by a
+        // global.
+        let text = self.source.slice(&name.token().span).unwrap_or_default();
+        let ambient = reference.filter(|_| declared.is_none());
+        let ambient = ambient.and_then(|_| ambient_class(text));
+        let ambient = ambient.filter(|class| self.facts.classes.contains_key(&statics_of(*class)));
+        let own = declared.and_then(|declared| self.facts.class_of.get(&declared).copied());
+        own.or(ambient)
     }
 
     /// The keys a type names, when it is a literal or a union of literals.

@@ -743,6 +743,11 @@ impl Typer<'_> {
             }
         }
         self.fitted(first, &name, declaration.filter(|_| !spread), &passed);
+        if let [function] = functions.as_slice() {
+            if !spread {
+                self.taken_rule(first, &callee, function, &passed);
+            }
+        }
         // A generic function gives what it returns for what this call passes.
         if functions
             .iter()

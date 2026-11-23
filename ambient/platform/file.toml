@@ -1,0 +1,21 @@
+# W3C File API, https://w3c.github.io/FileAPI/
+
+[Blob]
+idl = "File API §3, interface Blob"
+sample = "new Blob([\"a\"])"
+new = "(blobParts?: unknown[], options?: unknown)"
+size = "number"
+type = "string"
+slice = "(start?: number, end?: number, contentType?: string) => Blob"
+stream = "() => ReadableStream"
+text = "() => Promise<string>"
+arrayBuffer = "() => Promise<ArrayBuffer>"
+bytes = "() => Promise<Uint8Array>"
+
+[File]
+idl = "File API §4, interface File"
+extends = "Blob"
+sample = "new File([\"a\"], \"a.txt\")"
+new = "(fileBits: unknown[], fileName: string, options?: unknown)"
+name = "string"
+lastModified = "number"

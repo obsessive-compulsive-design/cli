@@ -10,6 +10,18 @@ use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKi
 use sjs_types::{ClassId, Integer, Literal, Number, Printer, Property, Type, TypeId, Types, VarId};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// What a class is taken to have beyond the members it is known to declare.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Others {
+    /// Nothing: a key it does not declare is missing (E137).
+    #[default]
+    Missing,
+    /// Nothing the language keeps: a key it does not declare is removed (E133).
+    Removed,
+    /// What is not known here: a key it does not declare is not judged.
+    Unseen,
+}
+
 /// What is known of a class beyond its fields and the names of its methods.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ClassFacts {
@@ -35,6 +47,8 @@ pub struct ClassFacts {
     pub removed: BTreeSet<String>,
     /// The fields that are read and never assigned: an assignment to one is E133.
     pub unwritten: BTreeSet<String>,
+    /// What it is taken to have beyond what it declares.
+    pub others: Others,
 }
 
 /// What is known of a file's names before its expressions are typed. Later passes
@@ -91,6 +105,9 @@ pub struct Facts {
     pub class_of: BTreeMap<usize, ClassId>,
     /// What is known of each class beyond its fields and the names of its methods.
     pub classes: BTreeMap<ClassId, ClassFacts>,
+    /// The types of the globals of the ambient library that are no class: its
+    /// functions and its namespaces, by name.
+    pub globals: BTreeMap<String, TypeId>,
 }
 
 /// Types the expressions of one file.
@@ -261,9 +278,12 @@ impl<'a> Typer<'a> {
             (None, "NaN" | "Infinity") => Some(TypeId::NUMBER),
             // A class of the ambient library is its constructor, as any class is.
             (None, _) => {
+                let global = reference.and_then(|_| self.facts.globals.get(text));
                 let class = reference.and_then(|_| ambient_class(text));
                 let shape = class.and_then(|class| self.facts.classes.get(&class));
-                shape.and_then(|shape| shape.constructor)
+                global
+                    .copied()
+                    .or(shape.and_then(|shape| shape.constructor))
             }
         }
     }

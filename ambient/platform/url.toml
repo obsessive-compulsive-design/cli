@@ -1,0 +1,58 @@
+# WHATWG URL Standard, https://url.spec.whatwg.org/
+# WHATWG URL Pattern Standard, https://urlpattern.spec.whatwg.org/
+
+[URL]
+idl = "URL §6.1, interface URL"
+sample = "new URL(\"https://example.com/\")"
+new = "(url: string, base?: string | URL)"
+static parse = "(url: string, base?: string | URL) => URL | null" # nullable
+static canParse = "(url: string, base?: string | URL) => boolean"
+href = "string"
+origin = "string"
+protocol = "string"
+username = "string"
+password = "string"
+host = "string"
+hostname = "string"
+port = "string"
+pathname = "string"
+search = "string"
+searchParams = "URLSearchParams"
+hash = "string"
+toJSON = "() => string"
+toString = "() => string"
+
+[URLSearchParams]
+idl = "URL §6.2, interface URLSearchParams"
+sample = "new URLSearchParams(\"a=1\")"
+new = "(init?: unknown)"
+size = "int32"
+append = "(name: string, value: string) => undefined"
+delete = "(name: string, value?: string) => undefined"
+get = "(name: string) => string | null" # nullable
+getAll = "(name: string) => string[]"
+has = "(name: string, value?: string) => boolean"
+set = "(name: string, value: string) => undefined"
+sort = "() => undefined"
+toString = "() => string"
+entries = "() => Iterator<[string, string]>"
+keys = "() => Iterator<string>"
+values = "() => Iterator<string>"
+forEach = "(callback: (value: string, key: string, parent: URLSearchParams) => unknown) => undefined"
+"[Symbol.iterator]" = "() => Iterator<[string, string]>"
+
+[URLPattern]
+idl = "URL Pattern §3.1, interface URLPattern"
+sample = "new URLPattern({ pathname: \"/:id\" })"
+new = "(input?: unknown, base?: unknown, options?: unknown)"
+test = "(input?: unknown, base?: string) => boolean"
+exec = "(input?: unknown, base?: string) => unknown | null" # nullable
+protocol = "string"
+username = "string"
+password = "string"
+hostname = "string"
+port = "string"
+pathname = "string"
+search = "string"
+hash = "string"
+hasRegExpGroups = "boolean"

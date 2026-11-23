@@ -1,0 +1,100 @@
+# WHATWG Streams Standard, https://streams.spec.whatwg.org/
+# WHATWG Encoding Standard, https://encoding.spec.whatwg.org/
+# WHATWG Compression Standard, https://compression.spec.whatwg.org/
+
+[ReadableStream]
+idl = "Streams §4.2, interface ReadableStream"
+sample = "new ReadableStream()"
+new = "(underlyingSource?: unknown, strategy?: unknown)"
+locked = "boolean"
+cancel = "(reason?: unknown) => Promise<undefined>"
+getReader = "(options?: unknown) => ReadableStreamReader"
+pipeThrough = "(transform: unknown, options?: unknown) => ReadableStream"
+pipeTo = "(destination: WritableStream, options?: unknown) => Promise<undefined>"
+tee = "() => [ReadableStream, ReadableStream]"
+values = "(options?: unknown) => AsyncIterator<unknown>"
+"[Symbol.asyncIterator]" = "() => AsyncIterator<unknown>"
+
+[ReadableStreamReader]
+idl = "Streams §4.4, interface ReadableStreamDefaultReader; §4.3, interface mixin ReadableStreamGenericReader"
+sample = "new ReadableStream().getReader()"
+closed = "Promise<undefined>"
+cancel = "(reason?: unknown) => Promise<undefined>"
+read = "() => Promise<unknown>"
+releaseLock = "() => undefined"
+
+[WritableStream]
+idl = "Streams §5.2, interface WritableStream"
+sample = "new WritableStream()"
+new = "(underlyingSink?: unknown, strategy?: unknown)"
+locked = "boolean"
+abort = "(reason?: unknown) => Promise<undefined>"
+close = "() => Promise<undefined>"
+getWriter = "() => WritableStreamWriter"
+
+[WritableStreamWriter]
+idl = "Streams §5.3, interface WritableStreamDefaultWriter"
+sample = "new WritableStream().getWriter()"
+closed = "Promise<undefined>"
+desiredSize = "number | null" # nullable
+ready = "Promise<undefined>"
+abort = "(reason?: unknown) => Promise<undefined>"
+close = "() => Promise<undefined>"
+releaseLock = "() => undefined"
+write = "(chunk?: unknown) => Promise<undefined>"
+
+[TransformStream]
+idl = "Streams §6.2, interface TransformStream"
+sample = "new TransformStream()"
+new = "(transformer?: unknown, writableStrategy?: unknown, readableStrategy?: unknown)"
+readable = "ReadableStream"
+writable = "WritableStream"
+
+[TextEncoderStream]
+idl = "Encoding §9.1, interface TextEncoderStream"
+sample = "new TextEncoderStream()"
+new = "()"
+encoding = "string"
+readable = "ReadableStream"
+writable = "WritableStream"
+
+[TextDecoderStream]
+idl = "Encoding §9.2, interface TextDecoderStream"
+sample = "new TextDecoderStream()"
+new = "(label?: string, options?: unknown)"
+encoding = "string"
+fatal = "boolean"
+ignoreBOM = "boolean"
+readable = "ReadableStream"
+writable = "WritableStream"
+
+[CompressionStream]
+idl = "Compression §5, interface CompressionStream"
+sample = "new CompressionStream(\"gzip\")"
+new = "(format: string)"
+readable = "ReadableStream"
+writable = "WritableStream"
+
+[DecompressionStream]
+idl = "Compression §6, interface DecompressionStream"
+sample = "new DecompressionStream(\"gzip\")"
+new = "(format: string)"
+readable = "ReadableStream"
+writable = "WritableStream"
+
+[TextEncoder]
+idl = "Encoding §8.2, interface TextEncoder"
+sample = "new TextEncoder()"
+new = "()"
+encoding = "string"
+encode = "(input?: string) => Uint8Array"
+encodeInto = "(source: string, destination: Uint8Array) => unknown"
+
+[TextDecoder]
+idl = "Encoding §8.1, interface TextDecoder"
+sample = "new TextDecoder()"
+new = "(label?: string, options?: unknown)"
+encoding = "string"
+fatal = "boolean"
+ignoreBOM = "boolean"
+decode = "(input?: unknown, options?: unknown) => string"

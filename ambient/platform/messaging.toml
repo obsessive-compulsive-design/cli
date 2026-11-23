@@ -1,0 +1,57 @@
+# WHATWG WebSockets Standard, https://websockets.spec.whatwg.org/
+# WHATWG HTML Standard, https://html.spec.whatwg.org/multipage/web-messaging.html
+
+[WebSocket]
+idl = "WebSockets §3.1, interface WebSocket"
+extends = "EventTarget"
+sample = "new WebSocket(\"wss://example.com/\")"
+new = "(url: string | URL, protocols?: string | string[])"
+url = "string"
+readyState = "int32"
+bufferedAmount = "number"
+extensions = "string"
+protocol = "string"
+binaryType = "string"
+close = "(code?: int32, reason?: string) => undefined"
+send = "(data: string | Blob | ArrayBuffer | Uint8Array) => undefined"
+# Its events carry data: a listener is handed a MessageEvent.
+addEventListener = "(type: string, callback: (event: MessageEvent) => unknown, options?: unknown) => undefined"
+removeEventListener = "(type: string, callback: (event: MessageEvent) => unknown, options?: unknown) => undefined"
+
+[BroadcastChannel]
+idl = "HTML §9.6, interface BroadcastChannel"
+extends = "EventTarget"
+sample = "new BroadcastChannel(\"news\")"
+new = "(name: string)"
+name = "string"
+postMessage = "(message: unknown) => undefined"
+close = "() => undefined"
+addEventListener = "(type: string, callback: (event: MessageEvent) => unknown, options?: unknown) => undefined"
+removeEventListener = "(type: string, callback: (event: MessageEvent) => unknown, options?: unknown) => undefined"
+
+[MessageChannel]
+idl = "HTML §9.5.2, interface MessageChannel"
+sample = "new MessageChannel()"
+new = "()"
+port1 = "MessagePort"
+port2 = "MessagePort"
+
+[MessagePort]
+idl = "HTML §9.5.3, interface MessagePort"
+extends = "EventTarget"
+sample = "new MessageChannel().port1"
+postMessage = "(message: unknown, transfer?: unknown) => undefined"
+start = "() => undefined"
+close = "() => undefined"
+addEventListener = "(type: string, callback: (event: MessageEvent) => unknown, options?: unknown) => undefined"
+removeEventListener = "(type: string, callback: (event: MessageEvent) => unknown, options?: unknown) => undefined"
+
+[MessageEvent]
+# Not a global of §6.2: a program is handed one by a listener, and makes none.
+idl = "HTML §9.2, interface MessageEvent"
+extends = "Event"
+data = "unknown"
+origin = "string"
+lastEventId = "string"
+source = "MessagePort | null" # nullable
+ports = "MessagePort[]"

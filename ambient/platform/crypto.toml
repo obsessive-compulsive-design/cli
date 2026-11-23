@@ -1,0 +1,31 @@
+# W3C Web Cryptography API, https://w3c.github.io/webcrypto/
+
+[namespace crypto]
+idl = "Web Cryptography §10, interface Crypto"
+subtle = "SubtleCrypto"
+randomUUID = "() => string"
+getRandomValues = "(array: Uint8Array) => Uint8Array"
+
+[SubtleCrypto]
+idl = "Web Cryptography §14, interface SubtleCrypto"
+sample = "crypto.subtle"
+encrypt = "(algorithm: unknown, key: CryptoKey, data: unknown) => Promise<ArrayBuffer>"
+decrypt = "(algorithm: unknown, key: CryptoKey, data: unknown) => Promise<ArrayBuffer>"
+sign = "(algorithm: unknown, key: CryptoKey, data: unknown) => Promise<ArrayBuffer>"
+verify = "(algorithm: unknown, key: CryptoKey, signature: unknown, data: unknown) => Promise<boolean>"
+digest = "(algorithm: unknown, data: unknown) => Promise<ArrayBuffer>"
+generateKey = "(algorithm: unknown, extractable: boolean, keyUsages: string[]) => Promise<unknown>"
+deriveKey = "(algorithm: unknown, baseKey: CryptoKey, derivedKeyType: unknown, extractable: boolean, keyUsages: string[]) => Promise<CryptoKey>"
+deriveBits = "(algorithm: unknown, baseKey: CryptoKey, length?: int32) => Promise<ArrayBuffer>"
+importKey = "(format: string, keyData: unknown, algorithm: unknown, extractable: boolean, keyUsages: string[]) => Promise<CryptoKey>"
+exportKey = "(format: string, key: CryptoKey) => Promise<unknown>"
+wrapKey = "(format: string, key: CryptoKey, wrappingKey: CryptoKey, wrapAlgorithm: unknown) => Promise<ArrayBuffer>"
+unwrapKey = "(format: string, wrappedKey: unknown, unwrappingKey: CryptoKey, unwrapAlgorithm: unknown, unwrappedKeyAlgorithm: unknown, extractable: boolean, keyUsages: string[]) => Promise<CryptoKey>"
+
+[CryptoKey]
+idl = "Web Cryptography §13, interface CryptoKey"
+sample = "await crypto.subtle.importKey(\"raw\", new Uint8Array(1), \"HMAC\", true, [\"sign\"])"
+type = "string"
+extractable = "boolean"
+algorithm = "unknown"
+usages = "string[]"

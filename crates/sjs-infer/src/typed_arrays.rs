@@ -7,11 +7,12 @@
 use crate::ambient::{add_named_classes, intl, NAMED};
 use crate::classes::UNKNOWN_BASE;
 use crate::expressions::{ClassFacts, Facts};
+use crate::platform::{add_platform, platform_classes};
 use sjs_types::{ClassId, Function, Param, Type, TypeId, Types};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The first class id of the ambient library: the ids from here on are its own.
-pub(crate) const AMBIENT_CLASSES: u32 = 0xFFFF_FF80;
+pub(crate) const AMBIENT_CLASSES: u32 = 0xFFFF_FE00;
 
 /// The typed arrays, each with whether it holds bigints.
 const TYPED_ARRAYS: [(&str, bool); 12] = [
@@ -94,7 +95,11 @@ pub(crate) fn ambient_class(name: &str) -> Option<ClassId> {
         tables.position(|(table, _)| table == name)
     });
     let place = names.position(|known| known == name);
-    let place = place.or(of_intl.map(|place| place + 14 + NAMED.len()))?;
+    let place = place.or(of_intl.map(|place| place + 14 + NAMED.len()));
+    // Then the interfaces and the namespaces of the platform.
+    let before = 14 + NAMED.len() + intl().len() - 1;
+    let of_platform = platform_classes().position(|known| known == name);
+    let place = place.or(of_platform.map(|place| place + before))?;
     let place = u32::try_from(place).unwrap_or_default();
     Some(ClassId(AMBIENT_CLASSES + 2 * place))
 }
@@ -155,6 +160,7 @@ impl Shape<'_> {
 /// arrays, `ArrayBuffer` and `DataView`.
 pub(crate) fn add_ambient_classes(facts: &mut Facts, types: &mut Types) {
     add_named_classes(facts, types);
+    add_platform(facts, types);
     let arrays = TYPED_ARRAYS.iter().map(|(array, _)| *array);
     let buffer = types.intern(Type::Class(ClassId(AMBIENT_CLASSES + 24), Vec::new()));
     for name in arrays.chain(BUFFERS) {
@@ -271,5 +277,44 @@ fn typed_array(shape: &mut Shape<'_>, element: TypeId, buffer: TypeId) {
             returns,
         }));
         shape.method(name, signature);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ambient_class, is_ambient, AMBIENT_CLASSES, BUFFERS, TYPED_ARRAYS};
+    use crate::ambient::{intl, NAMED};
+    use crate::platform::platform_classes;
+
+    #[test]
+    fn every_class_of_the_ambient_library_has_an_id_of_its_own() {
+        let typed = TYPED_ARRAYS.iter().map(|(typed, _)| (*typed).to_owned());
+        let others = BUFFERS.iter().chain(&NAMED).map(|name| (*name).to_owned());
+        let of_intl = intl().iter().filter(|(table, _)| table != "Intl");
+        let of_intl = of_intl.map(|(table, _)| format!("Intl.{table}"));
+        let of_platform = platform_classes().map(str::to_owned);
+        let names: Vec<String> = typed
+            .chain(others)
+            .chain(of_intl)
+            .chain(of_platform)
+            .collect();
+        assert!(
+            names.len() > 60,
+            "typed arrays, buffers, errors, `Intl` and the platform"
+        );
+        for (at, name) in names.iter().enumerate() {
+            // Each two apart, for the static side of the one before.
+            let expected = AMBIENT_CLASSES + 2 * u32::try_from(at).expect("few");
+            let class = ambient_class(name).expect(name);
+            assert_eq!(class.0, expected, "{name}");
+            assert!(is_ambient(class), "{name}");
+        }
+        assert_eq!(ambient_class("Nothing"), None);
+        assert_eq!(ambient_class("Intl.Nothing"), None);
+        assert_eq!(
+            ambient_class("Intl.Intl"),
+            None,
+            "the functions of `Intl` are no class"
+        );
     }
 }

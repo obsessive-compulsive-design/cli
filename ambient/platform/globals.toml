@@ -1,0 +1,76 @@
+# WHATWG HTML Standard, https://html.spec.whatwg.org/multipage/
+# W3C High Resolution Time, https://w3c.github.io/hr-time/
+# W3C User Timing, https://w3c.github.io/user-timing/
+# WHATWG Console Standard, https://console.spec.whatwg.org/
+
+[function queueMicrotask]
+idl = "HTML §8.7, interface mixin WindowOrWorkerGlobalScope"
+call = "(callback: () => unknown) => undefined"
+
+[function setTimeout]
+idl = "HTML §8.6, interface mixin WindowOrWorkerGlobalScope"
+call = "(handler: (...arguments: unknown) => unknown, timeout?: number, ...arguments: unknown) => Timeout"
+
+[function clearTimeout]
+idl = "HTML §8.6, interface mixin WindowOrWorkerGlobalScope"
+call = "(id?: Timeout) => undefined"
+
+[function setInterval]
+idl = "HTML §8.6, interface mixin WindowOrWorkerGlobalScope"
+call = "(handler: (...arguments: unknown) => unknown, timeout?: number, ...arguments: unknown) => Interval"
+
+[function clearInterval]
+idl = "HTML §8.6, interface mixin WindowOrWorkerGlobalScope"
+call = "(id?: Interval) => undefined"
+
+# What `setTimeout` and `setInterval` give: a number in a browser, an object in
+# Node. Nothing is known of either but that its `clear` function takes it.
+[Timeout]
+idl = "HTML §8.6, the timer handle `setTimeout` returns (IDL long)"
+sample = "setTimeout(() => undefined)"
+
+[Interval]
+idl = "HTML §8.6, the timer handle `setInterval` returns (IDL long)"
+sample = "setInterval(() => undefined)"
+
+[function atob]
+idl = "HTML §8.3, interface mixin WindowOrWorkerGlobalScope"
+call = "(data: string) => string"
+
+[function btoa]
+idl = "HTML §8.3, interface mixin WindowOrWorkerGlobalScope"
+call = "(data: string) => string"
+
+[namespace performance]
+idl = "High Resolution Time §6, interface Performance; User Timing §3, partial interface Performance"
+now = "() => number"
+mark = "(markName: string, markOptions?: unknown) => PerformanceEntry"
+measure = "(measureName: string, startOrMeasureOptions?: unknown, endMark?: string) => PerformanceEntry"
+
+[PerformanceEntry]
+idl = "Performance Timeline §4.1, interface PerformanceEntry; User Timing §4, interfaces PerformanceMark and PerformanceMeasure"
+sample = "performance.mark(\"start\")"
+name = "string"
+entryType = "string"
+startTime = "number"
+duration = "number"
+detail = "unknown"
+toJSON = "() => unknown"
+
+[namespace navigator]
+idl = "HTML §8.9.1.5, interface mixin NavigatorConcurrentHardware"
+hardwareConcurrency = "int32"
+
+[namespace console]
+idl = "Console §1, namespace console"
+log = "(...data: unknown) => undefined"
+error = "(...data: unknown) => undefined"
+warn = "(...data: unknown) => undefined"
+info = "(...data: unknown) => undefined"
+debug = "(...data: unknown) => undefined"
+table = "(tabularData?: unknown, properties?: string[]) => undefined"
+time = "(label?: string) => undefined"
+timeEnd = "(label?: string) => undefined"
+group = "(...data: unknown) => undefined"
+groupEnd = "() => undefined"
+assert = "(condition?: boolean, ...data: unknown) => undefined"

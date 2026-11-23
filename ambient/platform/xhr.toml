@@ -1,0 +1,17 @@
+# WHATWG XMLHttpRequest Standard, https://xhr.spec.whatwg.org/
+
+[FormData]
+idl = "XMLHttpRequest §5, interface FormData"
+sample = "new FormData()"
+new = "()"
+append = "(name: string, value: string | Blob, filename?: string) => undefined"
+delete = "(name: string) => undefined"
+get = "(name: string) => File | string | null" # nullable
+getAll = "(name: string) => (File | string)[]"
+has = "(name: string) => boolean"
+set = "(name: string, value: string | Blob, filename?: string) => undefined"
+entries = "() => Iterator<[string, File | string]>"
+keys = "() => Iterator<string>"
+values = "() => Iterator<File | string>"
+forEach = "(callback: (value: File | string, key: string, parent: FormData) => unknown) => undefined"
+"[Symbol.iterator]" = "() => Iterator<[string, File | string]>"

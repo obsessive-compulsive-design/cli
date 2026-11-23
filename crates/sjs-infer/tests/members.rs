@@ -172,7 +172,7 @@ fn a_read_gives_what_every_member_holds() {
     assert_eq!(typed("text.length"), "int32");
     assert_eq!(typed("\"abc\".length"), "int32");
     assert_eq!(typed("dict.anything"), "number | undefined");
-    for later in ["stranger.field", "unknownName.k", "f().k", "console.log"] {
+    for later in ["stranger.field", "unknownName.k", "f().k"] {
         assert_eq!(typed(later), "?", "{later} is a later pass's");
     }
 }

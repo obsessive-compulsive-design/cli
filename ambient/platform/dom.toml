@@ -1,0 +1,53 @@
+# WHATWG DOM Standard, https://dom.spec.whatwg.org/
+
+[EventTarget]
+idl = "DOM §2.7, interface EventTarget"
+sample = "new EventTarget()"
+new = "()"
+addEventListener = "(type: string, callback: (event: Event) => unknown, options?: unknown) => undefined"
+removeEventListener = "(type: string, callback: (event: Event) => unknown, options?: unknown) => undefined"
+dispatchEvent = "(event: Event) => boolean"
+
+[Event]
+idl = "DOM §2.2, interface Event"
+sample = "new Event(\"ready\")"
+new = "(type: string, eventInitDict?: unknown)"
+type = "string"
+target = "EventTarget | null" # nullable
+currentTarget = "EventTarget | null" # nullable
+composedPath = "() => EventTarget[]"
+eventPhase = "int32"
+stopPropagation = "() => undefined"
+stopImmediatePropagation = "() => undefined"
+bubbles = "boolean"
+cancelable = "boolean"
+preventDefault = "() => undefined"
+defaultPrevented = "boolean"
+composed = "boolean"
+isTrusted = "boolean"
+timeStamp = "number"
+
+[CustomEvent]
+idl = "DOM §2.4, interface CustomEvent"
+extends = "Event"
+sample = "new CustomEvent(\"ready\", { detail: 1 })"
+new = "(type: string, eventInitDict?: unknown)"
+detail = "unknown"
+
+[AbortController]
+idl = "DOM §3.1, interface AbortController"
+sample = "new AbortController()"
+new = "()"
+signal = "AbortSignal"
+abort = "(reason?: unknown) => undefined"
+
+[AbortSignal]
+idl = "DOM §3.2, interface AbortSignal"
+extends = "EventTarget"
+sample = "new AbortController().signal"
+static abort = "(reason?: unknown) => AbortSignal"
+static timeout = "(milliseconds: number) => AbortSignal"
+static any = "(signals: AbortSignal[]) => AbortSignal"
+aborted = "boolean"
+reason = "unknown"
+throwIfAborted = "() => undefined"
