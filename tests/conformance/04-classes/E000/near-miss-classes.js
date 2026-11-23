@@ -4,7 +4,9 @@ import { ns } from "./names.js"
 class A extends ns.B {
   static count = 0
   static #registry
-  static async *h() {}
+  static async *h() {
+    yield await Promise.resolve(1)
+  }
   static s() {
     return super.s
   }

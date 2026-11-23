@@ -189,6 +189,18 @@ impl Typer<'_> {
         }
     }
 
+    /// Whether a value of the type `instance` has a method `name`.
+    pub(crate) fn has_method(&mut self, instance: TypeId, name: &str) -> bool {
+        matches!(self.held(instance, name), Held::Method(_))
+    }
+
+    /// Whether `element` is a name of the ambient library: one the file does not
+    /// declare.
+    pub(crate) fn is_global(&self, element: &Element<'_>) -> bool {
+        let reference = self.references.get(&element_span_of(element).byte_start);
+        reference.is_some_and(|&at| self.bindings.references[at].declaration.is_none())
+    }
+
     /// Whether a value of the type `instance` is known to have nothing at `key`.
     pub(crate) fn lacks(&mut self, instance: TypeId, key: &str) -> bool {
         matches!(self.held(instance, key), Held::Missing)

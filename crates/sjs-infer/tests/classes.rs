@@ -45,8 +45,10 @@ fn shown(
         name.map_or(format!("Class{}", class.0), Clone::clone)
     };
     let printer = Printer::new(types, &name);
+    // An `async` function that never awaits is another story's finding (US-094).
     let found = diagnostics
         .iter()
+        .filter(|d| d.code.as_str() != "E118")
         .map(|d| {
             let covered = source.slice(&d.span).expect("in the file");
             format!(

@@ -13,7 +13,7 @@ function* letters() {
 }
 
 async function* ticks() {
-  yield 1
+  yield await Promise.resolve(1)
 }
 
 const pairs = new Map()

@@ -176,7 +176,6 @@ fn a_read_gives_what_every_member_holds() {
         "list.map",
         "text.trim",
         "num.toFixed",
-        "promise.then",
         "stranger.field",
         "unknownName.k",
         "one.k.toFixed",

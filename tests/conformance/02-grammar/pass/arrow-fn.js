@@ -10,7 +10,7 @@ const c = (x, y = 1, ...z) => [x, y, z]
 const d = async (p) => await p
 
 const e = async () => {
-  const one = 1
+  const one = await d(Promise.resolve(1))
   return one
 }
 

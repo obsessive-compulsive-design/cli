@@ -12,13 +12,13 @@ function* h() {
 }
 
 async function* i() {
-  yield await 1
+  yield await Promise.resolve(1)
 }
 
 const j = (a) => a
 
 const k = async (a, { b }, ...c) => {
-  g(b)
+  await Promise.resolve(g(b))
   return [a, c]
 }
 

@@ -4,7 +4,7 @@ function f(a, b = 1, ...rest) {
 }
 
 async function g() {
-  await f(1)
+  await Promise.resolve(f(1))
 }
 
 function* h() {

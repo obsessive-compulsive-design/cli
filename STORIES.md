@@ -3379,7 +3379,42 @@ generator yielding nothing has element `never`; an async generator's `return` va
 `Array.from(iterable)`.
 
 #### US-094 Async typing
-§4.4, E113, E118, E119, E127, E128 · After: US-089 · Size: M · M1
+§4.4, E113, E118, E119, E127, E128 · After: US-089 · Size: M · M1 · **Status: complete** (2026-11-22)
+
+> Delivered in `sjs-infer` (`promises.rs`, with changes to `expressions.rs`,
+> `functions.rs`, `classes.rs`, `members.rs`): `await p` is what `p` resolves to
+> through every promise it is nested in; an `async` function that returns a promise
+> gives what that promise does (`Promise<R>`, never `Promise<Promise<R>>`); and
+> `Promise.resolve`, `reject`, `all`, `allSettled`, `any`, `race`, `withResolvers`
+> and `try` are typed, `all` and `allSettled` place by place for an array literal or a
+> tuple. **Decisions:** (1) E119 is at the operand, once, for the first member of its
+> type that is no promise; a type variable is let through; (2) an instance of a class
+> with a `then` method is awaited as a promise: it gives what the class's `then` calls
+> its first parameter with (`unknown` when that cannot be told), and `.then` on it is
+> an ordinary call, not E128; (3) E113 is at an expression statement that may be a
+> promise, at each such element of an array literal that is a statement, and at an
+> argument passed by name to a function of the file whose parameter is never
+> awaited, returned, passed on or stored; arguments to anything else, `Promise.*`
+> included, count as use; (4) E118 is at the `async` keyword of a declaration, an
+> arrow, a class method or an object method whose own body (not the functions inside
+> it) holds no `await` and no `for await`, async generators included; (5) E127 is at
+> a `new` of the global `Promise`; E128 is at the key of `.then`, `.catch` or
+> `.finally` on a receiver that may be a promise; (6) `Promise.withResolvers()`
+> resolves to what the `resolve` taken from it by a destructuring pattern is called
+> with, else to `unknown`. **Limits:** E113 does not follow a promise through an
+> imported function's parameter or a callback's; `Promise.all` of an iterable that is
+> no array or tuple gives an array; a promise's `then` and the rest have no type.
+> **Older fixtures and tests changed:** fixtures with an `async` function that never
+> awaited, or that awaited a non-promise, now await a promise (`02-grammar/pass/`
+> `arrow-fn.js`, `function-decl.js`, `method-decl.js`; `04-classes/E000/`
+> `near-miss-classes.js`; `04-functions/E000/near-miss-functions.js`;
+> `05-modules/E000/near-miss-exports.js`; the two US-093 fixtures with an async
+> generator); the `sjs-infer` tests of earlier stories leave E118 out of what they
+> compare, and `members.rs` no longer lists `promise.then` as untyped-and-silent.
+> Fixtures: `04-functions/E113/` (3), `E118/` (2), `E119/` (2), `E127/` (2),
+> `E128/` (2). Verified: fmt, both clippy passes, audit, tests, doc tests, 100% line
+> and region coverage, `cargo mutants --in-diff` 83 caught, 0 missed, 9 unviable, no
+> timeout.
 
 **Done when**
 - `async` functions return `Promise<R>`; `await p` is `R`; `await` of a non-promise (or a

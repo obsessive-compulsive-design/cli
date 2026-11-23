@@ -34,7 +34,8 @@ pub(crate) fn statics_of(class: ClassId) -> ClassId {
 pub(crate) enum What<'t> {
     /// A field, with its initializer.
     Field(Option<Element<'t>>),
-    Method,
+    /// A method, with the declaration of its first parameter.
+    Method(Option<usize>),
     Getter,
     /// A setter, with the declaration of its parameter.
     Setter(Option<usize>),
@@ -96,7 +97,7 @@ pub(crate) struct Written {
 }
 
 /// The tokens a member begins with, up to its parameters or its value.
-fn leading(member: NodeRef<'_>) -> Vec<Span> {
+pub(crate) fn leading(member: NodeRef<'_>) -> Vec<Span> {
     let tokens = member.children().map_while(|child| match child {
         Element::Token(token) => Some(token.token()),
         Element::Node(_) => None,
@@ -257,7 +258,7 @@ impl Names<'_> {
                 Some(What::Field(value.and_then(|value| value.children().last())))
             }
             NodeKind::ClassMethod if constructor => None,
-            NodeKind::ClassMethod => Some(What::Method),
+            NodeKind::ClassMethod => Some(What::Method(taken)),
             _ if has("get") => Some(What::Getter),
             _ => Some(What::Setter(taken)),
         };
@@ -289,7 +290,7 @@ impl Names<'_> {
         };
         found.extent += 1;
         let method = match what {
-            What::Method => Some(written.name.clone()),
+            What::Method(_) => Some(written.name.clone()),
             What::Setter(_) => Some(format!("set {}", written.name)),
             What::Field(_) | What::Getter => None,
         };
@@ -581,7 +582,22 @@ impl Typer<'_> {
                     fields.insert(name, ty);
                 }
             }
-            What::Method => {
+            What::Method(taken) => {
+                // What `then` passes on is what an `await` of an instance gives.
+                let passes = taken.filter(|_| name == "then");
+                let calls = passes.and_then(|taken| self.called.get(&taken).cloned());
+                let mut given = Vec::new();
+                for call in calls.unwrap_or_default() {
+                    let parts: Vec<Element<'_>> = call.children().collect();
+                    let value = arguments(&parts).first().copied();
+                    let ty = match value {
+                        Some(value) => self.type_of(value).map(|ty| self.loosened(ty)),
+                        None => Some(TypeId::UNDEFINED),
+                    };
+                    given.extend(ty);
+                }
+                let shape = next.classes.entry(member.side).or_default();
+                shape.resolves = (!given.is_empty()).then(|| self.types.union(given));
                 let signature = next.declarations.get(&member.key).copied();
                 shape
                     .signatures

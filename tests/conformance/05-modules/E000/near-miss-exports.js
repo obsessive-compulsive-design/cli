@@ -9,7 +9,9 @@ c += 1
 
 export function d() {}
 
-export async function e() {}
+export async function e() {
+  await Promise.resolve(1)
+}
 
 export class F {}
 

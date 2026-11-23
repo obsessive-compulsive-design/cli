@@ -1,6 +1,7 @@
 //! The types of literal and primitive expressions (SPEC.md §3.1, §4.1).
 
 use crate::functions::{Passed, Site};
+use crate::promises::consumes;
 use sjs_bind::Bindings;
 use sjs_diag::{Code, Diagnostic, Diagnostics, SourceFile, Span};
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
@@ -25,6 +26,9 @@ pub struct ClassFacts {
     pub base_arguments: Option<Vec<TypeId>>,
     /// The type of its constructor, which is the type of the class as a value.
     pub constructor: Option<TypeId>,
+    /// What its `then` method passes on, when it has one: what an `await` of an
+    /// instance gives.
+    pub resolves: Option<TypeId>,
 }
 
 /// What is known of a file's names before its expressions are typed. Later passes
@@ -101,6 +105,9 @@ pub struct Typer<'a> {
     pub(crate) loose: BTreeSet<usize>,
     /// The calls of each declaration by name.
     pub(crate) called: BTreeMap<usize, Vec<NodeRef<'a>>>,
+    /// The declarations used somewhere as a promise is: awaited, returned, passed on
+    /// or stored.
+    pub(crate) consumed: BTreeSet<usize>,
     /// The arrows typed as values, by where each begins: `None` for one that has no
     /// type, or that is being typed.
     pub(crate) arrows: BTreeMap<usize, Option<TypeId>>,
@@ -152,9 +159,18 @@ impl<'a> Typer<'a> {
             .map(|(at, reference)| (reference.span.byte_start, at))
             .collect();
         let mut calls: BTreeMap<usize, Vec<NodeRef<'a>>> = BTreeMap::new();
+        let mut consumed = BTreeSet::new();
         let mut pending = vec![tree.root()];
         while let Some(node) = pending.pop() {
             pending.extend(nodes(node));
+            for (at, child) in node.children().enumerate() {
+                let reference = match child {
+                    Element::Token(name) => references.get(&name.token().span.byte_start),
+                    Element::Node(_) => None,
+                };
+                let named = reference.and_then(|&at| bindings.references[at].declaration);
+                consumed.extend(named.filter(|_| consumes(node, at)));
+            }
             let name = match node.children().next() {
                 Some(Element::Token(name)) if node.kind() == NodeKind::CallExpr => {
                     references.get(&name.token().span.byte_start)
@@ -186,6 +202,7 @@ impl<'a> Typer<'a> {
             locals: BTreeMap::new(),
             loose: BTreeSet::new(),
             called: calls,
+            consumed,
             arrows: BTreeMap::new(),
             origins: BTreeMap::new(),
             diagnostics: Diagnostics::new(),
@@ -340,6 +357,9 @@ impl<'a> Typer<'a> {
                         let argument = argument.and_then(|argument| self.type_of(argument));
                         argument.and_then(|shape| self.keys_of(shape, text == "Object.entries"))
                     }
+                    (true, name) if name.starts_with("Promise.") => {
+                        self.promise_call(&name["Promise.".len()..], node, &children)
+                    }
                     (true, "Iterator.from" | "Array.from") => {
                         let argument = children.get(2).copied().filter(|_| children.len() == 4);
                         let argument = argument.and_then(|argument| self.type_of(argument));
@@ -376,6 +396,7 @@ impl<'a> Typer<'a> {
                 let inside = children.first().copied();
                 inside.and_then(|inside| self.type_of(inside))
             }
+            NodeKind::AwaitExpr => self.await_of(node, &children),
             _ => None,
         }
     }
@@ -754,6 +775,7 @@ pub fn check_expressions(
         judge.mixed_returns(node);
         judge.class_rules(node);
         judge.loop_rule(node, &children);
+        judge.promise_rules(node, &children);
         let operates = matches!(
             node.kind(),
             NodeKind::BinaryExpr
@@ -762,6 +784,7 @@ pub fn check_expressions(
                 | NodeKind::CallExpr
                 | NodeKind::NewExpr
                 | NodeKind::ArrowFunction
+                | NodeKind::AwaitExpr
         );
         if operates {
             judge.type_of(Element::Node(node));

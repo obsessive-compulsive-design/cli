@@ -374,7 +374,11 @@ impl Typer<'_> {
         };
         match flavor {
             Flavor::Plain => Some(ty),
-            Flavor::Async => Some(self.types.intern(Type::Promise(ty))),
+            Flavor::Async => {
+                // A promise returned is waited for: what comes of it is what it gives.
+                let settled = self.awaited(ty);
+                Some(self.types.intern(Type::Promise(settled)))
+            }
             Flavor::Generator | Flavor::AsyncGenerator => {
                 let asynchronous = flavor == Flavor::AsyncGenerator;
                 let yields = self.yields(body, asynchronous)?;

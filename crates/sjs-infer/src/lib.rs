@@ -22,7 +22,8 @@
 //! constructors and static members, `extends`, and classes generic in what their
 //! constructor is passed (E114, E129, E137, E138). US-093 types iteration: what
 //! `for…of`, a spread and the iterator helpers take from arrays, strings, `Map`s, `Set`s,
-//! generators and iterable classes (E138 for what is no iterable).
+//! generators and iterable classes (E138 for what is no iterable). US-094 types `await`
+//! and the statics of `Promise`, and judges promises (E113, E118, E119, E127, E128).
 
 mod bindings;
 mod classes;
@@ -35,6 +36,7 @@ mod members;
 mod mutation;
 mod operators;
 mod program;
+mod promises;
 
 pub use bindings::infer_bindings;
 pub use expressions::{check_expressions, ClassFacts, Facts, Typer};

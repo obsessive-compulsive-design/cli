@@ -46,8 +46,10 @@ fn checked(text: &str) -> Checked {
     let facts = infer_bindings(&source, &tree, &bindings, &facts, &mut types);
     let diagnostics = check_expressions(&source, &tree, &bindings, &facts, &mut types);
     let printer = Printer::new(&types, &class_name);
+    // An `async` function that never awaits is another story's finding (US-094).
     let found = diagnostics
         .iter()
+        .filter(|d| d.code.as_str() != "E118")
         .map(|d| {
             let covered = source.slice(&d.span).expect("in the file");
             format!(
