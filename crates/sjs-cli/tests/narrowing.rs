@@ -45,6 +45,7 @@ struct Form {
 
 const MISSING: &str = "E137 missing-property";
 const MISMATCH: &str = "E138 type-mismatch";
+const SETTLED: &str = "E121 constant-condition";
 
 #[allow(clippy::too_many_lines)]
 fn forms() -> Vec<Form> {
@@ -76,7 +77,7 @@ fn forms() -> Vec<Form> {
             when: Use {
                 text: "subject ?? \"b\"",
                 default: "\"b\"",
-                refused: (MISMATCH, 0),
+                refused: (SETTLED, 0),
             },
             unless: Some(key("subject.length", "0")),
         },
@@ -89,7 +90,7 @@ fn forms() -> Vec<Form> {
             when: Use {
                 text: "subject ?? 0",
                 default: "0",
-                refused: (MISMATCH, 0),
+                refused: (SETTLED, 0),
             },
             unless: Some(key("subject.index", "0")),
         },

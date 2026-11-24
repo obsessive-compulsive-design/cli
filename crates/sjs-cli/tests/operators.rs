@@ -73,9 +73,11 @@ const BINARY: [(&str, &str, Row); 21] = [
     ("nullish", "??", Row::Nullish),
 ];
 
+const E102: &str = "E102 ambiguous-truthiness";
 const E104: &str = "E104 bitwise-on-double";
 const E105: &str = "E105 no-overlap";
 const E120: &str = "E120 self-assign-or-compare";
+const E121: &str = "E121 constant-condition";
 const E138: &str = "E138 type-mismatch";
 
 /// Where a finding is, in `left operator right`.
@@ -115,7 +117,8 @@ fn judged(row: Row, left: Kind, right: Kind) -> Option<(&'static str, At)> {
         Row::Equality if left != right => return Some((E105, At::Operator)),
         Row::Logical if left != Kind::Boolean => return Some((E138, At::Left)),
         Row::Logical if right != Kind::Boolean => return Some((E138, At::Right)),
-        Row::Nullish if left != Kind::Undefined => return Some((E138, At::Left)),
+        // A left that is never absent makes `??` always its left.
+        Row::Nullish if left != Kind::Undefined => return Some((E121, At::Left)),
         Row::Equality | Row::Logical | Row::Nullish => true,
     };
     if accepted {
@@ -132,7 +135,11 @@ fn judged_one(operator: &str, operand: Kind) -> Option<&'static str> {
         "-" | "+" if numeric => None,
         "~" if matches!(operand, Kind::Int32 | Kind::BigInt) => None,
         "~" if operand == Kind::Number => Some(E104),
-        "!" | "?" if operand == Kind::Boolean => None,
+        "!" if operand == Kind::Boolean => None,
+        // A condition written `true` is always the same.
+        "?" if operand == Kind::Boolean => Some(E121),
+        // What is asked for its truth and is no boolean (US-112).
+        "!" | "?" => Some(E102),
         "typeof " => None,
         _ => Some(E138),
     }
@@ -203,7 +210,9 @@ fn generated() -> BTreeMap<String, String> {
         for (operand, text) in KINDS {
             let line = Line {
                 expression: format!("{operator}{text}"),
-                expected: judged_one(operator, operand).map(|code| (code, operator.len())),
+                // What `!` refuses is the whole `!x`: it is what is written anew.
+                expected: judged_one(operator, operand)
+                    .map(|code| (code, if code == E102 { 0 } else { operator.len() })),
             };
             add(name, line);
         }
@@ -286,7 +295,7 @@ fn every_operator_has_what_it_accepts_and_what_it_refuses() {
             files.contains_key(&format!("pass/{name}.js")),
             "{name} accepts nothing"
         );
-        let refused = ["E138", "E104", "E105"]
+        let refused = ["E138", "E104", "E105", "E121"]
             .iter()
             .any(|code| files.contains_key(&format!("{code}/{name}.js")));
         assert!(refused, "{name} refuses nothing");
@@ -312,7 +321,10 @@ fn every_operator_has_what_it_accepts_and_what_it_refuses() {
         text("E138/negate.js").contains("= -\"a\"\n")
             && text("pass/typeof.js").contains("= typeof undefined\n")
     );
-    assert!(!files.contains_key("E138/typeof.js") && files.contains_key("E138/conditional.js"));
+    assert!(!files.contains_key("E138/typeof.js") && files.contains_key("E102/conditional.js"));
+    assert!(text("E121/conditional.js").contains("= true ? 1 : 2\n"));
+    assert!(text("E102/not.js").starts_with("// expect: E102 ambiguous-truthiness @8:21\n"));
+    assert!(text("E121/nullish.js").contains("= 1 ?? undefined\n"));
     assert!(text("E120/equal.js").contains("= undefined === undefined\n"));
     assert!(text("E120/less.js").starts_with("// expect: E120 self-assign-or-compare @4:21\n"));
     assert_eq!(

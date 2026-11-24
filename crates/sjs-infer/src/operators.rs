@@ -3,6 +3,7 @@
 //! `int32` E104, `===` between types that share no value E105, and an operand
 //! compared with or assigned to itself E120.
 
+use crate::conditions::is_asked;
 use crate::expressions::{element_span_of, punct, Typer};
 use sjs_diag::Code;
 use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, TokenKind};
@@ -182,10 +183,8 @@ impl Typer<'_> {
                 Some(self.types.union(literals))
             }
             TokenKind::Punct(Punct::Bang) => {
-                let wrong = ty.filter(|&ty| self.kind(ty) != Kind::Boolean);
-                if let Some(wrong) = wrong {
-                    mismatch(self, "a boolean", wrong);
-                }
+                // What `!` negates is asked for its truth.
+                self.asked(first, &children[children.len() - 1], ty, Some(node));
                 Some(TypeId::BOOLEAN)
             }
             TokenKind::Punct(Punct::Tilde) => {
@@ -235,14 +234,10 @@ impl Typer<'_> {
     ) -> Option<TypeId> {
         let first = self.first_time(node);
         let part = |at: usize| children.get(at).copied();
-        let condition = part(0).and_then(|condition| Some((condition, self.type_of(condition)?)));
-        if let Some((condition, ty)) = condition.filter(|&(_, ty)| self.kind(ty) != Kind::Boolean) {
-            let message = format!(
-                "the condition of `?:` is a boolean: this is a `{}` (SPEC.md §4.1)",
-                self.print_type(ty)
-            );
-            self.report(first, Code::E138, element_span_of(&condition), message);
-        }
+        let condition = children[0];
+        let ty = self.type_of(condition);
+        self.asked(first, &condition, ty, None);
+        self.settled_test(first, node, condition);
         let then = part(2).and_then(|then| self.type_of(then));
         let otherwise = part(4).and_then(|otherwise| self.type_of(otherwise));
         then.zip(otherwise)
@@ -286,6 +281,13 @@ impl Typer<'_> {
             return Some(TypeId::BOOLEAN);
         }
         match sign {
+            // In a condition, each side is asked for its truth.
+            Punct::AmpAmp | Punct::PipePipe if is_asked(node) => {
+                self.asked(first, &left, lt, None);
+                self.asked(first, &right, rt, None);
+                Some(TypeId::BOOLEAN)
+            }
+            // As a value it is one of its sides: both are booleans.
             Punct::AmpAmp | Punct::PipePipe => {
                 for (side, ty) in [(left, lt), (right, rt)] {
                     let wrong = ty.filter(|&ty| self.kind(ty) != Kind::Boolean);
@@ -308,7 +310,7 @@ impl Typer<'_> {
                         "the left of `??` is a `{}`, which is never `undefined` or `null`: the right is never used (SPEC.md §4.1)",
                         self.print_type(lt)
                     );
-                    self.report(first, Code::E138, element_span_of(&left), message);
+                    self.report(first, Code::E121, element_span_of(&left), message);
                     return Some(lt);
                 }
                 Some(self.types.union([present, rt]))

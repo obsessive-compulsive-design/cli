@@ -1,7 +1,7 @@
 // CondExpr: a conditional, nested to the right and in each branch.
 import { f } from "./names.js"
 
-const a = true
+const a = f() === 0
 
 const b = a ? 1 : 2
 

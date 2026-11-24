@@ -105,7 +105,7 @@ fn typeof_narrows_to_the_kind_and_removes_it() {
     );
     // Only `typeof` asks the kind: `!flag` is no `typeof flag`.
     let c = checked(
-        "const flag = Math.random() < 0.5\nconst z = !flag === \"string\" ? flag : false\n",
+        "const flag = Math.random() < 0.5\nconst other = Math.random() < 0.5\nconst z = !flag === \"string\" ? flag : false\n",
     );
     assert_eq!((c.of("z"), c.found.len()), ("boolean", 1));
 }
@@ -123,7 +123,7 @@ fn equality_narrows_to_the_value_and_removes_it() {
     let text = "const m = /a/v.exec(\"a\")\nconst a = m === null ? 0 : m.index\nconst b = m !== null ? m : 0\nconst c = m === null ? m : 0\n";
     assert_eq!(types(text, &["a", "c"]), ["int32", "0 | null"]);
     // A literal: the value itself, and what is left without it.
-    let text = "const flag = Math.random() < 0.5\nconst v = flag ? \"a\" : flag ? 2 : false\nconst a = v === \"a\" ? v : \"\"\nconst b = v === \"a\" ? 0 : v\nconst c = v !== 2 ? v : 0\nconst d = flag === true ? 1 : flag\nconst e = flag !== false ? flag : 1\nconst g = v !== false ? v : 0\nconst h = (v) === 2 ? 0 : v\n";
+    let text = "const flag = Math.random() < 0.5\nconst other = Math.random() < 0.5\nconst v = flag ? \"a\" : other ? 2 : false\nconst a = v === \"a\" ? v : \"\"\nconst b = v === \"a\" ? 0 : v\nconst c = v !== 2 ? v : 0\nconst d = flag === true ? 1 : flag\nconst e = flag !== false ? flag : 1\nconst g = v !== false ? v : 0\nconst h = (v) === 2 ? 0 : v\n";
     assert_eq!(
         types(text, &["a", "b", "c", "d", "e", "g", "h"]),
         [
@@ -137,7 +137,7 @@ fn equality_narrows_to_the_value_and_removes_it() {
         ]
     );
     // A test that is no branch tells nothing, and `?.` is no path of keys.
-    let text = "const flag = Math.random() < 0.5\nconst p = flag ? \"a\" : undefined\nconst pair = [p === undefined, p ?? \"b\"]\nconst z = p\nconst o = flag ? { v: p } : undefined\nconst q = o?.v === undefined ? 0 : o?.v\n";
+    let text = "const flag = Math.random() < 0.5\nconst other = Math.random() < 0.5\nconst p = flag ? \"a\" : undefined\nconst pair = [p === undefined, p ?? \"b\"]\nconst z = p\nconst o = flag ? { v: p } : undefined\nconst q = o?.v === undefined ? 0 : o?.v\n";
     assert_eq!(
         types(text, &["z", "q"]),
         ["\"a\" | undefined", "0 | \"a\" | undefined"]
@@ -255,7 +255,7 @@ fn the_boundary_idiom_narrows_what_may_be_anything() {
         types(text, &["a", "b", "n"]),
         ["{ name: unknown }", "string", "int32"]
     );
-    let text = "const raw = JSON.parse(\"1\")\nconst a = Object.hasOwn(raw, \"x\") && Object.hasOwn(raw, \"y\") ? raw : 0\nconst b = Object.hasOwn(raw, \"x\") ? 0 : raw\nconst key = \"k\"\nconst c = Object.hasOwn(raw, key) ? raw : 0\nconst flag = Math.random() < 0.5\nconst s = flag ? { x: 1 } : flag ? { y: 2 } : \"s\"\nconst d = Object.hasOwn(s, \"x\") ? s : 0\nconst e = Object.hasOwn(s, \"x\") ? 0 : s\n";
+    let text = "const raw = JSON.parse(\"1\")\nconst a = Object.hasOwn(raw, \"x\") && Object.hasOwn(raw, \"y\") ? raw : 0\nconst b = Object.hasOwn(raw, \"x\") ? 0 : raw\nconst key = \"k\"\nconst c = Object.hasOwn(raw, key) ? raw : 0\nconst flag = Math.random() < 0.5\nconst other = Math.random() < 0.5\nconst s = flag ? { x: 1 } : other ? { y: 2 } : \"s\"\nconst d = Object.hasOwn(s, \"x\") ? s : 0\nconst e = Object.hasOwn(s, \"x\") ? 0 : s\n";
     assert_eq!(
         types(text, &["a", "b", "c", "d", "e"]),
         [
@@ -316,10 +316,10 @@ fn a_switch_narrows_case_by_case() {
             "int32 | bigint | string | undefined"
         ]
     );
-    let text = "const flag = Math.random() < 0.5\nconst v = flag ? \"a\" : flag ? \"b\" : \"c\"\nfunction f() {\n  switch (v) {\n    case \"a\": {\n      return v\n    }\n    default: {\n      const rest = v\n      return rest\n    }\n  }\n}\nexport const r = f()\n";
+    let text = "const flag = Math.random() < 0.5\nconst other = Math.random() < 0.5\nconst v = flag ? \"a\" : other ? \"b\" : \"c\"\nfunction f() {\n  switch (v) {\n    case \"a\": {\n      return v\n    }\n    default: {\n      const rest = v\n      return rest\n    }\n  }\n}\nexport const r = f()\n";
     assert_eq!(types(text, &["rest"]), ["\"b\" | \"c\""]);
     // A value that is an expression: `-1`.
-    let text = "const flag = Math.random() < 0.5\nconst n = flag ? -1 : flag ? 2 : 3\nfunction f() {\n  switch (n) {\n    case -1: {\n      return n\n    }\n    default: {\n      const others = n\n      return others\n    }\n  }\n}\nexport const r = f()\n";
+    let text = "const flag = Math.random() < 0.5\nconst other = Math.random() < 0.5\nconst n = flag ? -1 : other ? 2 : 3\nfunction f() {\n  switch (n) {\n    case -1: {\n      return n\n    }\n    default: {\n      const others = n\n      return others\n    }\n  }\n}\nexport const r = f()\n";
     assert_eq!(types(text, &["others"]), ["2 | 3"]);
 }
 
@@ -394,7 +394,7 @@ fn an_alias_of_typeof_narrows_what_it_was_taken_of() {
 
 #[test]
 fn an_arrow_keeps_what_was_told_of_a_name_never_assigned() {
-    let text = "const p = Math.random() < 0.5 ? \"a\" : undefined\nfunction f() {\n  let x = p\n  const o = { v: p }\n  if (p !== undefined && x !== undefined && o.v !== undefined) {\n    const a = [1].map(() => p)\n    const b = [1].map(() => x)\n    const c = [1].map(() => o.v)\n    const d = [1].map((q) => (typeof q === \"number\" ? q : p))\n    x = p\n    function later() {\n      return p\n    }\n    return [a, b, c, d, later()]\n  }\n  return 0\n}\nexport const r = f()\nclass K {\n  field = p === undefined ? 0 : p\n  static tag = p === undefined ? 0 : p\n  m(v = p) {\n    return v\n  }\n}\nexport const k = p === undefined ? 0 : new K()\n";
+    let text = "const p = Math.random() < 0.5 ? \"a\" : undefined\nfunction f() {\n  let x = p\n  const o = { v: p }\n  if (p !== undefined && x !== undefined && o.v !== undefined) {\n    const a = [1].map(() => p)\n    const b = [1].map(() => x)\n    const c = [1].map(() => o.v)\n    const d = [1].map((q) => (q > 0 ? q : p))\n    x = p\n    function later() {\n      return p\n    }\n    return [a, b, c, d, later()]\n  }\n  return 0\n}\nexport const r = f()\nclass K {\n  field = p === undefined ? 0 : p\n  static tag = p === undefined ? 0 : p\n  m(v = p) {\n    return v\n  }\n}\nexport const k = p === undefined ? 0 : new K()\n";
     let c = checked(text);
     assert_eq!(c.found, [""; 0]);
     assert_eq!(

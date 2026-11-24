@@ -3874,7 +3874,36 @@ intersection; narrowing in a loop condition; narrowing through a `const` alias o
 `typeof x`; reset at the loop back-edge for a `let` assigned in the body.
 
 #### US-112 Truthiness, boolean conditions and constant conditions
-§3.5, §4.3, E102, E121 · After: US-111 · Size: S · M2
+§3.5, §4.3, E102, E121 · After: US-111 · Size: S · M2 · **Status: complete** (2026-11-23)
+
+> Delivered in `sjs-infer` (`conditions.rs`: `asked`, `settled_test`, `test_rule`,
+> with changes to `operators.rs`, `narrowing.rs` and `functions.rs`). Tests:
+> `crates/sjs-infer/tests/conditions.rs`; fixtures under `03-flow/E102`,
+> `03-flow/pass/truthiness.js` and `08-structure/E121`; the generated operator table
+> (`04-operators/table`) and narrowing matrix follow the new codes.
+> **Decisions:** (1) what is asked for its truth is the test of an `if`, a `while`
+> or a `?:`, what `!` negates, and each side of `&&` and `||` when the whole is
+> itself asked; as a value `&&` and `||` still take two booleans (E138), for they
+> give one of their sides; (2) a value may be asked when it is `undefined` or `null`
+> or else never false; a literal that is not `""`, `0`, `0n` or `false` is never
+> false, so `"a" | undefined` may be asked; (3) anything else is E102, which
+> replaces the E138 of US-088 for `!x` and `x ? a : b`, an object that is never
+> absent included; the finding carries the comparison as its replacement when the
+> operand is a name, a member access or a call: `x !== undefined` (or `null`),
+> `x.length > 0`, `x !== 0`, `x !== ""`, `x !== 0n`, and for `!x` the opposite
+> (`x.length === 0`) over the whole `!x`; (4) truthiness narrows: true removes
+> `undefined`, `null` and the false literals and makes a `boolean` `true`; false
+> removes what is never false and makes a `boolean` `false`; (5) E121 is for the
+> test of an `if`, a `while` or a `?:` that is a boolean literal type (written, a
+> `const`, or narrowed), a `===`/`!==` of two values each known to be the same one
+> value (`typeof x === "string"` once `x` is a string), or the `!` of one; a
+> comparison of values that share none stays E105; (6) a `while` whose test is
+> always true is E121 only when nothing in its body leaves it (`return`, `throw`,
+> or a `break` not bound to an inner loop or `switch`); (7) `??` on a left that is
+> never absent is E121 now, not E138; (8) a function that ends in `while (true)`
+> without a `break` of its own does not run off its end (no E111).
+> Verified: fmt, both clippy passes, audit, all tests, 100% line and region
+> coverage, `cargo mutants` on the diff with 0 missed and 0 timeouts.
 
 **Done when**
 - `if`, `while`, `?:`, `!`, `&&`, `||` require `boolean`; on `T | undefined` where `T`

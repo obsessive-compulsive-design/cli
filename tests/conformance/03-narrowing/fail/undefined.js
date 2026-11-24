@@ -1,19 +1,19 @@
 // expect: E137 missing-property @24:20
-// expect: E138 type-mismatch @32:12
-// expect: E138 type-mismatch @42:12
+// expect: E121 constant-condition @32:12
+// expect: E121 constant-condition @42:12
 // expect: E137 missing-property @51:20
-// expect: E138 type-mismatch @60:10
+// expect: E121 constant-condition @60:10
 // expect: E137 missing-property @68:18
 // expect: E137 missing-property @73:42
-// expect: E138 type-mismatch @78:34
-// expect: E138 type-mismatch @83:40
+// expect: E121 constant-condition @78:34
+// expect: E121 constant-condition @83:40
 // expect: E137 missing-property @88:46
 // expect: E137 missing-property @93:48
-// expect: E138 type-mismatch @98:40
-// expect: E138 type-mismatch @103:40
+// expect: E121 constant-condition @98:40
+// expect: E121 constant-condition @103:40
 // expect: E137 missing-property @108:48
 // expect: E137 missing-property @114:20
-// expect: E138 type-mismatch @122:12
+// expect: E121 constant-condition @122:12
 // Generated, not written by hand:
 // SJS_UPDATE_SNAPSHOTS=1 cargo test -p sjs-cli --test narrowing
 const isIt = (value, wanted) => value === wanted

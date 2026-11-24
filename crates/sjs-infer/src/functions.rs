@@ -6,6 +6,7 @@
 //! `new` of what is no class (E139), a body that returns a value on some paths only
 //! (E111).
 
+use crate::conditions::leaves;
 use crate::expressions::{element_span_of, nodes, punct, Facts, Typer};
 use crate::generics::{uses_in, Says};
 use crate::mutation::arguments;
@@ -160,6 +161,14 @@ fn ends(block: NodeRef<'_>) -> bool {
             clauses.iter().any(is_default) && bodies.into_iter().all(ends)
         }
         NodeKind::ReturnStmt | NodeKind::ThrowStmt => true,
+        // `while (true)` is left only by a `break` of its own.
+        NodeKind::WhileStmt => {
+            let forever = matches!(
+                last.children().nth(2),
+                Some(Element::Token(test)) if test.token().kind == TokenKind::Bool(true)
+            );
+            forever && !leaves(last, false, false)
+        }
         NodeKind::Block => ends(last),
         NodeKind::IfStmt => {
             let has_else = last.children().any(|part| {

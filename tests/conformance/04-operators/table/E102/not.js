@@ -1,8 +1,8 @@
-// expect: E138 type-mismatch @8:22
-// expect: E138 type-mismatch @10:22
-// expect: E138 type-mismatch @12:22
-// expect: E138 type-mismatch @14:22
-// expect: E138 type-mismatch @16:22
+// expect: E102 ambiguous-truthiness @8:21
+// expect: E102 ambiguous-truthiness @10:21
+// expect: E102 ambiguous-truthiness @12:21
+// expect: E102 ambiguous-truthiness @14:21
+// expect: E102 ambiguous-truthiness @16:21
 // Generated from the table of SPEC.md §4.1, not written by hand:
 // SJS_UPDATE_SNAPSHOTS=1 cargo test -p sjs-cli --test operators
 export const use1 = !1.5

@@ -1,4 +1,5 @@
-// expect: E117 unreachable-code @16:3
+// expect: E121 constant-condition @6:10
+// expect: E117 unreachable-code @17:3
 // The `break` leaves the `switch`, not the loop: the loop never ends, and what follows
 // it never runs.
 export function drain(next, sink) {

@@ -520,6 +520,11 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// Pushes a finding made elsewhere.
+    pub(crate) fn push(&mut self, found: Diagnostic) {
+        self.diagnostics.push(found);
+    }
+
     /// Pushes a finding with related locations in this file.
     pub(crate) fn report_related(
         &mut self,
@@ -863,6 +868,7 @@ pub fn check_expressions(
         judge.mixed_returns(node);
         judge.class_rules(node);
         judge.loop_rule(node, &children);
+        judge.test_rule(node, &children);
         judge.promise_rules(node, &children);
         judge.made_rules(node, &children);
         let operates = matches!(

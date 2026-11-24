@@ -403,15 +403,15 @@ fn boolean_operators_take_booleans() {
         "E138 @11 maybe",
         "the first that is none, once"
     );
-    assert_eq!(refused("!num"), "E138 @12 num");
-    assert_eq!(refused("!maybe"), "E138 @12 maybe");
-    assert_eq!(refused("!obj"), "E138 @12 obj");
+    assert_eq!(refused("!num"), "E102 @11 !num");
+    assert_eq!(refused("!maybe"), "E102 @11 !maybe");
+    assert_eq!(refused("!obj"), "E102 @11 !obj");
     assert_eq!(checked("const x = num && str\n").0, "boolean");
     assert_eq!(
         checked("num && flag\n!str\n").2,
         [
             "`&&` takes booleans: this is a `number`; use `??` for a default and `?:` to choose (SPEC.md §4.1)",
-            "`!` takes a boolean: this is a `string` (SPEC.md §4.1)",
+            "a `string` is asked for its truth: a condition is a boolean, or a value that is `undefined` or else never false; write `str === \"\"` (SPEC.md §3.5)",
         ]
     );
 }
@@ -423,8 +423,8 @@ fn nullish_coalescing_and_the_conditional() {
     assert_eq!(typed("undefined ?? 1"), "1");
     assert_eq!(typed("maybe ?? later()"), "?");
     assert_eq!(typed("later() ?? 1"), "?");
-    assert_eq!(refused("num ?? 1"), "E138 @11 num");
-    assert_eq!(refused("obj ?? obj"), "E138 @11 obj");
+    assert_eq!(refused("num ?? 1"), "E121 @11 num");
+    assert_eq!(refused("obj ?? obj"), "E121 @11 obj");
     assert_eq!(
         checked("const x = str ?? 1\n").0,
         "string",
@@ -435,14 +435,14 @@ fn nullish_coalescing_and_the_conditional() {
     assert_eq!(typed("later() ? 1 : 2"), "1 | 2");
     assert_eq!(typed("flag ? later() : 2"), "?");
     assert_eq!(typed("flag ? 1 : later()"), "?");
-    assert_eq!(refused("num ? 1 : 2"), "E138 @11 num");
-    assert_eq!(refused("maybe ? 1 : 2"), "E138 @11 maybe");
+    assert_eq!(refused("num ? 1 : 2"), "E102 @11 num");
+    assert_eq!(refused("maybe ? 1 : 2"), "E102 @11 maybe");
     assert_eq!(checked("const x = str ? 1 : 2\n").0, "1 | 2");
     assert_eq!(
         checked("num ?? 1\nnum ? 1 : 2\n").2,
         [
             "the left of `??` is a `number`, which is never `undefined` or `null`: the right is never used (SPEC.md §4.1)",
-            "the condition of `?:` is a boolean: this is a `number` (SPEC.md §4.1)",
+            "a `number` is asked for its truth: a condition is a boolean, or a value that is `undefined` or else never false; write `num !== 0` (SPEC.md §3.5)",
         ]
     );
 }

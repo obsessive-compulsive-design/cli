@@ -46,6 +46,8 @@ enum Check<'t> {
     IsArray,
     /// `Number.isNaN(p)`.
     IsNan,
+    /// `p`, asked for its truth.
+    Truthy,
 }
 
 /// A test of a path: what holds of it when the test does, or when it does not
@@ -243,6 +245,35 @@ impl<'t> Reader<'_, 't> {
         }
     }
 
+    /// The tests the `case`s of a `switch` are, each by the bytes of its value: the
+    /// subject compared with that value.
+    fn switch(&self, node: NodeRef<'t>) -> Vec<(Range, Vec<Test<'t>>)> {
+        let mut parts = node.children();
+        let subject = parts.find(|part| punct(Some(part)) == Some(Punct::LParen));
+        let subject = subject.and_then(|_| parts.next());
+        let clauses = nodes(node).filter(|part| part.kind() == NodeKind::CaseClause);
+        let labels = clauses.flat_map(nodes);
+        let labels = labels.filter(|part| part.kind() == NodeKind::CaseLabel);
+        let mut found = Vec::new();
+        for label in labels {
+            // `case`, the value, `:`: a literal, with its sign.
+            let written = label.tokens();
+            let value = written.get(1..written.len().saturating_sub(1));
+            let value = value.unwrap_or_default();
+            let ends = value.first().zip(value.last());
+            let parts: Vec<Element<'t>> = label.children().collect();
+            let literal = parts.iter().rev().nth(1).copied();
+            let Some(((first, last), literal)) = ends.zip(literal) else {
+                continue;
+            };
+            let at = (first.span.byte_start, last.span.byte_end);
+            let minus = first.kind == TokenKind::Punct(Punct::Minus);
+            let tests = subject.map(|subject| self.equality(&subject, &literal, false, minus));
+            found.push((at, tests.unwrap_or_default()));
+        }
+        found
+    }
+
     /// The test a call is: of a static of a global that tells what its argument is.
     fn call(&self, node: NodeRef<'t>) -> Vec<Test<'t>> {
         let parts: Vec<Element<'t>> = node.children().collect();
@@ -276,6 +307,34 @@ impl<'t> Reader<'_, 't> {
     }
 }
 
+/// What a node asks for its truth: the test of an `if`, a `while` or a `?:`, what
+/// `!` negates, each side of `&&` and `||`; each without its parentheses, as the
+/// graph branches on what is inside them.
+fn asked_in<'t>(node: NodeRef<'t>, parts: &[Element<'t>]) -> Vec<Element<'t>> {
+    let asked: Vec<Element<'t>> = match (node.kind(), parts) {
+        (NodeKind::IfStmt | NodeKind::WhileStmt, [_, _, test, ..])
+        | (NodeKind::CondExpr, [test, ..]) => vec![*test],
+        // Of the operators, only `!`, `&&` and `||` branch on an operand: a test of
+        // another's operand is one the graph never asks.
+        (NodeKind::UnaryExpr, [_, operand]) => vec![*operand],
+        (NodeKind::BinaryExpr, [left, _, right]) => vec![*left, *right],
+        _ => Vec::new(),
+    };
+    let mut bare = Vec::new();
+    for asked in asked {
+        let mut inside = asked;
+        while let Element::Node(wrapped) = inside {
+            let within = wrapped.children().nth(1);
+            match within.filter(|_| wrapped.kind() == NodeKind::ParenExpr) {
+                Some(within) => inside = within,
+                None => break,
+            }
+        }
+        bare.push(inside);
+    }
+    bare
+}
+
 impl<'t> Narrowing<'t> {
     /// Reads the tests of a file, and what it assigns to.
     pub(crate) fn new(
@@ -299,6 +358,7 @@ impl<'t> Narrowing<'t> {
         };
         let mut shared = BTreeSet::new();
         let mut testing: Vec<NodeRef<'t>> = Vec::new();
+        let mut truths: BTreeMap<Range, Vec<Test<'t>>> = BTreeMap::new();
         // Each node, with the function it is in.
         let mut pending = vec![(tree.root(), (0, usize::MAX))];
         while let Some((node, around)) = pending.pop() {
@@ -322,6 +382,16 @@ impl<'t> Narrowing<'t> {
                 }
             }
             let parts: Vec<Element<'t>> = node.children().collect();
+            for inside in asked_in(node, &parts) {
+                let span = crate::expressions::element_span_of(&inside);
+                let test = reader.names.path(&inside).map(|path| Test {
+                    path,
+                    check: Check::Truthy,
+                    negated: false,
+                });
+                let at = (span.byte_start, span.byte_end);
+                truths.extend(test.map(|test| (at, vec![test])));
+            }
             match (node.kind(), parts.as_slice()) {
                 (NodeKind::ConstDecl, [_, Element::Token(name), Element::Node(value)]) => {
                     let declared = declared_at.get(&name.token().span.byte_start);
@@ -334,7 +404,7 @@ impl<'t> Narrowing<'t> {
                 _ => {}
             }
         }
-        let mut tests: BTreeMap<Range, Vec<Test<'t>>> = BTreeMap::new();
+        let mut tests = truths;
         let mut cases = BTreeSet::new();
         for node in testing {
             let found = match node.kind() {
@@ -342,31 +412,8 @@ impl<'t> Narrowing<'t> {
                 NodeKind::CallExpr => reader.call(node),
                 // Each `case` is the subject compared with its value.
                 _ => {
-                    let mut parts = node.children();
-                    let subject = parts.find(|part| punct(Some(part)) == Some(Punct::LParen));
-                    let subject = subject.and_then(|_| parts.next());
-                    let clauses = nodes(node).filter(|part| part.kind() == NodeKind::CaseClause);
-                    let labels = clauses.flat_map(nodes);
-                    let labels = labels.filter(|part| part.kind() == NodeKind::CaseLabel);
-                    for label in labels {
-                        // `case`, the value, `:`: a literal, with its sign.
-                        let written = label.tokens();
-                        let value = written.get(1..written.len().saturating_sub(1));
-                        let value = value.unwrap_or_default();
-                        let ends = value.first().zip(value.last());
-                        let parts: Vec<Element<'t>> = label.children().collect();
-                        let literal = parts.iter().rev().nth(1).copied();
-                        let Some(((first, last), literal)) = ends.zip(literal) else {
-                            continue;
-                        };
-                        let at = (first.span.byte_start, last.span.byte_end);
-                        let minus = first.kind == TokenKind::Punct(Punct::Minus);
-                        let found = subject
-                            .map(|subject| reader.equality(&subject, &literal, false, minus));
-                        tests
-                            .entry(at)
-                            .or_default()
-                            .extend(found.unwrap_or_default());
+                    for (at, found) in reader.switch(node) {
+                        tests.entry(at).or_default().extend(found);
                         cases.insert(at);
                     }
                     Vec::new()
@@ -591,6 +638,11 @@ impl<'a> Typer<'a> {
         )
     }
 
+    /// Whether a member of a union is a literal that counts as false.
+    fn is_false(&self, id: TypeId) -> bool {
+        matches!(self.types.get(id), Type::Literal(_)) && self.may_be_false(id)
+    }
+
     fn is_open(&self, id: TypeId) -> bool {
         matches!(self.types.get(id), Type::Unknown | Type::Var(_))
     }
@@ -661,34 +713,7 @@ impl<'a> Typer<'a> {
                 }
                 kept
             }),
-            Check::HasOwn(key) => {
-                let mut kept = Vec::new();
-                for member in members {
-                    let shape = match self.types.get(member).clone() {
-                        Type::Object(properties) => Some(properties),
-                        Type::Unknown => Some(Vec::new()),
-                        _ => None,
-                    };
-                    let has = shape
-                        .as_ref()
-                        .map(|shape| shape.iter().any(|property| property.key == *key));
-                    match (has, shape) {
-                        // What has the key is a shape with it, whatever else it has.
-                        (Some(false), Some(mut shape)) if holds => {
-                            shape.push(Property {
-                                key: key.clone(),
-                                ty: TypeId::UNKNOWN,
-                                literal: false,
-                            });
-                            kept.push(self.types.intern(Type::Object(shape)));
-                        }
-                        // A shape has each of its keys.
-                        (Some(true), _) if !holds => {}
-                        _ => kept.push(member),
-                    }
-                }
-                Some(kept)
-            }
+            Check::HasOwn(key) => Some(self.owning(&members, key, holds)),
             Check::IsArray => {
                 let mut kept = Vec::new();
                 for member in members {
@@ -704,6 +729,7 @@ impl<'a> Typer<'a> {
                 }
                 Some(kept)
             }
+            Check::Truthy => Some(self.truthy(&members, holds)),
             // `NaN` is a `number` that is no `int32` and no literal.
             Check::IsNan => Some(if holds {
                 let numbers = [TypeId::NUMBER, TypeId::UNKNOWN];
@@ -714,6 +740,55 @@ impl<'a> Typer<'a> {
             }),
         };
         kept.map_or(ty, |kept| self.types.union(kept))
+    }
+
+    /// What is left of `members` when they have, or have not, a key of their own.
+    fn owning(&mut self, members: &[TypeId], key: &str, holds: bool) -> Vec<TypeId> {
+        let mut kept = Vec::new();
+        for &member in members {
+            let shape = match self.types.get(member).clone() {
+                Type::Object(properties) => Some(properties),
+                Type::Unknown => Some(Vec::new()),
+                _ => None,
+            };
+            let has = shape
+                .as_ref()
+                .map(|shape| shape.iter().any(|property| property.key == key));
+            match (has, shape) {
+                // What has the key is a shape with it, whatever else it has.
+                (Some(false), Some(mut shape)) if holds => {
+                    shape.push(Property {
+                        key: key.to_owned(),
+                        ty: TypeId::UNKNOWN,
+                        literal: false,
+                    });
+                    kept.push(self.types.intern(Type::Object(shape)));
+                }
+                // A shape has each of its keys.
+                (Some(true), _) if !holds => {}
+                _ => kept.push(member),
+            }
+        }
+        kept
+    }
+
+    /// What is left of `members` when they count as true, or as false.
+    fn truthy(&mut self, members: &[TypeId], holds: bool) -> Vec<TypeId> {
+        let mut kept = Vec::new();
+        for &member in members {
+            let absent = [TypeId::UNDEFINED, TypeId::NULL].contains(&member);
+            let either = member == TypeId::BOOLEAN;
+            // What holds is nothing absent and nothing false; what does not
+            // is nothing that is never false.
+            let stays = if holds {
+                !absent && (either || !self.is_false(member))
+            } else {
+                absent || self.may_be_false(member)
+            };
+            let answer = either.then(|| self.types.literal(Literal::Boolean(holds)));
+            kept.extend(stays.then_some(answer.unwrap_or(member)));
+        }
+        kept
     }
 
     /// The type of what a path is compared with: of `-e` for a `case` with a sign.

@@ -42,6 +42,7 @@ mod bindings;
 mod builtins;
 mod classes;
 mod collections;
+mod conditions;
 mod context;
 mod document;
 mod expressions;
