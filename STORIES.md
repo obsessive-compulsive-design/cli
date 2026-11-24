@@ -3919,7 +3919,28 @@ with a `break` inside a nested `if` is fine; `while (true)` whose only exit is a
 `break` bound to an inner `switch` is E121.
 
 #### US-113 Predicate functions
-§3.5 · After: US-111 · Size: S · M2
+§3.5 · After: US-111 · Size: S · M2 · **Status: complete** (2026-11-23)
+
+> Delivered in `sjs-infer` (`predicates.rs`, with changes to `narrowing.rs` and
+> `builtins.rs`). Tests: `crates/sjs-infer/tests/predicates.rs`; fixtures
+> `03-flow/pass/predicates.js`, `03-flow/E138/predicate-wrong-use.js` and
+> `03-flow/E137/not-a-predicate.js`.
+> **Decisions:** (1) a predicate is a `function` declaration or a `const` arrow
+> whose body is one expression, or a block of one `return` of a value; it narrows
+> only when that expression tests a parameter, so any other body tells nothing and
+> has no finding; (2) a call `f(a)` with a name or a path of keys as argument is a
+> test of every path the predicate tests from that parameter (`f(x)` narrows `x`
+> and `x.name` when the body tests `data.name`); any parameter that is a plain name
+> counts, one with a default too; (3) what a predicate returns is read as a
+> condition is: `!`, `&&`, `||` and parentheses over the tests of US-111 and
+> US-112, a call of another predicate among them, followed 8 deep (one that calls
+> itself tells nothing more); (4) a call that is a test is no call that undoes a
+> narrowing; (5) `filter` passed a predicate by name, or an arrow that is one,
+> gives an array of what the predicate lets through. **Limits:** a predicate
+> imported from another module, a method and an `async` function are not
+> predicates.
+> Verified: fmt, both clippy passes, audit, all tests, 100% line and region
+> coverage, `cargo mutants` on the diff with 0 missed and 0 timeouts.
 
 **Done when**
 - A function whose body is exactly one `return <narrowing expression over a parameter>`

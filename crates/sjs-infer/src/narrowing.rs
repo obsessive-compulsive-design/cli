@@ -15,6 +15,7 @@
 
 use crate::expressions::{nodes, punct, Typer};
 use crate::mutation::arguments;
+use crate::predicates::{told_by_calls, Predicate};
 use crate::typed_arrays::ambient_class;
 use sjs_bind::{body_of, running, Bindings, Cfg, ENTRY};
 use sjs_diag::SourceFile;
@@ -27,11 +28,11 @@ use std::rc::Rc;
 pub(crate) type Path = (usize, String);
 
 /// The bytes of a stretch of the text.
-type Range = (usize, usize);
+pub(crate) type Range = (usize, usize);
 
 /// What a test asks of a path.
 #[derive(Clone)]
-enum Check<'t> {
+pub(crate) enum Check<'t> {
     /// `typeof p === "kind"`.
     Typeof(String),
     /// `p === e`, or `p === -e` in a `case`.
@@ -48,15 +49,18 @@ enum Check<'t> {
     IsNan,
     /// `p`, asked for its truth.
     Truthy,
+    /// `f(p)`, where `f` returns a test of its parameter: what `f` returns, the
+    /// parameter, and the keys read from it there.
+    Predicate(Element<'t>, usize, String),
 }
 
 /// A test of a path: what holds of it when the test does, or when it does not
 /// (`!==`).
 #[derive(Clone)]
-struct Test<'t> {
-    path: Path,
-    check: Check<'t>,
-    negated: bool,
+pub(crate) struct Test<'t> {
+    pub(crate) path: Path,
+    pub(crate) check: Check<'t>,
+    pub(crate) negated: bool,
 }
 
 /// The graph of a function, with what each node undoes.
@@ -77,7 +81,13 @@ type States = Vec<Option<TypeId>>;
 /// What the conditions of a file tell, and the flows worked out so far.
 pub(crate) struct Narrowing<'t> {
     /// The tests, by the bytes of the expression that is each.
-    tests: BTreeMap<Range, Vec<Test<'t>>>,
+    pub(crate) tests: BTreeMap<Range, Vec<Test<'t>>>,
+    /// The functions that return a test of a parameter, by declaration; and the
+    /// arrows, by where each begins.
+    pub(crate) predicates: BTreeMap<usize, Predicate<'t>>,
+    pub(crate) arrows: BTreeMap<usize, Predicate<'t>>,
+    /// How many predicates are being worked out, one inside the other.
+    pub(crate) depth: usize,
     /// The expressions that are the value of a `case`: the edge without a label
     /// from one is where the value was not matched.
     cases: BTreeSet<Range>,
@@ -94,13 +104,13 @@ pub(crate) struct Narrowing<'t> {
 }
 
 /// What resolves the names of a file.
-struct Names<'a> {
+pub(crate) struct Names<'a> {
     source: &'a SourceFile,
     bindings: &'a Bindings,
     references: &'a BTreeMap<usize, usize>,
 }
 
-fn range_of(node: NodeRef<'_>) -> Range {
+pub(crate) fn range_of(node: NodeRef<'_>) -> Range {
     let span = node.span();
     (span.byte_start, span.byte_end)
 }
@@ -118,13 +128,13 @@ fn typeof_operand<'t>(element: &Element<'t>) -> Option<Element<'t>> {
 
 impl Names<'_> {
     /// The declaration a name refers to.
-    fn declared(&self, start: usize) -> Option<usize> {
+    pub(crate) fn declared(&self, start: usize) -> Option<usize> {
         let reference = self.references.get(&start);
         reference.and_then(|&at| self.bindings.references[at].declaration)
     }
 
     /// The path an expression is: a name, or keys read from one by `.`.
-    fn path(&self, element: &Element<'_>) -> Option<Path> {
+    pub(crate) fn path(&self, element: &Element<'_>) -> Option<Path> {
         let node = match element {
             Element::Token(name) => {
                 let declared = self.declared(name.token().span.byte_start);
@@ -274,6 +284,42 @@ impl<'t> Reader<'_, 't> {
         found
     }
 
+    /// The tests of the nodes that may be one, added to `tests`; the values of the
+    /// `case`s among them; and the calls.
+    fn read(
+        &self,
+        testing: Vec<NodeRef<'t>>,
+        mut tests: BTreeMap<Range, Vec<Test<'t>>>,
+    ) -> (
+        BTreeMap<Range, Vec<Test<'t>>>,
+        BTreeSet<Range>,
+        Vec<NodeRef<'t>>,
+    ) {
+        let mut cases = BTreeSet::new();
+        let mut calls = Vec::new();
+        for node in testing {
+            let found = match node.kind() {
+                NodeKind::BinaryExpr => self.binary(node),
+                NodeKind::CallExpr => {
+                    calls.push(node);
+                    self.call(node)
+                }
+                // Each `case` is the subject compared with its value.
+                _ => {
+                    for (at, found) in self.switch(node) {
+                        tests.entry(at).or_default().extend(found);
+                        cases.insert(at);
+                    }
+                    Vec::new()
+                }
+            };
+            if !found.is_empty() {
+                tests.insert(range_of(node), found);
+            }
+        }
+        (tests, cases, calls)
+    }
+
     /// The test a call is: of a static of a global that tells what its argument is.
     fn call(&self, node: NodeRef<'t>) -> Vec<Test<'t>> {
         let parts: Vec<Element<'t>> = node.children().collect();
@@ -359,6 +405,8 @@ impl<'t> Narrowing<'t> {
         let mut shared = BTreeSet::new();
         let mut testing: Vec<NodeRef<'t>> = Vec::new();
         let mut truths: BTreeMap<Range, Vec<Test<'t>>> = BTreeMap::new();
+        let mut predicates: BTreeMap<usize, Predicate<'t>> = BTreeMap::new();
+        let mut arrows: BTreeMap<usize, Predicate<'t>> = BTreeMap::new();
         // Each node, with the function it is in.
         let mut pending = vec![(tree.root(), (0, usize::MAX))];
         while let Some((node, around)) = pending.pop() {
@@ -401,30 +449,33 @@ impl<'t> Narrowing<'t> {
                 (NodeKind::BinaryExpr | NodeKind::CallExpr | NodeKind::SwitchStmt, _) => {
                     testing.push(node);
                 }
+                (
+                    NodeKind::FunctionDecl,
+                    [_, Element::Token(name), Element::Node(parameters), body],
+                ) => {
+                    let declared = declared_at.get(&name.token().span.byte_start);
+                    let predicate = Predicate::read(*parameters, *body, &declared_at);
+                    predicates.extend(declared.copied().zip(predicate));
+                }
+                (NodeKind::ArrowFunction, [Element::Node(parameters), _, body]) => {
+                    let predicate = Predicate::read(*parameters, *body, &declared_at);
+                    arrows.extend(predicate.map(|predicate| (range_of(node).0, predicate)));
+                }
                 _ => {}
             }
         }
-        let mut tests = truths;
-        let mut cases = BTreeSet::new();
-        for node in testing {
-            let found = match node.kind() {
-                NodeKind::BinaryExpr => reader.binary(node),
-                NodeKind::CallExpr => reader.call(node),
-                // Each `case` is the subject compared with its value.
-                _ => {
-                    for (at, found) in reader.switch(node) {
-                        tests.entry(at).or_default().extend(found);
-                        cases.insert(at);
-                    }
-                    Vec::new()
-                }
-            };
-            if !found.is_empty() {
-                tests.insert(range_of(node), found);
-            }
+        // A `const` that is an arrow is the function it names.
+        for (declared, value) in &reader.consts {
+            let arrow = arrows.get(&crate::expressions::element_span_of(value).byte_start);
+            predicates.extend(arrow.map(|arrow| (*declared, arrow.clone())));
         }
+        let (mut tests, cases, calls) = reader.read(testing, truths);
+        told_by_calls(&reader.names, &predicates, &calls, &mut tests);
         let all = tests.values().flatten();
         Self {
+            predicates,
+            arrows,
+            depth: 0,
             tested: all.map(|test| test.path.clone()).collect(),
             tests,
             cases,
@@ -667,7 +718,7 @@ impl<'a> Typer<'a> {
     }
 
     /// What is left of a `ty` when a test of it holds, or when it does not.
-    fn apply(&mut self, ty: TypeId, check: &Check<'_>, holds: bool) -> TypeId {
+    pub(crate) fn apply(&mut self, ty: TypeId, check: &Check<'_>, holds: bool) -> TypeId {
         let members = self.members_of(ty);
         let kept = match check {
             Check::Typeof(kind) => {
@@ -730,6 +781,9 @@ impl<'a> Typer<'a> {
                 Some(kept)
             }
             Check::Truthy => Some(self.truthy(&members, holds)),
+            Check::Predicate(body, parameter, keys) => {
+                return self.told(*body, &(*parameter, keys.clone()), ty, holds);
+            }
             // `NaN` is a `number` that is no `int32` and no literal.
             Check::IsNan => Some(if holds {
                 let numbers = [TypeId::NUMBER, TypeId::UNKNOWN];

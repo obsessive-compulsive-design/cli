@@ -54,6 +54,7 @@ mod mutation;
 mod narrowing;
 mod operators;
 pub mod platform;
+mod predicates;
 mod primitives;
 mod program;
 mod promises;

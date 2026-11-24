@@ -264,7 +264,12 @@ impl Typer<'_> {
             "keys" => self.iterator(TypeId::INT32, false),
             "values" => self.iterator(item, false),
             "every" | "some" | "includes" => TypeId::BOOLEAN,
-            "filter" | "slice" | "splice" | "toReversed" | "toSorted" | "toSpliced" | "with" => {
+            // What a predicate lets through is what it tells its argument is.
+            "filter" => {
+                let kept = self.sifted(passed.first(), item);
+                self.list(kept)
+            }
+            "slice" | "splice" | "toReversed" | "toSorted" | "toSpliced" | "with" => {
                 self.list(item)
             }
             "findIndex" | "findLastIndex" | "indexOf" | "lastIndexOf" | "push" | "unshift" => {
