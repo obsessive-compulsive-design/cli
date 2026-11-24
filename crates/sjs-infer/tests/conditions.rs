@@ -224,7 +224,7 @@ fn a_condition_that_is_always_the_same_is_refused() {
     // differ are E105's.
     assert_eq!(
         found("const off = false\nconst a = (typeof num === \"number\") ? 1 : 2\nconst b = typeof off ? 1 : 2\nconst c = off && off ? 1 : 2\nconst d = off === true ? 1 : 2\nconst e = off || off ? 1 : 2\n"),
-        ["E121 @2:11", "E102 @3:11", "E105 @5:15"]
+        ["E121 @2:11", "E102 @3:11", "E117 @4:18", "E105 @5:15"]
     );
     let c = checked("const a = typeof num === \"number\" ? 1 : 2\nconst b = typeof num !== \"number\" ? 1 : 2\n");
     assert_eq!(
@@ -235,10 +235,10 @@ fn a_condition_that_is_always_the_same_is_refused() {
         ]
     );
     let c =
-        checked("const off = false\nwhile (!off) {\n  xs.at(0)\n}\nwhile (!off) {\n  break\n}\n");
+        checked("const off = false\nwhile (!off) {\n  break\n}\nwhile (!off) {\n  xs.at(0)\n}\n");
     assert_eq!(
         (c.found, c.messages.concat().contains("never ends")),
-        (vec!["E121 @2:8".to_owned()], true)
+        (vec!["E121 @5:8".to_owned()], true)
     );
     assert_eq!(
         found("const a = num ?? 1\nconst b = maybeStr ?? \"\"\nconst c = shape?.size\n"),

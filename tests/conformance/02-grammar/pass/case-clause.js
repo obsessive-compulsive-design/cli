@@ -1,7 +1,7 @@
 // CaseClause: stacked labels of every literal kind, each clause a block.
 import { f } from "./names.js"
 
-const x = 1
+const x = f()
 
 switch (x) {
   case 1:

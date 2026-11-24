@@ -137,81 +137,79 @@ fn block_of(part: NodeRef<'_>) -> Option<NodeRef<'_>> {
     nodes(part).find(|inner| inner.kind() == NodeKind::Block)
 }
 
-/// Whether a block never runs off its end: its last statement returns or throws, on
-/// every path.
-fn ends(block: NodeRef<'_>) -> bool {
-    // The last statement that runs: a function declared after it is hoisted.
-    let statements = nodes(block).filter(|statement| statement.kind() != NodeKind::FunctionDecl);
-    let Some(last) = statements.last() else {
-        return false;
-    };
-    match last.kind() {
-        NodeKind::SwitchStmt => {
-            // Every case, with a `default` among them.
-            let clauses: Vec<NodeRef<'_>> = nodes(last)
-                .filter(|part| part.kind() == NodeKind::CaseClause)
-                .collect();
-            let is_default = |clause: &NodeRef<'_>| {
-                clause
-                    .tokens()
-                    .iter()
-                    .any(|token| token.kind == TokenKind::Keyword(Keyword::Default))
-            };
-            let bodies = clauses.iter().filter_map(|clause| block_of(*clause));
-            clauses.iter().any(is_default) && bodies.into_iter().all(ends)
-        }
-        NodeKind::ReturnStmt | NodeKind::ThrowStmt => true,
-        // `while (true)` is left only by a `break` of its own.
-        NodeKind::WhileStmt => {
-            let forever = matches!(
-                last.children().nth(2),
-                Some(Element::Token(test)) if test.token().kind == TokenKind::Bool(true)
-            );
-            forever && !leaves(last, false, false)
-        }
-        NodeKind::Block => ends(last),
-        NodeKind::IfStmt => {
-            let has_else = last.children().any(|part| {
-                matches!(&part, Element::Token(token) if token.token().kind == TokenKind::Keyword(Keyword::Else))
-            });
-            // The branches: the blocks, and an `else if`.
-            let mut branches = nodes(last)
-                .filter(|part| matches!(part.kind(), NodeKind::Block | NodeKind::IfStmt));
-            has_else
-                && branches.all(|branch| {
-                    if branch.kind() == NodeKind::Block {
-                        ends(branch)
-                    } else {
-                        ends_statement(branch)
-                    }
-                })
-        }
-        NodeKind::TryStmt => {
-            let finally = nodes(last).find(|part| part.kind() == NodeKind::FinallyClause);
-            let catch = nodes(last).find(|part| part.kind() == NodeKind::CatchClause);
-            let tried = nodes(last).find(|part| part.kind() == NodeKind::Block);
-            let handled = catch.and_then(block_of).is_none_or(ends);
-            finally.and_then(block_of).is_some_and(ends) || (tried.is_some_and(ends) && handled)
-        }
-        _ => false,
-    }
-}
-
-/// [`ends`] for one statement that is no block: an `else if`.
-fn ends_statement(statement: NodeRef<'_>) -> bool {
-    let mut branches =
-        nodes(statement).filter(|part| matches!(part.kind(), NodeKind::Block | NodeKind::IfStmt));
-    let has_else = statement.children().any(|part| {
-        matches!(&part, Element::Token(token) if token.token().kind == TokenKind::Keyword(Keyword::Else))
-    });
-    has_else
-        && branches.all(|branch| {
-            if branch.kind() == NodeKind::Block {
-                ends(branch)
-            } else {
-                ends_statement(branch)
+impl Typer<'_> {
+    /// Whether a block never runs off its end: its last statement returns or throws,
+    /// on every path.
+    pub(crate) fn ends(&mut self, block: NodeRef<'_>) -> bool {
+        // The last statement that runs: a function declared after it is hoisted.
+        let statements =
+            nodes(block).filter(|statement| statement.kind() != NodeKind::FunctionDecl);
+        let Some(last) = statements.last() else {
+            return false;
+        };
+        match last.kind() {
+            NodeKind::SwitchStmt => {
+                // Every case, with a `default` among them or every value named.
+                let clauses: Vec<NodeRef<'_>> = nodes(last)
+                    .filter(|part| part.kind() == NodeKind::CaseClause)
+                    .collect();
+                let is_default = |clause: &NodeRef<'_>| {
+                    clause
+                        .tokens()
+                        .iter()
+                        .any(|token| token.kind == TokenKind::Keyword(Keyword::Default))
+                };
+                let mut all_end = clauses.iter().any(is_default) || self.switch_exhausts(last);
+                for body in clauses.iter().filter_map(|clause| block_of(*clause)) {
+                    all_end = all_end && self.ends(body);
+                }
+                all_end
             }
-        })
+            NodeKind::ReturnStmt | NodeKind::ThrowStmt => true,
+            // `while (true)` is left only by a `break` of its own.
+            NodeKind::WhileStmt => {
+                let forever = matches!(
+                    last.children().nth(2),
+                    Some(Element::Token(test)) if test.token().kind == TokenKind::Bool(true)
+                );
+                forever && !leaves(last, false, false)
+            }
+            NodeKind::Block => self.ends(last),
+            // Each branch, with an `else` among them or every value tested for.
+            NodeKind::IfStmt => self.ends_statement(last) || self.chain_exhausts(last),
+            NodeKind::TryStmt => {
+                let finally = nodes(last).find(|part| part.kind() == NodeKind::FinallyClause);
+                let catch = nodes(last).find(|part| part.kind() == NodeKind::CatchClause);
+                let tried = nodes(last).find(|part| part.kind() == NodeKind::Block);
+                let handled = catch
+                    .and_then(block_of)
+                    .is_none_or(|block| self.ends(block));
+                let closed = finally
+                    .and_then(block_of)
+                    .is_some_and(|block| self.ends(block));
+                closed || (tried.is_some_and(|block| self.ends(block)) && handled)
+            }
+            _ => false,
+        }
+    }
+
+    /// [`Typer::ends`] for an `if`: it has an `else`, and each branch ends.
+    fn ends_statement(&mut self, statement: NodeRef<'_>) -> bool {
+        let branches = nodes(statement)
+            .filter(|part| matches!(part.kind(), NodeKind::Block | NodeKind::IfStmt));
+        let mut all_end = statement.children().any(|part| {
+            matches!(&part, Element::Token(token) if token.token().kind == TokenKind::Keyword(Keyword::Else))
+        });
+        for branch in branches {
+            all_end = all_end
+                && if branch.kind() == NodeKind::Block {
+                    self.ends(branch)
+                } else {
+                    self.ends_statement(branch)
+                };
+        }
+        all_end
+    }
 }
 
 /// The parameters of a function, as they are written.
@@ -371,7 +369,7 @@ impl Typer<'_> {
                     types.push(self.widened(ty));
                 }
                 // Off the end of the body it returns nothing.
-                if !ends(block) {
+                if !self.ends(block) {
                     types.push(TypeId::UNDEFINED);
                 }
                 self.types.union(types)
@@ -797,7 +795,7 @@ impl Typer<'_> {
         let bare = returns.iter().find(|(_, value)| value.is_none());
         let at = match (valued, bare) {
             (Some(_), Some((bare, _))) => Some(bare.span()),
-            (Some((valued, _)), None) if !ends(body) => Some(valued.span()),
+            (Some((valued, _)), None) if !self.ends(body) => Some(valued.span()),
             _ => None,
         };
         if let Some(at) = at {

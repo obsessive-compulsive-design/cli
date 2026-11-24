@@ -88,6 +88,8 @@ pub(crate) struct Narrowing<'t> {
     pub(crate) arrows: BTreeMap<usize, Predicate<'t>>,
     /// How many predicates are being worked out, one inside the other.
     pub(crate) depth: usize,
+    /// The uses of a name nothing is left of: the block each is in, and where.
+    pub(crate) spent: Vec<(Range, sjs_diag::Span)>,
     /// The expressions that are the value of a `case`: the edge without a label
     /// from one is where the value was not matched.
     cases: BTreeSet<Range>,
@@ -476,6 +478,7 @@ impl<'t> Narrowing<'t> {
             predicates,
             arrows,
             depth: 0,
+            spent: Vec::new(),
             tested: all.map(|test| test.path.clone()).collect(),
             tests,
             cases,
@@ -500,6 +503,11 @@ fn primitive_named(kind: &str) -> Option<TypeId> {
 }
 
 impl<'a> Typer<'a> {
+    /// The path an expression is, when it is one.
+    pub(crate) fn path_of(&self, element: &Element<'_>) -> Option<Path> {
+        self.names().path(element)
+    }
+
     fn names(&self) -> Names<'_> {
         Names {
             source: self.source,
@@ -846,7 +854,7 @@ impl<'a> Typer<'a> {
     }
 
     /// The type of what a path is compared with: of `-e` for a `case` with a sign.
-    fn compared(&mut self, other: Element<'_>, minus: bool) -> Option<TypeId> {
+    pub(crate) fn compared(&mut self, other: Element<'_>, minus: bool) -> Option<TypeId> {
         let ty = self.type_of(other)?;
         if minus {
             self.opposite(ty)

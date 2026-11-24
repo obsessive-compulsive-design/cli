@@ -45,6 +45,7 @@ mod collections;
 mod conditions;
 mod context;
 mod document;
+mod exhaustive;
 mod expressions;
 mod functions;
 mod generics;

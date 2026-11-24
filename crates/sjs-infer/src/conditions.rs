@@ -9,7 +9,7 @@
 use crate::expressions::{element_span_of, nodes, punct, Typer};
 use sjs_bind::is_scope;
 use sjs_diag::{Code, Diagnostic};
-use sjs_syntax::{Element, NodeKind, NodeRef, Punct};
+use sjs_syntax::{Element, Keyword, NodeKind, NodeRef, Punct, TokenKind};
 use sjs_types::{Literal, Type, TypeId};
 
 /// Whether an expression is `a && b` or `a || b`.
@@ -197,6 +197,17 @@ impl Typer<'_> {
         let Some(always) = self.always(test) else {
             return;
         };
+        // The last `else if` of a chain may be what closes it: the test that names
+        // the one value left (US-114).
+        let has_else = owner.children().any(|part| {
+            matches!(&part, Element::Token(token) if token.token().kind == TokenKind::Keyword(Keyword::Else))
+        });
+        let chained = owner
+            .parent()
+            .is_some_and(|parent| parent.kind() == NodeKind::IfStmt);
+        if owner.kind() == NodeKind::IfStmt && chained && !has_else && always {
+            return;
+        }
         let forever = owner.kind() == NodeKind::WhileStmt && always;
         let message = if forever {
             "this loop never ends: its body has no `break`, `return` or `throw` (SPEC.md §4.3)"

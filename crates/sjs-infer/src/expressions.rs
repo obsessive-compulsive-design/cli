@@ -520,6 +520,50 @@ impl<'a> Typer<'a> {
         }
     }
 
+    /// Notes each name `node` uses of which nothing is left: one that is read where
+    /// every value it may be has been told apart and dealt with.
+    fn spent_rule(&mut self, node: NodeRef<'_>, children: &[Element<'_>]) {
+        for child in children {
+            let Element::Token(name) = child else {
+                continue;
+            };
+            let span = name.token().span;
+            let reference = self.references.get(&span.byte_start);
+            let read = reference.filter(|&&at| !self.bindings.references[at].write);
+            let text = self.source.slice(&span).unwrap_or_default();
+            let declared = read.and_then(|_| self.name(span.byte_start, text));
+            let Some(declared) = declared.filter(|&declared| declared != TypeId::NEVER) else {
+                continue;
+            };
+            if self.narrowed(child, declared) == TypeId::NEVER {
+                // The block it is in: what is not reached there is one finding.
+                let mut around = std::iter::successors(Some(node), |node| node.parent());
+                let block =
+                    around.find(|node| matches!(node.kind(), NodeKind::Block | NodeKind::Module));
+                let block = block.map_or(span, NodeRef::span);
+                self.narrowing
+                    .spent
+                    .push(((block.byte_start, block.byte_end), span));
+            }
+        }
+    }
+
+    /// E117 for the first use, in each block, of a name nothing is left of.
+    fn spent_report(&mut self) {
+        let mut spent = std::mem::take(&mut self.narrowing.spent);
+        spent.sort_by_key(|(_, span)| span.byte_start);
+        let mut blocks = BTreeSet::new();
+        for (block, span) in spent {
+            if blocks.insert(block) {
+                let message = format!(
+                    "`{}` is never reached here: every value it may be has been dealt with (SPEC.md §3.5)",
+                    self.source.slice(&span).unwrap_or_default()
+                );
+                self.report(true, Code::E117, span, message);
+            }
+        }
+    }
+
     /// Pushes a finding made elsewhere.
     pub(crate) fn push(&mut self, found: Diagnostic) {
         self.diagnostics.push(found);
@@ -869,6 +913,9 @@ pub fn check_expressions(
         judge.class_rules(node);
         judge.loop_rule(node, &children);
         judge.test_rule(node, &children);
+        judge.switch_rule(node);
+        judge.chain_rule(node);
+        judge.spent_rule(node, &children);
         judge.promise_rules(node, &children);
         judge.made_rules(node, &children);
         let operates = matches!(
@@ -915,6 +962,7 @@ pub fn check_expressions(
             }
         }
     }
+    judge.spent_report();
     for &parameter in &facts.unconstrained {
         let declared = &bindings.declarations[parameter];
         let message = format!(

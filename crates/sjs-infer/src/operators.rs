@@ -138,7 +138,7 @@ impl Typer<'_> {
 
     /// Whether two types share a value: `===` between two that share none is never
     /// true.
-    fn overlap(&self, a: TypeId, b: TypeId) -> bool {
+    pub(crate) fn overlap(&self, a: TypeId, b: TypeId) -> bool {
         let members = |id: TypeId| match self.types.get(id) {
             Type::Union(members) => members.clone(),
             _ => vec![id],

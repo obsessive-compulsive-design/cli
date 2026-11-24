@@ -3953,7 +3953,31 @@ with a `break` inside a nested `if` is fine; `while (true)` whose only exit is a
 passed to `filter` narrows the result array's element type.
 
 #### US-114 Exhaustiveness
-§3.5, §4.3, E103 · After: US-111 · Size: M · M2
+§3.5, §4.3, E103 · After: US-111 · Size: M · M2 · **Status: complete** (2026-11-23)
+
+> Delivered in `sjs-infer` (`exhaustive.rs`: `switch_rule`, `chain_rule`, with
+> changes to `functions.rs`, `conditions.rs`, `expressions.rs` and `narrowing.rs`).
+> Tests: `crates/sjs-infer/tests/exhaustive.rs`; fixtures under `03-flow/E103`,
+> `03-flow/E105`, `03-flow/E117` and `03-flow/pass/exhaustive.js`.
+> **Decisions:** (1) a subject is one of a list when every member of its type is
+> one value or a boolean: a union of literals, a boolean, a discriminant
+> (`s.kind`), what `typeof` gives; what its `case`s leave is worked out as
+> narrowing does; (2) E103 is at the subject and lists what is left; a subject no
+> list holds (`string`, `number`, `unknown`) without a `default` is E103 too; a
+> subject without a type is not judged; (3) a `default` nothing is left for is
+> E117, at the `default`; (4) a `case` the subject is never is E105, at its value;
+> (5) a chain is judged when it has two branches or more, each leaves (`return`
+> or `throw` on every path), it has no `else`, every test tells something of one
+> path, and nothing follows it in its block: what follows a chain is what the rest
+> is for; it is E103 at its `if`, listing what is left, for a value no list holds
+> as well; (6) the last `else if` of a chain without an `else` is not E121 when it
+> is always true: it is the test that closes the chain; (7) a function that ends
+> in a `switch` or a chain that leaves nothing does not run off its end (no E111,
+> no `undefined` in what it returns); (8) a read of a name of which nothing is
+> left is E117, once for each block: past an exhaustive `switch` or chain, and in
+> any branch a test rules out altogether.
+> Verified: fmt, both clippy passes, audit, all tests, 100% line and region
+> coverage, `cargo mutants` on the diff with 0 missed and 0 timeouts.
 
 **Done when**
 - `switch` on a literal union, `boolean`, or discriminant: every member covered or a

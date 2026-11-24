@@ -225,8 +225,14 @@ fn the_statics_that_tell_what_a_value_is_narrow() {
         &["[1]", "\"a\"", "1.5", "1"],
         "  if (Array.isArray(x)) {\n    const a = x\n  } else {\n    const b = x\n  }\n  if (Number.isNaN(x)) {\n    const c = x\n  } else {\n    const d = x\n  }\n  if (typeof x === \"string\" && Number.isNaN(x)) {\n    const e = x\n  }\n",
     );
+    let c = checked(&text);
     assert_eq!(
-        types(&text, &["a", "b", "c", "d", "e"]),
+        c.found,
+        ["E117 @14:15"],
+        "nothing is left of a string that is `NaN`"
+    );
+    assert_eq!(
+        ["a", "b", "c", "d", "e"].map(|name| c.of(name).to_owned()),
         [
             "readonly int32[]",
             "number | string",

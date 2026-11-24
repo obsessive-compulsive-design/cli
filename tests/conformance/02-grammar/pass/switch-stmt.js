@@ -1,7 +1,7 @@
 // SwitchStmt: clauses, a default, and an empty switch.
 import { f } from "./names.js"
 
-const x = 1
+const x = f()
 
 switch (x) {
   case 1: {
