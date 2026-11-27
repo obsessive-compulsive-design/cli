@@ -14,6 +14,7 @@
 //! assigns, and for a path of keys from an object the program mutates.
 
 use crate::expressions::{nodes, punct, Typer};
+use crate::indices::{orders_of, Fact, Index, Proven};
 use crate::mutation::arguments;
 use crate::predicates::{told_by_calls, Predicate};
 use crate::typed_arrays::ambient_class;
@@ -64,12 +65,12 @@ pub(crate) struct Test<'t> {
 }
 
 /// The graph of a function, with what each node undoes.
-struct Flow {
-    cfg: Cfg,
+pub(crate) struct Flow {
+    pub(crate) cfg: Cfg,
     /// The edges that leave each node: where to, and how.
-    leaving: Vec<Vec<(usize, &'static str)>>,
+    pub(crate) leaving: Vec<Vec<(usize, &'static str)>>,
     /// The nodes that call something: other code runs there.
-    calls: Vec<bool>,
+    pub(crate) calls: Vec<bool>,
     /// The declarations each node assigns to, or declares.
     kills: Vec<BTreeSet<usize>>,
 }
@@ -98,7 +99,15 @@ pub(crate) struct Narrowing<'t> {
     /// The declarations assigned to anywhere.
     assigned: BTreeSet<usize>,
     /// Those assigned to in a function other than the one that declares them.
-    shared: BTreeSet<usize>,
+    pub(crate) shared: BTreeSet<usize>,
+    /// Those used in a function other than the one that declares them.
+    pub(crate) captured: BTreeSet<usize>,
+    /// What each comparison tells of an index or of a length, by its bytes.
+    pub(crate) orders: BTreeMap<Range, Vec<Fact>>,
+    /// The reads of an array already refused (E124), by their bytes.
+    pub(crate) refused: BTreeSet<Range>,
+    /// What is proven of an index into an array at each node, by function.
+    pub(crate) proofs: BTreeMap<(Range, Index, Path), Rc<Proven>>,
     flows: BTreeMap<Range, Rc<Flow>>,
     /// What reaches each node, by function, path and the type before narrowing;
     /// `None` while it is being worked out.
@@ -107,7 +116,7 @@ pub(crate) struct Narrowing<'t> {
 
 /// What resolves the names of a file.
 pub(crate) struct Names<'a> {
-    source: &'a SourceFile,
+    pub(crate) source: &'a SourceFile,
     bindings: &'a Bindings,
     references: &'a BTreeMap<usize, usize>,
 }
@@ -404,7 +413,7 @@ impl<'t> Narrowing<'t> {
             consts: BTreeMap::new(),
             assigned: BTreeSet::new(),
         };
-        let mut shared = BTreeSet::new();
+        let (mut shared, mut captured) = (BTreeSet::new(), BTreeSet::new());
         let mut testing: Vec<NodeRef<'t>> = Vec::new();
         let mut truths: BTreeMap<Range, Vec<Test<'t>>> = BTreeMap::new();
         let mut predicates: BTreeMap<usize, Predicate<'t>> = BTreeMap::new();
@@ -422,14 +431,16 @@ impl<'t> Narrowing<'t> {
                     Element::Token(name) => name.token().span.byte_start,
                 };
                 let reference = references.get(&name).map(|&at| &bindings.references[at]);
-                let written = reference.filter(|reference| reference.write);
-                if let Some(declared) = written.and_then(|reference| reference.declaration) {
-                    reader.assigned.insert(declared);
+                let writes = reference.is_some_and(|reference| reference.write);
+                let declared = reference.and_then(|reference| reference.declaration);
+                // Declared in another function than the one it is used in.
+                let outside = declared.filter(|&declared| {
                     let at = bindings.declarations[declared].span.byte_start;
-                    if !(owner.0..owner.1).contains(&at) {
-                        shared.insert(declared);
-                    }
-                }
+                    !(owner.0..owner.1).contains(&at)
+                });
+                reader.assigned.extend(declared.filter(|_| writes));
+                shared.extend(outside.filter(|_| writes));
+                captured.extend(outside);
             }
             let parts: Vec<Element<'t>> = node.children().collect();
             for inside in asked_in(node, &parts) {
@@ -471,6 +482,7 @@ impl<'t> Narrowing<'t> {
             let arrow = arrows.get(&crate::expressions::element_span_of(value).byte_start);
             predicates.extend(arrow.map(|arrow| (*declared, arrow.clone())));
         }
+        let orders = orders_of(&reader.names, &testing);
         let (mut tests, cases, calls) = reader.read(testing, truths);
         told_by_calls(&reader.names, &predicates, &calls, &mut tests);
         let all = tests.values().flatten();
@@ -484,10 +496,26 @@ impl<'t> Narrowing<'t> {
             cases,
             assigned: reader.assigned,
             shared,
+            captured,
+            orders,
+            proofs: BTreeMap::new(),
+            refused: BTreeSet::new(),
             flows: BTreeMap::new(),
             states: BTreeMap::new(),
         }
     }
+}
+
+/// The function a node is in, with its body: `None` in the value of a field, which
+/// runs when an instance is made.
+pub(crate) fn owner_of(from: NodeRef<'_>) -> Option<(NodeRef<'_>, Element<'_>)> {
+    let mut around = std::iter::successors(Some(from), |node| node.parent());
+    let owner = around.find_map(|node| {
+        let is_class = node.kind() == NodeKind::ClassBody;
+        let body = body_of(node).filter(|_| !is_class);
+        (is_class || body.is_some()).then_some(body.map(|body| (node, body)))
+    });
+    owner.flatten()
 }
 
 /// The primitive `typeof` gives a name for, when it gives it for that alone.
@@ -506,6 +534,10 @@ impl<'a> Typer<'a> {
     /// The path an expression is, when it is one.
     pub(crate) fn path_of(&self, element: &Element<'_>) -> Option<Path> {
         self.names().path(element)
+    }
+
+    pub(crate) fn names_of(&self) -> Names<'_> {
+        self.names()
     }
 
     fn names(&self) -> Names<'_> {
@@ -535,13 +567,7 @@ impl<'a> Typer<'a> {
     fn flow_type(&mut self, from: NodeRef<'_>, range: Range, path: &Path, top: TypeId) -> TypeId {
         // The function it is in. The value of a field runs when an instance is
         // made: nothing is told of then.
-        let mut around = std::iter::successors(Some(from), |node| node.parent());
-        let owner = around.find_map(|node| {
-            let is_class = node.kind() == NodeKind::ClassBody;
-            let body = body_of(node).filter(|_| !is_class);
-            (is_class || body.is_some()).then_some(body.map(|body| (node, body)))
-        });
-        let Some((owner, body)) = owner.flatten() else {
+        let Some((owner, body)) = owner_of(from) else {
             return top;
         };
         let flow = self.flow_of(owner, body);
@@ -586,7 +612,7 @@ impl<'a> Typer<'a> {
     }
 
     /// The graph of a function, with what each node undoes.
-    fn flow_of(&mut self, owner: NodeRef<'_>, body: Element<'_>) -> Rc<Flow> {
+    pub(crate) fn flow_of(&mut self, owner: NodeRef<'_>, body: Element<'_>) -> Rc<Flow> {
         let key = range_of(owner);
         if let Some(flow) = self.narrowing.flows.get(&key) {
             return Rc::clone(flow);
@@ -611,7 +637,10 @@ impl<'a> Typer<'a> {
                 node.kind(),
                 NodeKind::CallExpr | NodeKind::NewExpr | NodeKind::AwaitExpr | NodeKind::YieldExpr
             ) && !self.narrowing.tests.contains_key(&range);
-            let assigns = matches!(node.kind(), NodeKind::AssignExpr | NodeKind::UpdateExpr);
+            let assigns = matches!(
+                node.kind(),
+                NodeKind::AssignExpr | NodeKind::UpdateExpr | NodeKind::ForUpdate
+            );
             let target = self.names().root(node).filter(|_| assigns);
             if !runs && target.is_none() {
                 continue;

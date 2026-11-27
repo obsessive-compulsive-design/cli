@@ -35,6 +35,8 @@ enum Held {
 /// What a computed read gives from one member, or why it gives nothing.
 enum Indexed {
     Value(TypeId),
+    /// An element of an array or of a tuple, when the place is in it.
+    Element(TypeId),
     /// This key is not there.
     Missing(String),
     /// The key is no literal of the member's keys, nor a place of it.
@@ -370,11 +372,10 @@ impl Typer<'_> {
                 if let Some(exact) = exact.filter(|exact| !exact.is_empty()) {
                     Indexed::Value(self.types.union(exact))
                 } else {
-                    let any = self.types.union(elements);
-                    or_absent(self, any)
+                    Indexed::Element(self.types.union(elements))
                 }
             }
-            Type::Array { element, .. } if is_number => or_absent(self, element),
+            Type::Array { element, .. } if is_number => Indexed::Element(element),
             Type::String | Type::Literal(Literal::String(_)) if is_number => {
                 or_absent(self, TypeId::STRING)
             }
@@ -488,12 +489,24 @@ impl Typer<'_> {
             let written = children.iter().rev().nth(1).copied();
             let key = written.and_then(|written| self.type_of(written))?;
             let at = written.as_ref().map_or(node.span(), element_span_of);
+            let mut elements = Vec::new();
+            for member in members.iter().copied() {
+                if let Indexed::Element(ty) = self.indexed(member, key) {
+                    elements.push(ty);
+                }
+            }
+            // A place not shown to be in the array may hold nothing (US-115).
+            if !elements.is_empty() && !self.dense_read(node) {
+                values.push(TypeId::UNDEFINED);
+            }
+            values.extend(elements);
             for member in members {
                 let why = match self.indexed(member, key) {
                     Indexed::Value(ty) => {
                         values.push(ty);
                         continue;
                     }
+                    Indexed::Element(_) => continue,
                     Indexed::Unknown => {
                         known = false;
                         continue;

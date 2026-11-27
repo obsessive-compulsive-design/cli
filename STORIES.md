@@ -3993,7 +3993,39 @@ passed to `filter` narrows the result array's element type.
 with `return` in one branch and `throw` in another (both abrupt).
 
 #### US-115 Array index proofs
-§4.6, E124 · After: US-111 · Size: M · M2
+§4.6, E124 · After: US-111 · Size: M · M2 · **Status: complete** (2026-11-25)
+
+> Delivered in `sjs-infer` (`indices.rs`, with changes to `members.rs` and
+> `narrowing.rs`). Tests: `crates/sjs-infer/tests/indices.rs`; fixtures under
+> `tests/conformance/04-arrays/E124`.
+> **Decisions:** (1) a proof is two facts that hold on every way to the read, over
+> the control-flow graph of the function: the index is not negative, and it is
+> less than the length of that array; a loop over the array is no special case:
+> `let i = 0` shows the first, `i < arr.length` the second, `i += 1` and `i++`
+> keep the first and take back the second; (2) what shows them: `i < arr.length`
+> and `arr.length > i` (and the false side of `i >= arr.length`); `i >= 0`,
+> `i > n` and their mirrors for a number written there, a declaration or an
+> assignment of such a number, `+=` of one; for a place written as a number (or a
+> `const` that is one), `arr.length > n`, `>= n`, `=== n` and `!== 0`;
+> (3) what cancels: any other assignment to the index; `arr = …`,
+> `arr.length = …`, a mutating method of the array (`push` included, as the story
+> says); a call the array is passed to, when the program mutates it; any call,
+> when the array is mutated somewhere and a closure or another function can reach
+> it (or it is a path of keys), and for an index a closure assigns; writing an
+> element (`arr[i] = v`) cancels nothing, for it never makes the array shorter;
+> (4) an unproven read is `T | undefined` where `undefined` may go: an
+> initializer, what is assigned or assigned to by `=`, an argument, a `return`,
+> an element or a property of a literal, `===`, `!==`, `??`, a condition,
+> `typeof`, `!`, `?.`; anywhere else it is used as the element and is E124, once,
+> and is then read as the element so that nothing else is reported of it; a
+> binding that holds an unproven read is narrowed as any other is; (5) the
+> finding names what to write: the test, `arr.length > n` for a number, and
+> `arr.at(-1)` for `arr[arr.length - 1]`; (6) an assignment in the update of a
+> `for` is an assignment for narrowing too (US-111 missed it). **Limits:** strings,
+> typed arrays and dictionaries are read as before; `this` and computed paths are
+> no array a proof is kept of.
+> Verified: fmt, both clippy passes, audit, all tests, 100% line and region
+> coverage, `cargo mutants` on the diff with 0 missed and 0 timeouts.
 
 **Done when**
 - `arr[i]` is `T` when (a) `i` is the variable of an enclosing `for (let i = 0; i <

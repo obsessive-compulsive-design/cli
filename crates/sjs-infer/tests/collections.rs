@@ -110,8 +110,8 @@ fn a_mutated_array_is_an_array_of_its_elements() {
         "x.fill(0)",
         "x.copyWithin(0, 1)",
         "x[0] = 5",
-        "x[0] += 1",
-        "x[1]++",
+        "if (x.length > 1) {\n  x[0] += 1\n}",
+        "if (x.length > 1) {\n  x[1]++\n}",
         "const f = () => {\n  x.push(4)\n}",
     ] {
         assert_eq!(

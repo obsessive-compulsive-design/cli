@@ -49,6 +49,7 @@ mod exhaustive;
 mod expressions;
 mod functions;
 mod generics;
+mod indices;
 mod iteration;
 mod members;
 mod mutation;

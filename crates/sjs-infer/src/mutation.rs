@@ -12,7 +12,7 @@ use sjs_syntax::{Element, NodeKind, NodeRef, Punct, SyntaxTree, TokenKind};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The methods that change the array, `Map` or `Set` they are called on.
-const MUTATING: [&str; 13] = [
+pub(crate) const MUTATING: [&str; 13] = [
     "push",
     "pop",
     "shift",
