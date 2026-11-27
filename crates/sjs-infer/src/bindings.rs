@@ -46,6 +46,9 @@ enum Given<'t> {
     Combined(bool, Element<'t>),
     /// `name++`, `name--`.
     Stepped,
+    /// `name += 1` or `name++` as the update of `for (let name = …; name < bound;
+    /// …)`: one more, and still less than the bound.
+    Counted(Element<'t>),
 }
 
 struct Collector<'a, 't> {
@@ -124,6 +127,42 @@ impl<'t> Collector<'_, 't> {
     }
 
     /// Finds every declaration with a value and every assignment to a name.
+    /// The bound of the loop `node` is the update of, when the loop counts up to
+    /// one: `for (let i = …; i < bound; i += 1)`, or `i++`, or `++i`.
+    fn counted(&self, node: NodeRef<'t>, children: &[Element<'t>]) -> Option<Element<'t>> {
+        let spelled = |element: &Element<'t>| {
+            let span = match element {
+                Element::Node(node) => node.span(),
+                Element::Token(token) => token.token().span,
+            };
+            self.source.slice(&span).unwrap_or_default()
+        };
+        let written: Vec<&str> = children.iter().map(spelled).collect();
+        let name = match written.as_slice() {
+            [name, "+=", "1"] | [name, "++"] | ["++", name] => *name,
+            _ => return None,
+        };
+        let parent = node
+            .parent()
+            .filter(|_| node.kind() == NodeKind::ForUpdate)?;
+        let mut parts = nodes(parent);
+        // What it declares, then its test.
+        let declares = parts.next().is_some_and(|start| {
+            start.kind() == NodeKind::LetDecl
+                && start.children().nth(1).as_ref().map(spelled) == Some(name)
+        });
+        let test = parts.next();
+        let compared: Vec<Element<'t>> = test.into_iter().flat_map(NodeRef::children).collect();
+        match compared.as_slice() {
+            [index, less, bound]
+                if declares && spelled(index) == name && punct(Some(less)) == Some(Punct::Lt) =>
+            {
+                Some(*bound)
+            }
+            _ => None,
+        }
+    }
+
     fn collect(&mut self, root: NodeRef<'t>) {
         let mut pending = vec![root];
         while let Some(node) = pending.pop() {
@@ -181,6 +220,10 @@ impl<'t> Collector<'_, 't> {
                             let plus = operator == Some(Punct::PlusEq);
                             value.map(|value| Given::Combined(plus, value))
                         }
+                    };
+                    let given = match self.counted(node, &children) {
+                        Some(bound) => Some(Given::Counted(bound)),
+                        None => given,
                     };
                     if let Some(((at, given), start)) = declaration.zip(given).zip(written) {
                         self.given.entry(at).or_default().push(given);
@@ -473,6 +516,18 @@ fn contributed(
                 .and_then(|(own, value)| typer.arithmetic(*plus, own, value))
         }
         Given::Stepped => own.and_then(|own| typer.arithmetic(false, own, own)),
+        // What is less than an `int32` is within its range when it is one more: an
+        // `int32` if it began as one.
+        // It always has a type, so that what it is combined with has one to work
+        // from: a number, until the bound is known to be an `int32`.
+        Given::Counted(bound) => {
+            let bound = typer.type_of(*bound).map(|bound| typer.widened(bound));
+            Some(if bound == Some(TypeId::INT32) {
+                TypeId::INT32
+            } else {
+                TypeId::NUMBER
+            })
+        }
     }
 }
 

@@ -194,9 +194,11 @@ impl Typer<'_> {
                     Kind::BigInt => Some(TypeId::BIGINT),
                     Kind::Number => {
                         let message = format!(
-                            "`~` on a `{}`: a bitwise operator takes an `int32` or a bigint, and a number that may be no integer in range is neither (SPEC.md §3.5)",
+                            "`~` on a `{}`: a bitwise operator takes an `int32` or a bigint, and a number that may be no integer in range is neither; write `Math.trunc(…)` of a number that is in range, or use a bigint (SPEC.md §3.5)",
                             self.print_type(ty)
                         );
+                        // At the `~` itself: of `~~x`, the inner one.
+                        let at = node.tokens().first().map_or(at, |operator| operator.span);
                         self.report(first, Code::E104, at, message);
                         None
                     }
@@ -397,7 +399,7 @@ impl Typer<'_> {
         if result.is_none() {
             let (code, message) = if bitwise && both_numbers {
                 (Code::E104, format!(
-                            "`{symbol}` on a `{}` and a `{}`: a bitwise operator takes int32s, and a number that may be no integer in range is none (SPEC.md §3.5)",
+                            "`{symbol}` on a `{}` and a `{}`: a bitwise operator takes int32s, and a number that may be no integer in range is none; write `Math.trunc(…)` of a number that is in range, or use bigints (SPEC.md §3.5)",
                             self.print_type(lt), self.print_type(rt)
                         ))
             } else {

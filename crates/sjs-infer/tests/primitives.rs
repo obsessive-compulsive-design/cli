@@ -138,6 +138,10 @@ fn every_kept_static_of_the_ambient_table_is_typed() {
         ("Math.imul", "Math.imul(2, 3)", "int32"),
         ("Math.clz32", "Math.clz32(1)", "int32"),
         ("Math.random", "Math.random()", "number"),
+        ("Math.trunc", "Math.trunc(1.5)", "int32"),
+        ("Math.floor", "Math.floor(1.5)", "int32"),
+        ("Math.ceil", "Math.ceil(1.5)", "int32"),
+        ("Math.round", "Math.round(1.5)", "int32"),
         ("JSON.parse", "JSON.parse(\"1\")", "unknown"),
         (
             "JSON.stringify",

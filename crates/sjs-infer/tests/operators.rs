@@ -203,8 +203,9 @@ fn unary_minus_plus_and_tilde() {
     assert_eq!(typed("~int"), "int32");
     assert_eq!(typed("~1"), "int32");
     assert_eq!(typed("~big"), "bigint");
-    assert_eq!(refused("~num"), "E104 @12 num");
-    assert_eq!(refused("~1.5"), "E104 @12 1.5");
+    assert_eq!(refused("~num"), "E104 @11 ~");
+    assert_eq!(refused("~1.5"), "E104 @11 ~");
+    assert_eq!(refused("~~num"), "E104 @12 ~", "the inner one");
     assert_eq!(refused("~str"), "E138 @12 str");
     assert_eq!(typed("-later()"), "?");
     assert_eq!(typed("~later()"), "?");
@@ -212,7 +213,7 @@ fn unary_minus_plus_and_tilde() {
         checked("const a = -str\nconst b = ~num\nconst c = ~flag\n").2,
         [
             "`-` takes a number or a bigint: this is a `string` (SPEC.md §4.1)",
-            "`~` on a `number`: a bitwise operator takes an `int32` or a bigint, and a number that may be no integer in range is neither (SPEC.md §3.5)",
+            "`~` on a `number`: a bitwise operator takes an `int32` or a bigint, and a number that may be no integer in range is neither; write `Math.trunc(…)` of a number that is in range, or use a bigint (SPEC.md §3.5)",
             "`~` takes an int32 or a bigint: this is a `boolean` (SPEC.md §4.1)",
         ]
     );
@@ -259,7 +260,7 @@ fn bitwise_operators_take_int32s_or_bigints() {
     assert_eq!(
         checked("num & int\nbig >>> big\nint | big\n").2,
         [
-            "`&` on a `number` and a `int32`: a bitwise operator takes int32s, and a number that may be no integer in range is none (SPEC.md §3.5)",
+            "`&` on a `number` and a `int32`: a bitwise operator takes int32s, and a number that may be no integer in range is none; write `Math.trunc(…)` of a number that is in range, or use bigints (SPEC.md §3.5)",
             "`>>>` takes two int32s: these are a `bigint` and a `bigint` (SPEC.md §4.1)",
             "`|` takes two int32s or two bigints: these are a `int32` and a `bigint` (SPEC.md §4.1)",
         ]

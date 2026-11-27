@@ -211,8 +211,16 @@ fn generated() -> BTreeMap<String, String> {
             let line = Line {
                 expression: format!("{operator}{text}"),
                 // What `!` refuses is the whole `!x`: it is what is written anew.
-                expected: judged_one(operator, operand)
-                    .map(|code| (code, if code == E102 { 0 } else { operator.len() })),
+                expected: judged_one(operator, operand).map(|code| {
+                    (
+                        code,
+                        if [E102, E104].contains(&code) {
+                            0
+                        } else {
+                            operator.len()
+                        },
+                    )
+                }),
             };
             add(name, line);
         }
@@ -329,7 +337,7 @@ fn every_operator_has_what_it_accepts_and_what_it_refuses() {
     assert!(text("E120/less.js").starts_with("// expect: E120 self-assign-or-compare @4:21\n"));
     assert_eq!(
         text("E104/bit-not.js"),
-        "// expect: E104 bitwise-on-double @4:22\n// Generated from the table of SPEC.md §4.1, not written by hand:\n// SJS_UPDATE_SNAPSHOTS=1 cargo test -p sjs-cli --test operators\nexport const use1 = ~1.5\n"
+        "// expect: E104 bitwise-on-double @4:21\n// Generated from the table of SPEC.md §4.1, not written by hand:\n// SJS_UPDATE_SNAPSHOTS=1 cargo test -p sjs-cli --test operators\nexport const use1 = ~1.5\n"
     );
     let first = text("E138/and.js");
     assert!(

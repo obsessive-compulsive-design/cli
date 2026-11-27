@@ -161,8 +161,8 @@ fn a_let_is_the_union_of_what_it_is_assigned_without_literals() {
             "for (let i = 0; i < 9; i++) {\n}\nfor (let j = 0n; j < 9n; j--) {\n}\nfor (let k = 0; k < 9; ++k) {\n}\nfor (let m = 0; m < 9; f(m)) {\n}\nlet n = 1\n--n\n",
             &["i", "j", "k", "m", "n"]
         ),
-        ["number", "bigint", "number", "int32", "number"],
-        "stepped after or before the name; a header that only calls assigns nothing"
+        ["int32", "bigint", "int32", "int32", "number"],
+        "stepped after or before the name, up to an `int32` (US-116); a header that only calls assigns nothing"
     );
     assert_eq!(inferred("", &["x"]), ["?"], "an empty file");
     assert_eq!(

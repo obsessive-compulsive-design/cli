@@ -4042,7 +4042,27 @@ array); `const [a, b] = pair` from a 2-tuple (proven); `xs[xs.length - 1]` (not 
 message suggests `at(-1)`); a non-mutating call between proof and read keeps it.
 
 #### US-116 `int32` refinement
-§3.5, §4.1, E104 · After: US-088 · Size: S · M2
+§3.5, §4.1, E104 · After: US-088 · Size: S · M2 · **Status: complete** (2026-11-27)
+
+> Delivered in `sjs-infer` (changes to `bindings.rs`, `primitives.rs` and
+> `operators.rs`). Tests: `crates/sjs-infer/tests/int32.rs`; fixtures under
+> `tests/conformance/04-operators/E104`. Literals in range, `.length`,
+> `indexOf`/`findIndex`, the bitwise operators and `%` were `int32` already
+> (US-083, US-088, US-095); this story adds the rest.
+> **Decisions:** (1) the variable of `for (let i = …; i < bound; i += 1)` (or `i++`,
+> `++i`) stays an `int32` when it starts as one and the bound is an `int32`: a
+> length, as in US-115, or any other `int32`, for what is less than one is in
+> range when it is one more; any other test (`<=`, a mirrored one), step or
+> assignment in the body makes it a `number`, as `i += 1` is anywhere else;
+> (2) `Math.trunc`, `floor`, `ceil` and `round` give an `int32` of an argument
+> that is finite and in range for certain: an `int32`, a number literal no larger
+> than 2³¹−1 either way, or one of those divided by a literal that is one or more
+> (`Math.floor(xs.length / 2)`); of anything else, a `number`; (3) E104 for `~` is
+> at the `~` itself, so `~~x` on a double is one finding at the inner one; both
+> E104 messages say what to write: `Math.trunc(…)` of a number in range, or a
+> bigint.
+> Verified: fmt, both clippy passes, audit, all tests, 100% line and region
+> coverage, `cargo mutants` on the diff with 0 missed and 0 timeouts.
 
 **Done when**
 - `int32` is inferred exactly for in-range integer literals, `.length`, array indices

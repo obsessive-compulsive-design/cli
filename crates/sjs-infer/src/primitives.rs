@@ -6,11 +6,11 @@
 //! `structuredClone` gives what it is given, and is E138 for a class instance or a
 //! function, which a clone is no longer.
 
-use crate::expressions::{element_span_of, Typer};
+use crate::expressions::{element_span_of, punct, Typer};
 use crate::mutation::arguments;
 use crate::typed_arrays::{ambient_class, element_of, is_ambient};
 use sjs_diag::{Code, Span};
-use sjs_syntax::{Element, NodeKind, NodeRef};
+use sjs_syntax::{Element, NodeKind, NodeRef, Punct};
 use sjs_types::{Literal, Type, TypeId};
 
 /// The kept methods of a string.
@@ -236,6 +236,42 @@ impl Typer<'_> {
     /// `JSON`, or of `structuredClone`, by the text of what is called; E133 for
     /// `Number.parseInt` without a radix and `JSON.stringify` with a replacer, E138
     /// for a `structuredClone` of what a clone is not.
+    /// Whether a value is a finite number within the range of an `int32`, for
+    /// certain: an `int32`, a literal in range, or one of those divided by a literal
+    /// that is one or more.
+    fn fits_int32(&mut self, value: &Element<'_>) -> bool {
+        let parts: Vec<Element<'_>> = match value {
+            Element::Node(node) => node.children().collect(),
+            Element::Token(_) => Vec::new(),
+        };
+        let within = |typer: &Self, member: TypeId, least: f64| match typer.types.get(member) {
+            Type::Int32 => least == 0.0,
+            Type::Literal(Literal::Number(number)) => {
+                let size = number.value().abs();
+                size >= least && size <= f64::from(i32::MAX)
+            }
+            _ => false,
+        };
+        let all = |typer: &mut Self, element: &Element<'_>, least: f64| {
+            let ty = typer.type_of(*element);
+            ty.is_some_and(|ty| {
+                typer
+                    .members_of(ty)
+                    .iter()
+                    .all(|&member| within(typer, member, least))
+            })
+        };
+        match parts.as_slice() {
+            [open, inside, _] if punct(Some(open)) == Some(Punct::LParen) => {
+                self.fits_int32(inside)
+            }
+            [left, over, by] if punct(Some(over)) == Some(Punct::Slash) => {
+                self.fits_int32(left) && all(self, by, 1.0)
+            }
+            _ => all(self, value, 0.0),
+        }
+    }
+
     pub(crate) fn primitive_static(
         &mut self,
         text: &str,
@@ -247,6 +283,11 @@ impl Typer<'_> {
         let (global, member) = text.split_once('.').unwrap_or((text, ""));
         match (global, member) {
             ("Math", "imul" | "clz32") => Some(TypeId::INT32),
+            // A whole number of what is finite and in range is an `int32`.
+            ("Math", "trunc" | "floor" | "ceil" | "round") => {
+                let fits = passed.first().is_some_and(|value| self.fits_int32(value));
+                Some(if fits { TypeId::INT32 } else { TypeId::NUMBER })
+            }
             ("String", "raw" | "fromCodePoint") => Some(TypeId::STRING),
             ("BigInt", "asIntN" | "asUintN") => Some(TypeId::BIGINT),
             ("Number", "isFinite" | "isInteger" | "isNaN" | "isSafeInteger") => {
